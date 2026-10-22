@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import type { ModuleVariable } from "loreweaver-protocol"
+import { sidebarWidth } from "../layout"
 import { themes } from "../themes"
 import { isBounded, VariablesPanel, variableLine } from "./VariablesPanel"
 
@@ -36,6 +37,18 @@ describe("variableLine formatting", () => {
     expect(variableLine({ id: "pw", label: "Password", kind: "text", value: "swordfish" }, "en")).toBe(
       "Password: swordfish",
     )
+  })
+
+  test("an enum shows its server-named option (v2.5 value_label), else the raw value", () => {
+    const column: ModuleVariable = { id: "column_state", label: "纵队", kind: "enum", value: "marching", value_label: "在道上" }
+    expect(variableLine(column, "zh")).toBe("纵队: 在道上")
+    expect(variableLine({ ...column, value_label: undefined }, "zh")).toBe("纵队: marching")
+    expect(variableLine({ ...column, value_label: "" }, "zh")).toBe("纵队: marching")
+    // Only an enum's value is relabelled: a label on any other kind is not display data.
+    expect(variableLine({ id: "pw", label: "Password", kind: "text", value: "swordfish", value_label: "x" }, "en")).toBe(
+      "Password: swordfish",
+    )
+    expect(variableLine({ ...column, value_label: "在\x1b[2J道上" }, "zh")).toBe("纵队: 在[2J道上")
   })
 
   test("bool renders a check/cross + localized yes/no in both locales", () => {
@@ -152,6 +165,28 @@ describe("VariablesPanel rendering", () => {
     expect(frame).not.toContain("right edge")
 
     act(() => renderer.destroy())
+  })
+})
+
+describe("VariablesPanel long CJK rows", () => {
+  test("a long CJK label or enum value label never overflows the sidebar", async () => {
+    const long = "档案馆的抄写员记性好得过分什么都忘不掉连别人的秘密也是啊"
+    const variables: ModuleVariable[] = [
+      { id: "a", label: "纵队的状态是什么呢", kind: "enum", value: "x", value_label: long },
+      { id: "b", label: long, kind: "text", value: "短" },
+      { id: "c", label: long, kind: "number", value: 5, min: 0, max: 10 },
+    ]
+    for (const columns of [sidebarWidth(120), sidebarWidth(60)]) {
+      const { renderer, flush, captureCharFrame } = await testRender(
+        <VariablesPanel variables={variables} theme={themes.lamplight} locale="zh" />,
+        { width: columns, height: 10 },
+      )
+      await flush()
+      const lines = captureCharFrame().split("\n")
+      expect(lines.some((line) => line.includes("…"))).toBe(true)
+      for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(columns)
+      act(() => renderer.destroy())
+    }
   })
 })
 

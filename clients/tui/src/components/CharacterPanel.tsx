@@ -2,6 +2,7 @@ import { stripControlChars, type CharacterState } from "loreweaver-protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { attributeLines } from "./characterAttributes"
+import { FitText } from "./FitText"
 
 export interface CharacterPanelProps {
   character?: CharacterState
@@ -64,9 +65,9 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
         </text>
       ))}
       {attributeLines(character).slice(0, 6).map(({ key, line }) => (
-        <text key={key} fg={theme.fg} wrapMode="none" truncate>
+        <FitText key={key} fg={theme.fg} cut="middle">
           {line}
-        </text>
+        </FitText>
       ))}
       {character.status_effects.length > 0 ? (
         <text fg={theme.fail} wrapMode="none" truncate>✖ {stripControlChars(character.status_effects.join(", "))}</text>

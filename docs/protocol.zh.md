@@ -1,15 +1,19 @@
 *[English](protocol.md) · 中文*
 
-# Loreweaver 联网 TUI —— 协议 2.4
+# Loreweaver 联网 TUI —— 协议 2.5
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性内核加 AI 守秘人）和用什么传输无关；与传输无关的会话逻辑在 `net.session.SessionCore` 里，这份文档描述的是接口，不绑定任何编程语言。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.4"`。同一套帧和 `join` 握手可以跑在两种传输上：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.5"`。同一套帧和 `join` 握手可以跑在两种传输上：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只留作离线测试和本机回环，不是 `--serve` 的一个选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种传输驱动的是同一个 `SessionCore` / `RoomHub`。
+
+**2.5（增量）**在原始 id **旁边**加显示名，全部可有可无：`state.variables` 里 `enum` 条目的 `value_label`（包给当前选项起的名字）、`state.character.attribute_labels`（每个属性键的显示名）、`dice` 帧的 `subsystem_label`，以及 `state.pregens` 条目的 `blurb` / `claimed_by_name`。原来是 id 的一个都不变——`value`、属性键、`subsystem` 照旧，`visible_when`、钩子和命令继续用它们。2.4 客户端忽略新字段、照旧显示原始 id；2.5 客户端拿不到显示名时（旧服务端、包没起名）回退到原始 id。面板模板多一条规则（`docs/lwf/formats/panels.md` §5.1 第 7 条）：**显示**变量值的绑定，若该条目带 `value_label`，就显示它。
+
+**显示名与语言。**线上所有由服务端解析的显示名——上面这些，以及原有的 `Resource.label`、`variables[].label`、`outcome.label`、`expr`——都按服务端运行的语言解析（它的 `settings.locale`，即 `welcome.locale`）。`join` 不携带语言，所以连同一个服务端的所有连接收到的是同一种语言；帧仍是**按连接**构建的，将来若要每条连接各用各的语言，这一点是前提。面板文本（`{en,zh}` 映射）不同：由客户端自己挑。
 
 **2.4（增量）**新增 `report` 帧（服务端 → 客户端）：HTML 团报（`.report html`，以及仅管理员可用的 `.report html reveal`），存为房间不公开 blob，只通知请求它的那条连接。2.3 客户端忽略此帧，只是收不到文件。
 
@@ -30,7 +34,7 @@
   `{type:"input", text:string}`
 - `media_offer` — 打开字节通道前先提交图片/音频元数据：
   `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
-- `media_set_enabled` — 仅守秘人可用的房间媒体上传开关：
+- `media_set_enabled` — 仅管理员可用的房间媒体上传开关：
   `{type:"media_set_enabled", enabled:boolean}`
 - `avatar_set` — 将本房间已经上传的一张图片绑定到调用者自己的当前角色头像。服务端会拒绝试图指定其他角色/用户的帧：
   `{type:"avatar_set", hash:string}`
@@ -43,7 +47,7 @@
 ## 服务端 → 客户端
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"2.4", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.5", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自己的发布版本（和客户端一比就能看出两边不一致）。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，有它才允许发 `admin_update_server`。
   `demo` 表示服务端正在用离线示例守秘人、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -68,9 +72,9 @@
   `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
   客户端把共享同一 `id` 的增量拼接进草稿气泡（按 markdown 渲染）。流在**同 `id`** 的 `narrative` 帧到达时结束；服务端保证这条收尾帧一定会来（回合失败也会以已流出的文本收口）。服务端在 AI 守秘人生成的同时就往外发，并且边发边清理：拿不准的一律不发，机关和 MVU 块永远不会流出去。
 - `dice` — 一次掷骰子/检定，由客户端渲染；**绝不**携带守秘人的秘密：
-  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, outcome?:Outcome, detail?:object}`
+  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, subsystem_label?:string, outcome?:Outcome, detail?:object}`
   `Outcome = {id:string, label:string, success:boolean, critical:boolean, fumble:boolean, tier:number, margin?:number}`
-  分级检定携带 `outcome`：`id` 是规则系统自己的等级词汇（仅用于展示——客户端绝不据此分支），`label` 是已本地化的显示标签，客户端按语义标志（`critical`/`fumble`/`success`）上色，可按 `tier`（阶梯序数，越高越好）做深浅。`kind:"subsystem"` 标记规则子系统检定（`subsystem` 命名之，如理智检定）；`kind:"opposed"` 在 `detail.left`/`detail.right`（`{name,total,target?,outcome?}`）与 `detail.winner:"left"|"right"|"tie"` 里携带双方。`detail` 的其余内容是系统声明的掷骰数据（奖励/惩罚骰、损失/剩余、优势候选……），客户端可原样展示、永远无需理解。
+  分级检定携带 `outcome`：`id` 是规则系统自己的等级词汇（仅用于展示——客户端绝不据此分支），`label` 是已本地化的显示标签，客户端按语义标志（`critical`/`fumble`/`success`）上色，可按 `tier`（阶梯序数，越高越好）做深浅。`kind:"subsystem"` 标记规则子系统检定（`subsystem` 是它在包里的稳定 id，如 `sanity_check`；v2.5 的 `subsystem_label` 是规则包给这个子系统的显示名，如 "理智" / "Sanity"——显示它，缺省时回退到 id）。与 `outcome.label`、`expr` 一样，这个显示名在掷骰发生时解析一次，加入回放按录下的原样重发：回放的掷骰保持录制时的语言，2.5 之前录下的没有 `subsystem_label`；`kind:"opposed"` 在 `detail.left`/`detail.right`（`{name,total,target?,outcome?}`）与 `detail.winner:"left"|"right"|"tie"` 里携带双方。`detail` 的其余内容是系统声明的掷骰数据（奖励/惩罚骰、损失/剩余、优势候选……），客户端可原样展示、永远无需理解。
 - `ui`— 房间事件钩子发出的声明式模组 UI（技能/卡片 `hooks.js` 里的 `emitUI(blocks, opts?)`，见 `docs/plugins.md`），在它所附着的那条守秘人 `narrative` 之后、`state` 快照之前广播。这些块在服务端（`core.hooks`）过白名单、做校验、按大小截断，客户端拿到就能直接画。内容是玩家可见的作者产出，信任层级与叙事相同：钩子绝不能把仅守秘人可见的秘密发进来，引擎也从不把守秘人工具结果写入此帧。不参与加入时的历史回放——想要常驻面板的钩子每回合重新发射即可：
   `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
   `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
@@ -92,10 +96,12 @@
 - `panel_event`— 房间钩子经 `emitPanel(panelId, payload)` 发射的不透明 JSON 载荷（见 `docs/plugins.md`），供目标面板自己的代码（Tier 2）消费。在本回合 `ui` 帧之后送达，且**只**送达清单中含该面板的成员；每回合 ≤ 20 条（超额丢弃并记日志）、单条序列化 ≤ 32 KB。不运行面板代码的客户端（TUI）直接忽略：
   `{type:"panel_event", panel:string, payload:any}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
-  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string}], systems?:[{id:string,make_char?:string}], reset?:boolean}`
-  `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已按**本观看者**的语言解析：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个房间的 `en` 与 `zh` 连接各自读到自己那一版。
+  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], reset?:boolean}`
+  `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已解析好，用的是服务端的语言（见「显示名与语言」）：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个包在 `en` 服务端和 `zh` 服务端上都读得对。
   `character.attributes`（v2.3）只含卡的**特征值**——规则系统 `sheet.attributes` 声明的那些键，按包自己的顺序（CoC 7e 的 `STR CON SIZ …`、D&D 5e 的 `STR DEX CON …`、社区包自己系统的自己那套）；生命体征**不**在这里重复（它们是 `resources`），派生值从不发送——客户端照线上顺序原样渲染，每个键都是 `.st <key>=<n>` 接受的名字。没有声明卡表规格的系统按存储原样发送。
-  `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已按房间语言本地化；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**管理员挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带管理员公开过的路径（`.var expose`）；管理员自己的连接收到的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
+  `character.attribute_labels`（v2.5，可有可无）把 `attributes` 的每个键映射到它的显示名，数据来自规则系统自己（键对应的规范名，再经规则包的 `display` 表）：`zh` 服务端上的 CoC 7e 发 `{"APP":"外貌", …}`。显示 `attribute_labels[key]`，没有就显示键本身；`attributes` 的**键**不变，仍是 `.st` 接受的名字。找不到名字的键不进这张表，表为空时（没有卡表规格的系统）整个省略。
+  `pregens` 是模组可认领的预设角色（`.pc list`/`.pc claim`）；`claimed_by` 是认领者的成员 id，未认领时为 `""`；没有名册时整个省略。v2.5 新增两项，各自只在非空时出现：`blurb`，卡里写给玩家挑角色看的一句话人设（绝不是作者写给守秘人的备注，也不是角色卡）；`claimed_by_name`，认领者认领当时的显示名（随认领一起存下，所以离线的认领者也有名字；释放时清掉）。显示 `claimed_by_name`，没有就显示 `claimed_by`。
+  `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已本地化（用服务端的语言，见「显示名与语言」）；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。`value_label`（v2.5，可有可无）只出现在包给**当前**选项起了名字的 `enum` 上（卡格式里的 `option_labels`），解析方式同 `label`：**显示**时用它代替 `value`，但比较、保存、发送都用 `value`——`visible_when`、钩子和 `.var set` 认的是原始选项 id。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**管理员挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带管理员公开过的路径（`.var expose`）；管理员自己的连接收到的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
   `systems`（v2.3，可有可无）是本服务端发现的全部规则系统，每条带上「在这个系统里建卡」用的方言词（`make_char`；规则包没声明就没有这个字段）。客户端要提供建卡入口，需要的就是这两样，不必认识任何一个规则系统——于是自带系统的内容包，不用等客户端发版就会出现在每个客户端的选择器里。
   `reset:true` 标记的是战役被清空（`.reset` / `admin_reset_room`）之后服务端推的那份快照：面板数据已经是最新的（空的），客户端还应该把本地攒下的聊天记录也清掉。
 - `pack_cards`（v2.2）— 对 `list_pack_cards` 的单播回复：每个已安装扩展包携带的卡文件。`ref` 就是 `.import <ref>` 接受的引用；`pack` 与 `name`（文件名主干）用于展示。`kind`（v2.3）是这张卡的拆卡归类，它决定用哪个动词：`character` 走 `.import <ref> pc`，`world` 是模组机器部件，只能走管理员的 `.import <ref> world`（面向玩家的选择器应把它标成管理员专用，而不是当角色卡给出）。2.3 之前的服务端不发 `kind`，缺失按 `"character"` 处理。没有任何包携带卡文件时 `cards` 为空数组（不是缺省）：
@@ -153,7 +159,8 @@
 **Tier-1 模板块**是 v1.7 `UiBlock` 词汇表加两个模板扩展，由**客户端**对照自己的 `state.variables` 解析（id 与该列表完全一致——modvar id、带 `mvu.` 前缀的叶子）：
 
 - 任何标量字段可写 `{"$var": "<变量 id>"}`；该变量对本观看者不存在/未公开时，若该字段是**必填**则**整块省略**，若是可选字段则只丢掉该字段、块保留（拿不准就不显示——面板永远没法让人多看见东西；线上那道 `state` 过滤器仍然是唯一的关口）；
-- `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段。
+- `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段；
+- （2.5）这类绑定若是拿变量的值来**显示**（文本字段、`stat` 的值），而该条目带 `value_label`，就显示这个名字；`visible_when`、徽章的 `tone` 和所有数值字段一律读原始 `value`（`docs/lwf/formats/panels.md` §5.1 第 7 条）。
 
 `image` 与 `map_pin` 是由服务端**改写**而非原样透传的模板块：作者写包内相对路径 `src`，清单里携带的是解析后的 `{hash, mime, size}` 加该块自己的（本地化）字段——寻址由打包过程决定，因此面板只可能指向**它自己这个包所附带**的图片。拉取方式与 Tier-2 资产一致，走媒体字节通道。其余演出模板都是普通的本地化文本；`map_pin` 的 `x`/`y` 可以绑定 `{$var}`，让标记随剧情移动。
 
@@ -216,7 +223,7 @@ role = "player"  # 或 "keeper"；默认为 "player"
 
 在 `join` 时，服务器查找 `key`；未知的密钥被拒绝，返回 `error bad_key` 并关闭连接。已识别的密钥将连接绑定到 `SessionSource(platform="tui", chat_type="group", chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` —— 见 `net/keystore.py` 和附带的 `keys.example.toml`。
 
-## 管理帧（v1.1，仅守秘人）
+## 管理帧（v1.1，仅管理员）
 
 部署者（房间管理员）可以在终端客户端的管理员页面里，用**守秘人角色的密钥**在同一条连接上管理服务器。`join` 时绑在这条连接上的角色就是唯一的管理员判据，没有第二套认证。服务器只对 `keeper` 连接回答这些帧；其他连接得到 `admin_error{code:"forbidden"}`，且不会读取或修改数据。实现在 `net/admin.py`。
 
@@ -244,7 +251,7 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_import_room", path:string, room?:string}`
 - `admin_delete_room_data` — 删除这个房间的访问密钥、按房间存的 KV 状态、文档向量和世界书向量。`backup` 默认为 `true`；启用备份时，删除仅在备份写入成功后进行：
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
-- `admin_reset_room` — 原地重开战役，保留密钥、绑定、在线连接和房间设置（语言、房规、已启用的技能），所以这一桌不用重新配置就能重开。不做备份，也不踢任何人（这点和 `admin_delete_room_data` 相反）。`scope` 决定清到哪一步：`"story"`（默认）只清剧情和进度（角色、模组、设定、媒体都留着）；`"chars"` 连角色一起换（模组留着）；`"all"` 全部清空（角色、模组、设定、媒体）。仅守秘人可用，且限于调用者自己的房间：
+- `admin_reset_room` — 原地重开战役，保留密钥、绑定、在线连接和房间设置（语言、房规、已启用的技能），所以这一桌不用重新配置就能重开。不做备份，也不踢任何人（这点和 `admin_delete_room_data` 相反）。`scope` 决定清到哪一步：`"story"`（默认）只清剧情和进度（角色、模组、设定、媒体都留着）；`"chars"` 连角色一起换（模组留着）；`"all"` 全部清空（角色、模组、设定、媒体）。仅管理员可用，且限于调用者自己的房间：
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
 - `admin_update_server` — 管理员请求服务端原地自更新。不带参数：服务端跑的是运维自己配好的那条命令（`TRPG_TUI__UPDATE_COMMAND`，比如 `git pull && uv sync`），绝不执行客户端递过来的东西，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
   `{type:"admin_update_server"}`

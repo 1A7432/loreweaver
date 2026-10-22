@@ -94,6 +94,8 @@ function partyState(headerOnline: number, round?: number): StateFrame {
         { id: "mp", label: "MP", value: 8, max: 10 },
       ],
       attributes: { STR: 60, DEX: 65, INT: 70, POW: 55 },
+      // v2.5: the server names each key in its own language (CoC 7e's canonical names).
+      ...(ZH ? { attribute_labels: { STR: "力量", DEX: "敏捷", INT: "智力", POW: "意志" } } : {}),
       status_effects: [ZH ? "惊惧" : "shaken"],
     },
     party: [

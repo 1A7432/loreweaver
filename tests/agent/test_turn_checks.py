@@ -571,6 +571,58 @@ async def test_a_check_round_s_own_text_counts_for_the_rows_after_it(monkeypatch
     assert _ARCHIVE_SCENE in llm.calls[-1][0][-1]["content"]
 
 
+async def test_a_one_round_row_answered_with_a_tool_call_still_gets_its_narration():
+    """Cursor Bugbot on #47. narration_lost has one round. A model that answers the re-ask
+    by restoring the scene BESIDE a bookkeeping call has spent that round on a tool round,
+    whose text the table never sees; ending the row there kept the short close and dropped
+    the scene a second time. A tool round on the row's last round earns one round past the
+    cap, which re-sends the instruction with the tool results in view."""
+    llm = FakeLLM(
+        script=[
+            _bookkeeping_round(_ARCHIVE_SCENE),
+            assistant_text(_CLOSING),
+            _bookkeeping_round(_FULL_SCENE),
+            assistant_text(_FULL_SCENE),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx(), services, Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert result.reply == _FULL_SCENE
+    assert len(llm.calls) == 4, "two main rounds, the re-ask answered with tools, the narration that follows"
+    assert _FULL_SCENE in llm.calls[-1][0][-1]["content"], "the narration ask hands back what the tool round wrote"
+
+
+async def test_a_model_that_keeps_calling_tools_gets_one_round_past_the_cap_not_the_turn():
+    """The other side of the rule above (the review of that fix): the round past the cap is
+    ONE round. A model that answers it with tools again ends the row there, so a single row
+    cannot spend every check round the turn allows and starve the dice rows after it. Here
+    the short close also states a roll no tool made, and dice_forged must still be asked."""
+    from infra.model_call_trace import current_lane
+
+    forged_close = _CLOSING + " You rolled 47 versus 65."
+    opening = iter([_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(forged_close)])
+    rows: list[str] = []
+
+    class _RowRecordingLLM(FakeLLM):
+        async def chat(self, messages, **kwargs):
+            lane = current_lane()
+            if lane.get("round") == "check":
+                rows.append(str(lane.get("check")))
+            return await super().chat(messages, **kwargs)
+
+    llm = _RowRecordingLLM(responder=lambda messages, tools: next(opening, None) or _bookkeeping_round("Noted again."))
+
+    result = await run_kp_turn(_ctx(), _services(llm), Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert result.reply == forged_close
+    assert rows[:2] == ["narration_lost", "narration_lost"], "its one round, then one past the cap"
+    assert rows.count("narration_lost") == 2
+    assert "dice_forged" in rows, "the row after it still gets asked"
+    assert len(rows) == MAX_ROUNDS_PER_TURN, "and the turn-wide ceiling is still the hard stop"
+
+
 # ---------------------------------------------------------------------------
 # The table is data, and the engine owns its ceiling
 # ---------------------------------------------------------------------------

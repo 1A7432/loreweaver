@@ -66,7 +66,8 @@ ones above it:
  8. End-of-turn checks (``_run_turn_checks``): the pack-declared Stop-form
     table, re-verified after every re-ask, bounded by
     ``MAX_ROUNDS_PER_TURN``; a tool round inside a check is not the end
-    (the narration that reads the real roll is).
+    (the narration that reads the real roll is): a tool round on the row's
+    last round earns exactly one round past its cap, never more.
  9. If ``max_rounds`` ran out with no plain reply: one tools-disabled
     finalizer over the public committed results, else the deterministic
     fallback.
@@ -1488,7 +1489,11 @@ async def _run_turn_checks(
       loop — a single nudge with no follow-up is the escape hatch the old design shipped.
     * **A tool round is not the end.** When the model answers by calling a tool (rolling
       the dice it forged), the loop keeps going for the narration that reads the real
-      result. Breaking there would leave the invented numbers standing.
+      result. Breaking there would leave the invented numbers standing. That holds even
+      when the tool round spent the row's last round: the row gets ONE round past its
+      cap, which re-sends its instruction with the tool results in view. One, not as
+      many as the model keeps calling tools — an open-ended follow-up would let one row
+      spend the whole ``MAX_ROUNDS_PER_TURN`` and starve the dice rows after it.
     * **The prefix is untouched.** `tools` and `tool_choice` stay exactly as the main loop
       sent them, so the checks — which run when the context is at its largest — read the
       same cached prefix instead of paying to recompute it.
@@ -1503,8 +1508,16 @@ async def _run_turn_checks(
     spent = 0
     for check in turn_checks_for(room_pack):
         awaiting_narration = False
-        for _ in range(check.max_rounds):
+        asked = 0
+        # The row's cap counts its rounds, but a tool round on the LAST one earns a single
+        # round past the cap for the narration that reads it; without it the row ends on
+        # the tool round and keeps the reply it fired on (a one-round row like
+        # narration_lost would drop the restored scene all over again). Only one: a model
+        # that answers that round with tools again ends the row there, so no row can
+        # spend the rounds the rows after it are owed. `spent` stays the hard bound.
+        while asked < check.max_rounds or (awaiting_narration and asked == check.max_rounds):
             if spent >= MAX_ROUNDS_PER_TURN:
+                _clear_llm_continuation(services, convo)
                 return reply
             state = TurnState(reply=reply, tool_trace=tool_trace, tool_round_texts=tuple(round_texts))
             if not awaiting_narration and not check.holds(state):
@@ -1532,6 +1545,7 @@ async def _run_turn_checks(
                 _clear_llm_continuation(services, convo)
                 return reply
             spent += 1
+            asked += 1
             if result.tool_calls:
                 round_texts.append(result.content or "")
                 try:

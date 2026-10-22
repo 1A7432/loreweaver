@@ -5,7 +5,7 @@ import type { PackCardEntry, PregenEntry } from "loreweaver-protocol"
 import type { AppClient } from "../client"
 import { sidebarWidth } from "../layout"
 import { themes } from "../themes"
-import { PartyRoster } from "./PartyRoster"
+import { PartyRoster, pregenBlurb, pregenClaimer } from "./PartyRoster"
 
 const theme = themes.lamplight
 
@@ -129,6 +129,101 @@ describe("PartyRoster pregen section (v1.9)", () => {
     act(() => empty.renderer.destroy())
 
     expect(recorder.sent).toEqual([])
+  })
+})
+
+describe("PartyRoster pregen labels (v2.5)", () => {
+  const LABELLED: PregenEntry[] = [
+    { name: "沈拾遗", claimed_by: "", blurb: "档案馆的抄写员 记性好得过分 什么都忘不掉" },
+    { name: "关五", claimed_by: "tui:1a2b3c4d", claimed_by_name: "阿岚" },
+    { name: "Mary", claimed_by: "p2" },
+  ]
+
+  test("pregenClaimer prefers the stored display name and falls back to the member id", () => {
+    expect(pregenClaimer({ name: "x", claimed_by: "tui:1a2b3c4d", claimed_by_name: "Ada" })).toBe("Ada")
+    expect(pregenClaimer({ name: "x", claimed_by: "tui:1a2b3c4d", claimed_by_name: "" })).toBe("tui:1a2b3c4d")
+    expect(pregenClaimer({ name: "x", claimed_by: "tui:1a2b3c4d" })).toBe("tui:1a2b3c4d")
+    expect(pregenClaimer({ name: "x", claimed_by: "p", claimed_by_name: "A\x1b[2Jda" })).toBe("A[2Jda")
+  })
+
+  test("pregenBlurb is one line, control-free, empty when absent", () => {
+    expect(pregenBlurb({ name: "x", claimed_by: "", blurb: "a\n  b\x07" })).toBe("a b")
+    expect(pregenBlurb({ name: "x", claimed_by: "" })).toBe("")
+  })
+
+  test("a claimed row names the claimer; an unclaimed row shows its blurb dim and truncated", async () => {
+    const recorder = new ClaimRecorder()
+    const { renderer, flush, captureCharFrame } = await renderRoster(recorder, LABELLED, { locale: "zh" })
+    await flush()
+
+    const frame = captureCharFrame()
+    expect(frame).toContain("已被 阿岚 认领")
+    expect(frame).not.toContain("tui:1a2b3c4d")
+    expect(frame).toContain("已被 p2 认领") // a pre-2.5 entry still names its claimer by id
+    const lines = frame.split("\n")
+    const nameY = lines.findIndex((line) => line.includes("沈拾遗"))
+    expect(lines[nameY + 1]).toContain("档案馆")
+    // The sidebar never overflows: the blurb is truncated, never wrapped or spilled.
+    expect(lines.every((line) => Bun.stringWidth(line) <= SIDEBAR_COLUMNS)).toBe(true)
+
+    act(() => renderer.destroy())
+  })
+
+  // OpenTUI's own `truncate` miscounts CJK width and returns a line one cell wider than
+  // its box, so PartyRoster cuts the blurb itself. These are long UNBROKEN runs, with and
+  // without full-width commas — the fixture that used to be here dodged exactly that.
+  const LONG_BLURBS = [
+    "档案馆的抄写员记性好得过分什么都忘不掉连别人的秘密也是啊",
+    "档案馆的抄写员，记性好得过分，什么都忘不掉，连别人的秘密也是啊",
+    "A scribe of the archive who remembers far too much 档案馆的抄写员记性好得过分",
+  ]
+
+  for (const columns of [sidebarWidth(120), sidebarWidth(60)]) {
+    test(`a long CJK blurb never overflows a ${columns}-column sidebar`, async () => {
+      const recorder = new ClaimRecorder()
+      const pregens: PregenEntry[] = [
+        ...LONG_BLURBS.map((blurb, index) => ({ name: `沈拾遗${index}`, claimed_by: "", blurb })),
+        { name: "关五", claimed_by: "tui:1a2b3c4d", claimed_by_name: "档案馆的抄写员记性好得过分什么都忘不掉" },
+      ]
+      const { renderer, flush, captureCharFrame } = await testRender(
+        <PartyRoster
+          party={[]}
+          initiative={[]}
+          theme={theme}
+          locale="zh"
+          client={asClient(recorder)}
+          focused={false}
+          onFocus={() => {}}
+          pregens={pregens}
+        />,
+        { width: columns, height: 16 },
+      )
+      await flush()
+
+      const lines = captureCharFrame().split("\n")
+      expect(lines.some((line) => line.includes("档案馆"))).toBe(true)
+      expect(lines.some((line) => line.includes("…"))).toBe(true)
+      for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(columns)
+
+      act(() => renderer.destroy())
+    })
+  }
+
+  test("clicking an unclaimed pregen's blurb line claims it too", async () => {
+    const recorder = new ClaimRecorder()
+    const { renderer, flush, captureCharFrame, mockMouse } = await renderRoster(recorder, LABELLED, { locale: "zh" })
+    await flush()
+
+    const lines = captureCharFrame().split("\n")
+    const blurbY = lines.findIndex((line) => line.includes("档案馆"))
+    expect(blurbY).toBeGreaterThan(0)
+    await act(async () => {
+      await mockMouse.click(4, blurbY)
+    })
+    await flush()
+    expect(recorder.sent).toEqual([".pc claim 沈拾遗"])
+
+    act(() => renderer.destroy())
   })
 })
 

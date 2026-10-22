@@ -2,7 +2,7 @@
 
 # Loreweaver extensibility: plugins, skills & content packs
 
-> Status: **contract** (updated 2026-10-16; wire protocol **2.4**). This document is what
+> Status: **contract** (updated 2026-10-22; wire protocol **2.5**). This document is what
 > contributors build against. Authors have friendlier on-ramps: a start-to-finish tutorial in
 > [authoring.md](authoring.md), card specifics in [cards.md](cards.md), hooks in
 > [hooks.md](hooks.md).

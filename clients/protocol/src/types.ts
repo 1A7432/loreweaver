@@ -5,8 +5,11 @@
 // card listing (`list_pack_cards` → `pack_cards`), the structured lane behind every
 // "import from installed pack" picker. 2.3 adds each listed card's `kind`, so a picker
 // can send the right import verb. 2.4 adds the `report` frame: a server-generated HTML
-// session report announced to the issuing connection only. A 2.0/2.1 client ignores all of it.
-export const PROTOCOL_VERSION = "2.4" as const
+// session report announced to the issuing connection only. 2.5 adds display labels
+// beside raw ids: `value_label` on enum variables, `attribute_labels` on the character,
+// `subsystem_label` on dice, and `blurb`/`claimed_by_name` on pregens. A 2.0/2.1 client
+// ignores all of it.
+export const PROTOCOL_VERSION = "2.5" as const
 
 export const FrameType = {
   Join: "join",
@@ -347,6 +350,8 @@ export interface DiceFrame {
   effective_target?: number
   // kind === "subsystem": which rule subsystem ran (e.g. a sanity check).
   subsystem?: string
+  /** v2.5: the subsystem's display name ("Sanity"/"理智"), set wherever `subsystem` is; frozen at record time in replays. */
+  subsystem_label?: string
   outcome?: DiceOutcome
   // System-declared roll data (bonus/penalty dice, loss/remaining, advantage
   // candidates, opposed left/right/winner, ...) a client may surface verbatim
@@ -715,6 +720,8 @@ export interface CharacterState {
   system: string
   resources: ResourceState[]
   attributes: Record<string, unknown>
+  /** v2.5: attribute key → display name (APP → "外貌"); keys absent from it show as themselves. */
+  attribute_labels?: Record<string, string>
   status_effects: string[]
   avatar?: MediaRef
 }
@@ -766,7 +773,7 @@ export type ModuleVariableKind = "number" | "bool" | "text" | "enum"
 // v1.6 additive: one player-visible module/story variable (a "tracker": suspicion,
 // doom, supplies, ...). Player connections only ever receive player-visible
 // variables — keeper-only ones are filtered server-side, never here. `label`
-// arrives already localized to the room locale. `min`/`max` apply to the "number"
+// arrives already localized to the server's locale. `min`/`max` apply to the "number"
 // kind only and are present only when the variable is bounded.
 export interface ModuleVariable {
   id: string
@@ -781,6 +788,8 @@ export interface ModuleVariable {
   // A player connection never receives a hidden variable at all (filtered server-side);
   // clients should render hidden rows visually locked/dimmed, never as player data.
   hidden?: boolean
+  /** v2.5: an enum's current option, named for display; `value` stays the raw option id. */
+  value_label?: string
 }
 
 // v1.9 additive: one claimable pre-generated character from the module's cast
@@ -789,6 +798,10 @@ export interface ModuleVariable {
 export interface PregenEntry {
   name: string
   claimed_by: string
+  /** v2.5: the card's one-line player-facing concept; absent when the card gave none. */
+  blurb?: string
+  /** v2.5: the claimer's display name, stored at claim time; absent while unclaimed. */
+  claimed_by_name?: string
 }
 
 /** v2.3: one discoverable rule system. `make_char` is the dot-command word that

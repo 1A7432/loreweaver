@@ -24,7 +24,7 @@ and a format with several is a standard.
 | [formats/rulepacks.md](formats/rulepacks.md) | Rule systems as data: check resolution, sheets, derived stats, subsystems, the rules-script lane, `extends:` | **2.0 (stable)** |
 | [formats/skills-hooks.md](formats/skills-hooks.md) | `SKILL.md` skills, the `hooks.js` event API, templates and macros | **2.0 (stable)** |
 | [formats/panels.md](formats/panels.md) | Module UI panels: `ui/panels.yaml`, templates, the panel wire contract, the client sandbox | **1.0 (stable)** |
-| Wire protocol | Client↔server frames. A constituent standard whose canonical home is the engine's [`docs/protocol.md`](../protocol.md); types on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol) | **2.4 (stable)** |
+| Wire protocol | Client↔server frames. A constituent standard whose canonical home is the engine's [`docs/protocol.md`](../protocol.md); types on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol) | **2.5 (stable)** |
 
 LWF 1.0 (2026-07-30) was a draft that was never published. 2.0 supersedes it; see
 [SPEC.md §5](SPEC.md).

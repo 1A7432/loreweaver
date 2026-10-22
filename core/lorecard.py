@@ -345,8 +345,28 @@ def _parse_variables(raw: Any, label: str, warnings: list[str]) -> tuple[dict[st
             warnings.append(f"{where}: skipped (duplicate variable id {spec['id']!r})")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
             continue
         seen.add(spec["id"])
+        _warn_dropped_option_labels(item.get("option_labels"), spec, where, warnings)
         specs.append(spec)
     return tuple(specs)
+
+
+def _warn_dropped_option_labels(raw: Any, spec: dict[str, Any], where: str, warnings: list[str]) -> None:
+    """``option_labels`` is TOLERANT, like ``labels``: what cannot be shown is dropped and the
+    variable is kept. The author still hears about it, because a typo in an option key would
+    otherwise just mean the panel silently shows the raw id."""
+    if raw is None:
+        return
+    if spec.get("kind") != "enum":
+        warnings.append(f"{where}.option_labels: ignored (only an enum variable names its options)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        return
+    if not isinstance(raw, dict):
+        warnings.append(f"{where}.option_labels: ignored (must map a locale to {{option: text}})")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
+        return
+    offered = sum(len(names) if isinstance(names, dict) else 1 for names in raw.values())
+    kept = sum(len(names) for names in (spec.get("option_labels") or {}).values())
+    if kept < offered:
+        dropped = offered - kept
+        warnings.append(f"{where}.option_labels: {dropped} label(s) dropped (unknown option, empty or non-text label, or a repeated locale)")  # i18n-exempt: author diagnostic, wrapped in a localized import summary
 
 
 def _parse_hooks(entries: Any, warnings: list[str]) -> tuple[str, ...]:

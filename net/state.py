@@ -142,7 +142,10 @@ async def _character_payload(
     instead of per-system field names — a client renders meters without knowing
     any rule system. The sheet layer declares its own resources (M16 stage B:
     `core.character_manager.character_resources`, pack-driven); the WIRE shape
-    is final. Labels resolve to ``locale`` here, at the per-viewer boundary (M19)."""
+    is final. Labels resolve to ``locale`` here, at the per-viewer boundary (M19).
+
+    Protocol 2.5: ``attribute_labels`` names each wire attribute key in ``locale``
+    (`_attribute_labels`); the keys of ``attributes`` themselves never change."""
     attrs = _wire_attributes(sheet)
     resources = character_resources(sheet, locale)
 
@@ -162,6 +165,9 @@ async def _character_payload(
         "attributes": attrs,
         "status_effects": status_effects,
     }
+    attribute_labels = _attribute_labels(sheet, attrs, locale)
+    if attribute_labels:
+        payload["attribute_labels"] = attribute_labels
     avatar = getattr(sheet, "avatar", None)
     if isinstance(avatar, dict):
         payload["avatar"] = avatar
@@ -192,6 +198,31 @@ def _wire_attributes(sheet: CharacterSheet) -> dict[str, Any]:
     if not declared:
         return stored
     return {key: stored[key] for key in declared if key in stored}
+
+
+def _attribute_labels(sheet: CharacterSheet, attrs: dict[str, Any], locale: str | None) -> dict[str, str]:
+    """`state.character.attribute_labels` (protocol 2.5): wire attribute key → its display
+    name in `locale`, by the pack's own data — storage key → canonical name
+    (`SheetSpec.key_to_canonical`) → `RulePack.display_name` (which falls back to the
+    canonical name when the locale's ``display`` table does not list it). A key with no
+    canonical name is left out, and a system with no sheet spec yields ``{}`` (the field is
+    then omitted): the client shows the key, as it did before 2.5."""
+    from core.rulepacks import load_rulepack
+
+    try:
+        pack = load_rulepack(sheet.system)
+        spec = pack.sheet_spec
+    except Exception:
+        return {}
+    if spec is None:
+        return {}
+    canonical_by_key = spec.key_to_canonical()
+    labels: dict[str, str] = {}
+    for key in attrs:
+        canonical = canonical_by_key.get(key)
+        if canonical:
+            labels[key] = pack.display_name(canonical, locale or "en")
+    return labels
 
 
 async def _party(
@@ -427,16 +458,35 @@ async def _pregens(services: Services, chat_key: str) -> list[dict[str, Any]]:
     insertion-ordered, consumed from the `pregen` documents' PLAYER projection (the cast
     list is table talk; the pristine sheet payload is what the projection withholds).
     Omitted (never an empty list) for roster-less rooms. Best-effort like the rest of
-    this snapshot."""
+    this snapshot.
+
+    Protocol 2.5 adds ``blurb`` (the card's one-line player-facing concept) and
+    ``claimed_by_name`` (the claimer's display name, stored at claim time), each only when
+    non-empty. The entry is built from an explicit field list, never by passing the view
+    through: whatever else a pregen document carries — an author's keeper-facing notes, a
+    sheet — must never ride this frame because someone added it to the document later."""
     try:
         pairs = await services.documents.list_views(chat_key, "pregen", PLAYER_VIEWER)
     except Exception:
         return []
-    return [
-        {"name": str(view.get("name", "")), "claimed_by": str(view.get("claimed_by", ""))}
-        for _doc, view in pairs
-        if view.get("name")
-    ]
+    entries: list[dict[str, Any]] = []
+    for _doc, view in pairs:
+        if not view.get("name"):
+            continue
+        entry = {"name": str(view.get("name", "")), "claimed_by": str(view.get("claimed_by", ""))}
+        for field in _PREGEN_OPTIONAL_TEXT_FIELDS:
+            text = view.get(field)
+            if field == "claimed_by_name" and not entry["claimed_by"]:
+                continue  # a name without a claim is stale bookkeeping, not a claimer
+            if isinstance(text, str) and text.strip():
+                entry[field] = text.strip()
+        entries.append(entry)
+    return entries
+
+
+# The ONLY optional text fields a `state.pregens` entry carries (protocol 2.5). A whitelist on
+# purpose: see `_pregens`.
+_PREGEN_OPTIONAL_TEXT_FIELDS = ("blurb", "claimed_by_name")
 
 
 async def _usage(services: Services, chat_key: str) -> dict[str, Any] | None:

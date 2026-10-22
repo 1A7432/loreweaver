@@ -37,11 +37,18 @@ def test_the_engine_default_table_fits_inside_the_ceiling():
 
     Until 2026-10-21 its caps summed to exactly the ceiling. The narration check added one
     round without moving the ceiling — that IS the budget — so the caps now sum one past it,
-    and the runner's own counter is what holds. Only a turn on which every row fires reaches
-    the ceiling, and then the cut falls on the last row alone, at no earlier than its first
-    round. That is why stale_scene_hud is last: its first round is the bookkeeping call, so
-    a cut run has still synced the HUD and keeps the reply that drew the heading. Every row
-    that can leave a wrong number or a dropped scene on the table runs in full.
+    and the runner's own counter is what holds. When every row fires and each answers in
+    text, the cut falls on the last row alone, at no earlier than its first round. That is
+    why stale_scene_hud is last: its first round is the bookkeeping call, so a cut run has
+    still synced the HUD and keeps the reply that drew the heading.
+
+    A tool round on a row's LAST round earns that row exactly one round past its cap
+    (otherwise a one-round row that answers with a tool call would end on that call and
+    keep the reply it fired on). One, so no row can spend the rounds owed to the rows after
+    it; but a turn whose rows answer with tools can still reach the ceiling sooner and cut
+    an earlier row. The ceiling itself never moves: the runner stops at
+    `MAX_ROUNDS_PER_TURN` whatever the rows do —
+    `tests/agent/test_turn_checks.py::test_a_model_that_keeps_calling_tools_gets_one_round_past_the_cap_not_the_turn`.
     """
     caps = [check.max_rounds for check in DEFAULT_TURN_CHECKS]
 
