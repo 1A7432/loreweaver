@@ -2,7 +2,7 @@
 
 # Loreweaver 扩展契约：插件、技能与内容包
 
-> 状态：**契约**（2026-10-16 更新；协议 **2.4**）。这份是贡献者照着建的规范。作者向的入口更友好：从零到发布的教程在 [authoring.zh.md](authoring.zh.md)，卡的细节在 [cards.zh.md](cards.zh.md)，钩子在 [hooks.zh.md](hooks.zh.md)。
+> 状态：**契约**（2026-10-22 更新；协议 **2.5**）。这份是贡献者照着建的规范。作者向的入口更友好：从零到发布的教程在 [authoring.zh.md](authoring.zh.md)，卡的细节在 [cards.zh.md](cards.zh.md)，钩子在 [hooks.zh.md](hooks.zh.md)。
 >
 > **已落地的层，以及各自的含义：**
 >

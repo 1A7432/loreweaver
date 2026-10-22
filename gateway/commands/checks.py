@@ -452,6 +452,7 @@ class ChecksCommands:
         ctx.dice(
             "subsystem",
             subsystem=loss_spec.id,
+            subsystem_label=loss_spec.label(ctx.locale),
             expr=pack.display_name(parsed.canonical, ctx.locale),
             rolls=[rolled.total],
             total=rolled.total,

@@ -147,6 +147,7 @@ def build_spec(
     maximum: int | None = None,
     default: Any = None,
     options: list[str] | None = None,
+    option_labels: dict[str, dict[str, str]] | None = None,
     setup: bool = False,
 ) -> dict[str, Any]:
     """Build a validated spec dict, raising `ValueError` (with a concise reason) on bad input.
@@ -157,6 +158,14 @@ def build_spec(
     ``setup`` (M26 §5.3) marks a "set before play" variable: one the table must touch ONCE
     before the module runs, because the author's default is not the table's choice. It is
     stored only when true, so every existing spec keeps its exact stored shape.
+
+    ``option_labels`` (protocol 2.5) names an ENUM's options for display, locale-first like
+    ``labels``: ``{locale: {option: text}}``. Only an enum may carry it (anything else is a
+    `ValueError`, like ``options``); inside it, junk is dropped the way ``labels`` drops it —
+    an unknown option, a non-text or empty text, a non-mapping locale entry. Keys match the
+    options case-insensitively and are stored under the canonical option. Stored only when
+    something survives, so a spec without labels keeps its exact stored shape. The stored
+    VALUE stays the raw option id everywhere; the label is display only (`wire_entries`).
     """
     slug = normalize_id(var_id)
     if slug is None:
@@ -197,13 +206,39 @@ def build_spec(
         if not cleaned:
             raise ValueError("enum kind needs a non-empty options list")  # i18n-exempt: developer diagnostic; tool layer wraps it in a localized template
         spec["options"] = cleaned[:MAX_OPTIONS]
+        named = _clean_option_labels(spec["options"], option_labels)
+        if named:
+            spec["option_labels"] = named
     elif options:
         raise ValueError(f"options only apply to the enum kind, not {kind!r}")  # i18n-exempt: developer diagnostic; tool layer wraps it in a localized template
+    elif option_labels:
+        raise ValueError(f"option_labels only apply to the enum kind, not {kind!r}")  # i18n-exempt: developer diagnostic; tool layer wraps it in a localized template
 
     if setup:
         spec["setup"] = True
     spec["default"] = _default_value(spec) if default is None else validate_value(spec, default)
     return spec
+
+
+def _clean_option_labels(options: list[str], raw: Any) -> dict[str, dict[str, str]]:
+    """``{locale: {option: text}}`` reduced to what can be shown: locale keys normalized to
+    their primary subtag (as ``labels``), option keys mapped onto the canonical option
+    (case-insensitive) and dropped when they name none, texts trimmed and capped at
+    `MAX_LABEL_LEN`, empties dropped. Total: anything malformed simply contributes nothing."""
+    if not isinstance(raw, dict):
+        return {}
+    canonical = {option.lower(): option for option in options}
+    out: dict[str, dict[str, str]] = {}
+    for locale, names in raw.items():
+        if not isinstance(locale, str) or not locale.strip() or not isinstance(names, dict):
+            continue
+        language = locale.strip().split("-")[0].lower()
+        for option, text in names.items():
+            target = canonical.get(option.strip().lower()) if isinstance(option, str) else None
+            if target is None or not isinstance(text, str) or not text.strip():
+                continue
+            out.setdefault(language, {})[target] = text.strip()[:MAX_LABEL_LEN]
+    return out
 
 
 def _default_value(spec: dict[str, Any]) -> Any:
@@ -271,6 +306,7 @@ def normalize_spec(var_id: Any, raw: Any) -> dict[str, Any] | None:
         return None
     try:
         labels = raw.get("labels")
+        option_labels = raw.get("option_labels")
         return build_spec(
             slug,
             kind,
@@ -280,6 +316,9 @@ def normalize_spec(var_id: Any, raw: Any) -> dict[str, Any] | None:
             maximum=raw.get("maximum") if kind == "number" else None,
             default=raw.get("default"),
             options=raw.get("options") if kind == "enum" and isinstance(raw.get("options"), list) else None,
+            # Tolerant like every other field here: option labels on a non-enum are dropped,
+            # never a reason to lose the variable.
+            option_labels=option_labels if kind == "enum" and isinstance(option_labels, dict) else None,
             setup=bool(raw.get("setup", False)),
         )
     except ValueError:
@@ -387,22 +426,50 @@ def apply_remove(state: ModvarState, var_id: str) -> ModvarState:
 # ---------------------------------------------------------------------------
 
 
+def _pick_localized(texts: Any, locale: str) -> str | None:
+    """``{locale: text}`` → the text for `locale`: exact language → English → any; `None`
+    when the map has nothing to offer. The one fallback rule every modvar label uses."""
+    if not isinstance(texts, dict):
+        return None
+    language = (locale or "en").split("-")[0].lower()
+    for candidate in (texts.get(language), texts.get("en")):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    for candidate in texts.values():
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
 def label_for(spec: dict[str, Any], locale: str) -> str:
     """Resolve `spec`'s display label for `locale`: exact language → English → any → the id."""
-    labels = spec.get("labels") or {}
-    language = (locale or "en").split("-")[0].lower()
-    for candidate in (labels.get(language), labels.get("en")):
-        if candidate:
-            return candidate
-    for candidate in labels.values():
-        if candidate:
-            return candidate
-    return spec["id"]
+    return _pick_localized(spec.get("labels"), locale) or spec["id"]
+
+
+def option_label_for(spec: dict[str, Any], value: Any, locale: str) -> str | None:
+    """The display name of an enum's current `value` for `locale` (protocol 2.5), by the
+    same fallback as `label_for` — exact language → English → any — or `None` when the
+    spec names this option in no language (the caller then shows the raw value)."""
+    if spec.get("kind") != "enum" or not isinstance(value, str):
+        return None
+    option_labels = spec.get("option_labels")
+    if not isinstance(option_labels, dict):
+        return None
+    per_option = {
+        language: names.get(value)
+        for language, names in option_labels.items()
+        if isinstance(names, dict) and isinstance(names.get(value), str)
+    }
+    return _pick_localized(per_option, locale)
 
 
 def wire_entries(view: dict[str, Any], locale: str) -> list[dict[str, Any]]:
     """Wire-ready entries from an already-PROJECTED modvars view (``{"specs", "values"}``),
     in definition order, labels resolved to `locale`.
+
+    Protocol 2.5: an enum whose spec names its CURRENT option also carries ``value_label``
+    (same locale fallback as ``label``); ``value`` stays the raw option id, because
+    `visible_when`, hooks, `.var set` and the Keeper all speak ids.
 
     This function does NO visibility filtering: the anti-metagaming filter (iron rule #3)
     is the `modvars` document projection in `core.documents` — a player viewer's view
@@ -426,6 +493,9 @@ def wire_entries(view: dict[str, Any], locale: str) -> list[dict[str, Any]]:
                 entry["min"] = spec["minimum"]
             if spec.get("maximum") is not None:
                 entry["max"] = spec["maximum"]
+        value_label = option_label_for(spec, entry["value"], locale)
+        if value_label:
+            entry["value_label"] = value_label
         entries.append(entry)
     return entries
 

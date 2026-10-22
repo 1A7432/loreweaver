@@ -1,13 +1,13 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol 2.4
+# loreweaver networked TUI — wire protocol 2.5
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.4"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.5"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -38,6 +38,24 @@ it does not implement the field, or does not implement that corner of the gramma
 evaluation errors — MUST NOT render the block. Ignoring the gate draws content the author
 hid, so the undecidable case fails CLOSED, exactly as an unresolved `$var` does.
 
+**2.5 (additive)** adds display labels BESIDE raw ids, all optional: `value_label` on an
+`enum` entry of `state.variables` (the pack's name for the current option),
+`state.character.attribute_labels` (each attribute key's display name), `subsystem_label` on
+`dice` frames, and `blurb` / `claimed_by_name` on `state.pregens` entries. Nothing that was
+an id stops being one — `value`, attribute keys and `subsystem` are unchanged, so
+`visible_when`, hooks and commands keep using them. A 2.4 client ignores the new fields and
+shows the raw ids, as it did; a 2.5 client falls back to the raw id whenever a label is
+absent (an older server, a pack that names nothing). Panel templates gain one rule
+(`docs/lwf/formats/panels.md` §5.1 rule 7): a binding that DISPLAYS a variable's value shows
+its `value_label` when the entry carries one.
+
+**Labels and locale.** Every server-resolved label on the wire — these, and the existing
+`Resource.label`, `variables[].label`, `outcome.label` and `expr` — is resolved in the
+language the server runs in (its `settings.locale`, announced as `welcome.locale`). `join`
+carries no language, so all connections to one server receive the same language; frames
+are still BUILT per connection, which is what a future per-connection language would
+need. Panel text (`{en,zh}` maps) is different: the client picks it.
+
 **2.4 (additive)** adds the `report` frame (Server → Client): the HTML session report
 (`.report html`, and the keeper-only `.report html reveal`), stored as an unlisted room blob
 and announced only to the connection that asked for it. A 2.3 client ignores the frame and
@@ -46,7 +64,7 @@ simply never receives the file.
 **2.1 (additive, M19)** adds the presentation surface: the `image` block kind and the
 four performance templates (`letter`, `clipping`, `map_pin`, `title_card`) in the `ui`
 vocabulary and in panel templates; `visible_when` on panel template blocks; and
-`state` `Resource.label` resolved to the viewer's own locale. A 2.0 client ignores an
+`state` `Resource.label` resolved per connection (in the server's locale — see "Labels and locale" above). A 2.0 client ignores an
 unknown block kind and every unknown template field EXCEPT `visible_when` — for that one
 it drops the whole block under the rule above — so it degrades to at most what it
 rendered before, never to more. Nothing on the wire lets the server check this — `welcome.protocol`
@@ -118,7 +136,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.4", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.5", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -178,14 +196,19 @@ connections receive `error too_many_connections` before `join` is read.
   closes with the text streamed so far). Servers stream the AI-KP's reply as it
   generates, sanitized fail-closed (machinery/MVU blocks never stream).
 - `dice` — one dice roll/check, rendered client-side; NEVER carries keeper secrets:
-  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, outcome?:Outcome, detail?:object}`
+  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, subsystem_label?:string, outcome?:Outcome, detail?:object}`
   `Outcome = {id:string, label:string, success:boolean, critical:boolean, fumble:boolean, tier:number, margin?:number}`
   `outcome` is present on graded checks: `id` is the rule system's own rank
   vocabulary (presentation only — never branch on it), `label` is the
   already-localized display label, and clients color by the semantic flags
   (`critical`/`fumble`/`success`) and may shade by `tier` (the ladder ordinal;
   higher is better). `kind:"subsystem"` marks a rule-subsystem check
-  (`subsystem` names it, e.g. a sanity check); `kind:"opposed"` carries
+  (`subsystem` names it by its stable pack id, e.g. `sanity_check`; v2.5
+  `subsystem_label` is that subsystem's display name from the rulepack, e.g. "Sanity" /
+  "理智" — show the label, fall back to the id when it is absent). Like `outcome.label`
+  and `expr`, the label is resolved once, when the roll happens, and a join replay
+  re-sends the frame exactly as recorded: a replayed roll keeps the language it was
+  recorded in, and a roll recorded before 2.5 has no `subsystem_label`. `kind:"opposed"` carries
   `detail.left`/`detail.right` (`{name,total,target?,outcome?}`) and
   `detail.winner:"left"|"right"|"tie"`. `detail` is otherwise system-declared
   roll data (bonus/penalty dice, loss/remaining, advantage candidates, …) a
@@ -251,13 +274,13 @@ connections receive `error too_many_connections` before `join` is read.
   simply ignore it:
   `{type:"panel_event", panel:string, payload:any}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string}], systems?:[{id:string,make_char?:string}], reset?:boolean}`
+  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], reset?:boolean}`
   `Resource = {id:string, label:string, value:number, max?:number}` — the rule
   system's vital meters (HP, sanity, mana, …) as generic data: a client renders
   the list as meters without knowing any system's field names. Entries arrive in
-  render order. `label` is already resolved to THIS viewer's locale: a rulepack may
-  declare `sheet.resources[].label` as a locale map, so one pack's bars read
-  correctly at an `en` and a `zh` connection of the SAME room.
+  render order. `label` is already resolved, in the server's locale (see "Labels and
+  locale"): a rulepack may declare `sheet.resources[].label` as a locale map, so one
+  pack's bars read correctly on an `en` server and a `zh` one.
   `character.attributes` (v2.3) is the sheet's CHARACTERISTICS only — the keys the
   rule system's `sheet.attributes` declares, in the pack's own order (`STR CON SIZ …`
   for CoC 7e, `STR DEX CON …` for D&D 5e, a community pack's own for its system);
@@ -265,13 +288,23 @@ connections receive `error too_many_connections` before `join` is read.
   never sent — so a client renders the dict as-is, in wire order, and each key is a
   name `.st <key>=<n>` accepts. A system that declares no sheet spec sends its
   stored dict unfiltered.
-  `variables[].hidden` marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists. `systems` (v2.3) is every rule system this server discovered, each with the dialect word that makes a character in it (`make_char`, absent when the pack declares none) — what a client needs to offer character creation without knowing any rule system, so a pack that ships its own appears in every client's picker with no client release.
+  `character.attribute_labels` (v2.5, optional) maps each `attributes` key to its
+  display name, from the rule system's own data (the key's canonical name, through the
+  rulepack's `display` table): CoC 7e on a `zh` server sends `{"APP":"外貌", …}`. Show
+  `attribute_labels[key]`, falling back to the key; the KEYS of `attributes` do not
+  change, and they stay what `.st` accepts. A key with no known name is left out of the
+  map, and the map is omitted entirely when it would be empty (a system without a sheet
+  spec).
+  `variables[].hidden` marks a keeper-connection-only row the keeper has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists. v2.5 adds, each only when non-empty: `blurb`, the card's one-line player-facing concept (the cast list a player chooses from — never the author's keeper notes or the sheet), and `claimed_by_name`, the claimer's display name as it was when they claimed (stored with the claim, so an offline claimer is still named; cleared on release). Show `claimed_by_name`, falling back to `claimed_by`. `systems` (v2.3) is every rule system this server discovered, each with the dialect word that makes a character in it (`make_char`, absent when the pack declares none) — what a client needs to offer character creation without knowing any rule system, so a pack that ships its own appears in every client's picker with no client release.
   `variables` (optional — omitted when the room has none) is the room's
   deterministic module variables, PLAYER-VISIBLE subset only: keeper-only variables are
   filtered inside the engine (`core.modvars.player_entries`) and never reach any transport.
   Entries arrive in definition order (render as-is, don't sort); `label` is already localized
-  to the room's locale; `min`/`max` appear only on bounded `number` variables (clients may
-  render those as a meter). Imported SillyTavern MVU card variables ride the same list with
+  (in the server's locale — see "Labels and locale"); `min`/`max` appear only on bounded
+  `number` variables (clients may render those as a meter). `value_label` (v2.5, optional)
+  appears only on an `enum` whose pack names its CURRENT option (`option_labels` in the
+  card format), resolved like `label`: DISPLAY it in place of `value`, but compare, store
+  and send `value` — the raw option id is what `visible_when`, hooks and `.var set` use. Imported SillyTavern MVU card variables ride the same list with
   `id` prefixed `mvu.` and the dotted path as `label` (scalar leaves only, server-capped) —
   no separate frame type, no client change required. MVU leaves are KEEPER-CURATED
   (fail-closed): a player frame carries only the paths the keeper exposed (`.var expose`);
@@ -409,7 +442,11 @@ modvar ids, `mvu.`-prefixed leaves):
   visibility; the `state` wire filter remains the single choke point);
 - `{"repeat": {"prefix": "<id prefix>", "block": <TemplateBlock>}}` renders one
   instance per visible variable whose id starts with the prefix (≤ 32 instances);
-  inside, `{"$leaf": "id"|"label"|"value"}` substitutes the matched variable's field.
+  inside, `{"$leaf": "id"|"label"|"value"}` substitutes the matched variable's field;
+- (2.5) where such a binding yields a variable's value for DISPLAY (a text field, a
+  `stat` value) and the entry carries `value_label`, the label is shown; `visible_when`,
+  a badge `tone` and every numeric field read the raw `value`
+  (`docs/lwf/formats/panels.md` §5.1 rule 7).
 
 `image` and `map_pin` are the template blocks the server rewrites rather than passes
 through: the author writes a pack-relative `src` path, and the manifest carries the

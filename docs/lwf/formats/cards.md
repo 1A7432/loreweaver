@@ -91,6 +91,18 @@ a warning.
 - `minimum`, `maximum`: integers, `number` only.
 - `options`: `enum` only. A non-empty list, at most 20 options of at most 50 characters
   each, unique case-insensitively.
+- `option_labels` (optional, protocol 2.5): `enum` only. Display names for the options,
+  locale-first like `labels` and like a rulepack's `display`:
+  `{locale: {option: text}}`, each text at most 50 characters, e.g.
+  `{"zh": {"marching": "在道上"}, "en": {"marching": "On the road"}}`. Option keys match
+  `options` case-insensitively. The variable's value stays the option id — conditions,
+  hooks and `.var set` keep using ids; players see the name for the current option
+  (`value_label` on the wire, picked like `labels`: the server's language, then `en`, then
+  any). The field is **tolerant**, like `labels`: a key that names no option, a text that
+  is empty or not a string, a locale entry that is not a mapping, or `option_labels` on a
+  non-`enum` variable is dropped with an import warning, and the variable itself is kept.
+  A keeper-only variable never reaches players, labels included. Older runtimes ignore
+  the field.
 - `default`.
 - `setup`: true marks a choice the table must make before play (§7).
 
@@ -103,6 +115,9 @@ case-insensitively. A room holds at most 64 typed variables. Reference:
 `{name (≤60 chars), concept or blurb (≤200), notes (≤400), skills?: {canonical name: integer}}`,
 with at most 32 skills. The runtime builds each sheet deterministically from the target
 rule system's defaults plus these overrides, then validates it against the rulepack.
+`concept` (or `blurb`) is **player-facing**: it is what players read when choosing a
+character (`.pc list`, and the `blurb` of a `state.pregens` entry since protocol 2.5), so
+it must not give anything away. `notes` is for the keeper and never reaches players.
 
 Reference: `core/lorecard.py::parse_lorecard_bytes`.
 

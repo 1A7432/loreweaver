@@ -55,20 +55,29 @@ function isLeafBinding(value: unknown): value is { $leaf: string } {
   return typeof value === "object" && value !== null && "$leaf" in value
 }
 
+/** A variable's value as a binding yields it. For DISPLAY (protocol 2.5, panels.md
+ * §5.1 rule 7) an entry carrying a non-empty `value_label` shows that label;
+ * everywhere else — numbers, tones, `visible_when` — it is the raw `value`. */
+function shownValue(entry: ModuleVariable, display: boolean): unknown {
+  const label = entry.value_label
+  return display && typeof label === "string" && label ? label : entry.value
+}
+
 /** Resolve one scalar template field: literals pass through; `$var` looks up the
  * viewer's variables (miss -> the block is omitted); `$leaf` reads the repeat
- * instance's matched variable (invalid outside a repeat). */
-function resolveScalar(value: unknown, variables: ModuleVariable[], leaf?: ModuleVariable): Resolved {
+ * instance's matched variable (invalid outside a repeat). `display` marks a field
+ * whose result is SHOWN as text (see `shownValue`). */
+function resolveScalar(value: unknown, variables: ModuleVariable[], leaf?: ModuleVariable, display = false): Resolved {
   if (isVarBinding(value)) {
     const id = value.$var
     const match = typeof id === "string" ? variables.find((entry) => entry.id === id) : undefined
-    return match === undefined ? MISS : { ok: true, value: match.value }
+    return match === undefined ? MISS : { ok: true, value: shownValue(match, display) }
   }
   if (isLeafBinding(value)) {
     if (!leaf) return MISS
     if (value.$leaf === "id") return { ok: true, value: leaf.id }
     if (value.$leaf === "label") return { ok: true, value: leaf.label }
-    if (value.$leaf === "value") return { ok: true, value: leaf.value }
+    if (value.$leaf === "value") return { ok: true, value: shownValue(leaf, display) }
     return MISS
   }
   return { ok: true, value }
@@ -87,7 +96,7 @@ export function pickPanelText(value: PanelText | string | undefined, locale?: st
 }
 
 function resolveText(value: unknown, variables: ModuleVariable[], locale?: string, leaf?: ModuleVariable): string | undefined {
-  const resolved = resolveScalar(value, variables, leaf)
+  const resolved = resolveScalar(value, variables, leaf, true)
   if (!resolved.ok) return undefined
   const raw = resolved.value
   if (typeof raw === "number" || typeof raw === "boolean") return String(raw)
@@ -124,7 +133,7 @@ function resolveOne(
   }
   if (block.kind === "stat") {
     const label = resolveText(block.label, variables, locale, leaf)
-    const resolved = resolveScalar(block.value, variables, leaf)
+    const resolved = resolveScalar(block.value, variables, leaf, true)
     if (label === undefined || !resolved.ok) return undefined
     const value = resolved.value
     if (typeof value !== "number" && typeof value !== "boolean") {
