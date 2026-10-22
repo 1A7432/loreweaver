@@ -265,7 +265,7 @@ rich client draws as a letter or a title card and a terminal client prints as a 
 writes one version either way.
 
 **Three audio layers.** `bgm`, `ambience` and `sfx` are separate lanes with their own play/stop/fade
-state, replayed on join. A pack ships its audio; the Keeper cues it by hand, or the Director does it
+state, replayed on join. A pack ships its audio; the room admin cues it by hand, or the Director does it
 on a beat.
 
 **Self-hosted, serverless in the ops sense.** There is no cloud, no account system, no reverse

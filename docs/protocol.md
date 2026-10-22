@@ -39,7 +39,7 @@ evaluation errors — MUST NOT render the block. Ignoring the gate draws content
 hid, so the undecidable case fails CLOSED, exactly as an unresolved `$var` does.
 
 **2.4 (additive)** adds the `report` frame (Server → Client): the HTML session report
-(`.report html`, and the keeper-only `.report html reveal`), stored as an unlisted room blob
+(`.report html`, and the admin-only `.report html reveal`), stored as an unlisted room blob
 and announced only to the connection that asked for it. A 2.3 client ignores the frame and
 simply never receives the file.
 
@@ -314,7 +314,7 @@ connections receive `error too_many_connections` before `join` is read.
   `{type:"report", hash:string, name:string, size:int, mime:"text/html", variant:"player"|"reveal"}`
   The page is one self-contained HTML file (inline CSS, no scripts, no external
   resources) stored as an UNLISTED room blob; fetch it with the ordinary media GET
-  (`{op:"get", hash}`) and verify its sha256. `variant:"reveal"` is the keeper's
+  (`{op:"get", hash}`) and verify its sha256. `variant:"reveal"` is the admin's
   spoiler edition: its blob answers a GET only on a keeper-key connection of the room —
   any other connection gets `media_not_found`, exactly as for a hash the room does not
   hold. `name` is a suggested file name; treat it as untrusted (keep only its base name).

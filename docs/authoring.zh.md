@@ -62,7 +62,7 @@ Packed harbour-bell@0.1.0 -> …/harbour-bell/harbour-bell-0.1.0.lwpack
    A one-shot for two to four investigators.
    by ada · license: CC-BY-4.0
    contains: 0 skill(s), 0 rulepack(s), 1 card(s), 0 lorebook(s), 0 UI panel(s), 0 asset(s) (0.0 MB) · hooks code: no · EJS templates: no
-Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper imports them with `.import <file> world`.
+Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
 ```
 
 最后那行值得停一下，第 1 节会解释。另外注意你**没写**的东西：文件清单、哈希、信任声明。这些都是构建时算出来的，安装时会重新算一遍，对不上就拒绝——所以一个手工拼出来的压缩包没法少报它带了什么。
@@ -199,7 +199,7 @@ on('turn_start', () => {
   ```console
   Imported "潮脉盘" as your player character (coc7-xipu). Key stats: STR 50, CON 45, …
   World machinery was left out of this character import: 0 hook script(s), 1 variable declaration(s),
-  0 template block(s), 0 keeper-only entr(y/ies). Module content is keeper-imported: `.import <card file> world`.
+  0 template block(s), 0 keeper-only entr(y/ies). Module content is imported by the room admin: `.import <card file> world`.
   ```
 
 - **`.import <文件> world`**——只有管理员能做，而且刻意不是模型工具。这才是一个模组真正落地的方式：
@@ -507,7 +507,7 @@ Packed xipu-songdeng@1.0.0 -> …/xipu-songdeng-1.0.0.lwpack
    A 1925 coastal-town mystery for the Tide-Greeting Festival — three days, nine lanterns, one chosen guest.
    by loreweaver-playtest · license: MIT
    contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
-Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the keeper imports them with `.import <file> world`.
+Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
    presentation kit: 5 picturable subject(s) — the Stage Director MAY generate images (each call spends your image-provider budget)
 ```
 
@@ -530,10 +530,10 @@ $ uv run python -m app --install ./xipu-songdeng-1.0.0.lwpack --yes
 📦 Xipu: The Lantern Sending — xipu-songdeng@1.0.0
    …
 Installed xipu-songdeng@1.0.0.
-   skills: yingchao-zhuchi — a keeper enables one in-room with .skill enable <id>
+   skills: yingchao-zhuchi — an admin enables one in-room with .skill enable <id>
    rulepacks: chaozhan, coc7-xipu — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.
    cards/lorebooks/assets: 2/1/9 file(s) under <data_dir>/packs/xipu-songdeng@1.0.0 — import in-room with .import <file> / .module
-World cards (keeper-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
+World cards (admin-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
 ```
 
 不加 `--yes` 就会打印信任卡并要求确认，非交互运行必须显式给这个参数。安装是在写任何东西**之前**校验的：每个内容文件用真解析器重新解析一遍，每个素材的字节要和清单里的 sha256 对上，压缩包里不许有未声明的成员，条目名会检查路径穿越，符号链接直接拒绝，数量和大小都有硬上限。信任块会用同一套检测器从压缩包里重新推导，对不上就拒绝。

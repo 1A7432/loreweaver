@@ -186,7 +186,7 @@ Loreweaver already imports SillyTavern cards (`core/charcard.py` →
 the card-plugin contract: a `chara_card_v2` / `chara_card_v3` JSON (or PNG with
 the `chara` tEXt chunk). Fields consumed on every path: `name, description,
 personality, scenario, first_mes, mes_example, creator_notes, tags,
-character_book`; on the keeper's world path only (below): `alternate_greetings`,
+character_book`; on the admin's world path only (below): `alternate_greetings`,
 `extensions.loreweaver_hooks`, `system_prompt`, `post_history_instructions`.
 Unknown fields are ignored, not rejected — forward-compatible with V3 additions.
 
@@ -429,7 +429,7 @@ operator's content, the operator's box):
 - **Where they live**: a `hooks.js` next to a skill's `SKILL.md` (active while the skill is
   enabled for the room — the existing `.skill enable` flow is the on/off switch), or a card's
   hook scripts — a native bundle's top-level `hooks: [...]` list (format v1), or an imported
-  ST-shaped card's `extensions.loreweaver_hooks` (installed by the KEEPER's
+  ST-shaped card's `extensions.loreweaver_hooks` (installed by the room ADMIN's
   `.import <file> world` — a card with hooks is a world card, see the split in A.2;
   re-importing replaces its scripts rather than stacking).
 - **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed"|"clock_advanced"|"tool_use", handler)`, the
@@ -451,7 +451,7 @@ operator's content, the operator's box):
   that property had to survive contact with the critical path — a hook that cannot run does
   not get to stop the game. The Scribe's tracker writes pass the same veto, each described
   as the `set_variable` / `adjust_variable` call it stands for, so a guard a pack declares
-  on a variable holds against every model lane that writes it; a keeper's own `.var` command
+  on a variable holds against every model lane that writes it; an admin's own `.var` command
   is not a model and is not asked. Independently of any guard, the Scribe never writes a
   variable a hook wrote that same turn: most hook phases run after the narration is final,
   so where the two disagree, the narration is the stale one.
@@ -529,7 +529,7 @@ The contract, and why it is safe to hand a keeper:
   applies NOTHING (never half of itself); an operation failing at apply time stops
   the run there, and earlier operations stand.
 - **Preview is free.** `run_prep_plan` with `apply: false` shows the full operation
-  list and touches nothing. Prep phase only (`.phase prep`); keeper commands like
+  list and touches nothing. Prep phase only (`.phase prep`); admin commands like
   `.import … world` and `.var expose` are structurally unreachable — they are
   commands, not tools, so a plan cannot name them.
 
@@ -775,7 +775,7 @@ so this costs nothing until an author asks for it.
 | `engine` | no | minimum versions: `protocol` (wire protocol) and/or `server` — minimum-compare only |
 | `contents.skills` | no | skill DIRECTORIES (`skills/<id>`), each exactly `SKILL.md` + optional `hooks.js` |
 | `contents.rulepacks` | no | rulepack YAML files (`rulepacks/<id>.yaml`) |
-| `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the native parser by content sniff so their machinery is detected honestly): a plain path, or a `{path, notes: {en, zh}}` mapping to attach install notes. The 拆卡 `kind` is **detected, never declared**: build stamps `character`/`world` into the built manifest from the real payload (hooks/`[InitVar]`/EJS/`secret` lore/typed specs ⇒ `world`, keeper-imported via `.import <file> world`), and install re-checks the stamp against detection. An entry may also carry `overlay: <path.yaml>` — keeper-side ANNOTATIONS of that card's own lorebook (which file-disabled entries this pack means to switch on, under which variable condition, and which "set before play" choices the table owes the module). Validated at build with the real parser (unknown `format`, an expression outside the closed `core.condexpr` grammar or over 500 characters, more than 20 options or 200 entries all FAIL; a title the card no longer carries is a warning); applied by the keeper's `.import … world` when the card is imported FROM the pack home, and by hand with `.lore overlay <file>`. Data, never machinery: it is counted on the trust card as `overlays` and cannot make a `character` card a `world` card |
+| `contents.cards` | no | SillyTavern cards (PNG or JSON) **or native bundles** (`*.lorecard.json`, dispatched to the native parser by content sniff so their machinery is detected honestly): a plain path, or a `{path, notes: {en, zh}}` mapping to attach install notes. The 拆卡 `kind` is **detected, never declared**: build stamps `character`/`world` into the built manifest from the real payload (hooks/`[InitVar]`/EJS/`secret` lore/typed specs ⇒ `world`, admin-imported via `.import <file> world`), and install re-checks the stamp against detection. An entry may also carry `overlay: <path.yaml>` — keeper-side ANNOTATIONS of that card's own lorebook (which file-disabled entries this pack means to switch on, under which variable condition, and which "set before play" choices the table owes the module). Validated at build with the real parser (unknown `format`, an expression outside the closed `core.condexpr` grammar or over 500 characters, more than 20 options or 200 entries all FAIL; a title the card no longer carries is a warning); applied by the admin's `.import … world` when the card is imported FROM the pack home, and by hand with `.lore overlay <file>`. Data, never machinery: it is counted on the trust card as `overlays` and cannot make a `character` card a `world` card |
 | `contents.lorebooks` | no | lorebook JSON (ST `character_book` / `{entries: [...]}` shapes) |
 | `contents.panels` | no | panels YAML files (`ui/panels.yaml`) declaring module UI panels (Layer D) — ≤ 16 panels per pack; a tier-2 panel's `entry`/`assets` files and every tier-1 `image`/`map_pin` `src` are folded into the pack asset pipeline at build (sha256'd, code payload ≤ 2 MB per panel) |
 | `contents.presentation` | no | the presentation kit (`ui/presentation.yaml`, one per pack) — the Stage Director's creative brief; its 定妆 references and audio cues join the same asset pipeline, and the trust card discloses whether the module may generate images |

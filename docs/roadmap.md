@@ -84,7 +84,7 @@ in a QuickJS sandbox, ST worldbook trigger semantics), sandboxed event hooks tha
 UI, `.lwpack` content packs distributed through Git releases, and the protocol SDK on npm
 (`loreweaver-protocol`, whose `major.minor` tracks the wire protocol). On top of that sits the **card
 split**: imports decompose an ST card into its character half (player-importable, machinery
-machinery removed by the importer) and its world half (keeper-only `.import … world`), packs label
+machinery removed by the importer) and its world half (admin-only `.import … world`), packs label
 cards `world` or `character` and the build checks that label against what the card actually contains, imported variable trees stay off player
 panels until the room admin exposes them, and a module can ship its rules as a rulepack *patch*
 (`extends: coc7` + deltas). Details: [plugins.md](plugins.md), [authoring.md](authoring.md),
