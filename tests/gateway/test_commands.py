@@ -61,6 +61,15 @@ def _total(text: str) -> int:
     return int(numbers[-1])
 
 
+async def _login_poll_finished(services, provider: str) -> None:
+    """Await the `.model login` background poll task itself, not a wall-clock budget.
+
+    The timeout only turns a hung poll into a failure instead of a stuck suite.
+    """
+    task = services._subscription_logins[provider]["task"]
+    await asyncio.wait_for(task, timeout=30)
+
+
 def _assert_model_mutation_failed(reply: str | None, provider: str) -> None:
     assert reply is not None
     assert reply.startswith("Could not")
@@ -502,11 +511,8 @@ async def test_model_login_switches_current_chatgpt_proxy_to_oauth(monkeypatch):
     ctx = AgentCtx(chat_key="cli:dm:m", user_id="u1", locale="en")
 
     started = await router.dispatch(ctx, ".model login chatgpt")
-    for _ in range(50):
-        if isinstance(unwrap_llm(services.llm), ChatGPTSubscriptionLLM):
-            break
-        await asyncio.sleep(0.01)
-    else:
+    await _login_poll_finished(services, "chatgpt")
+    if not isinstance(unwrap_llm(services.llm), ChatGPTSubscriptionLLM):
         raise AssertionError("ChatGPT proxy login did not switch to OAuth")
 
     assert started is not None and "OAUTH" in started
@@ -681,11 +687,8 @@ async def test_model_login_supergrok_refreshes_explicit_imagegen_when_llm_is_oth
     assert services.imagegen is None
 
     started = await router.dispatch(ctx, ".model login supergrok")
-    for _ in range(50):
-        if services.imagegen is not None:
-            break
-        await asyncio.sleep(0.01)
-    else:
+    await _login_poll_finished(services, "supergrok")
+    if services.imagegen is None:
         raise AssertionError("SuperGrok login did not refresh configured imagegen")
 
     assert started is not None and "IMAGE" in started
@@ -929,11 +932,8 @@ async def test_model_relogin_hot_rebuilds_active_supergrok_clients(monkeypatch):
     assert old_imagegen is not None
 
     started = await router.dispatch(ctx, ".model login supergrok")
-    for _ in range(50):
-        if services.llm.inner is not old_llm and services.imagegen is not old_imagegen:
-            break
-        await asyncio.sleep(0.01)
-    else:
+    await _login_poll_finished(services, "supergrok")
+    if not (services.llm.inner is not old_llm and services.imagegen is not old_imagegen):
         raise AssertionError("relogin did not rebuild active subscription clients")
 
     assert started is not None and "RELOGIN" in started
@@ -951,11 +951,8 @@ async def test_model_relogin_hot_rebuilds_active_supergrok_clients(monkeypatch):
     services.imagegen = unrelated_imagegen
     previous_llm = services.llm.inner
     await router.dispatch(ctx, ".model login supergrok")
-    for _ in range(50):
-        if services.llm.inner is not previous_llm:
-            break
-        await asyncio.sleep(0.01)
-    else:
+    await _login_poll_finished(services, "supergrok")
+    if services.llm.inner is previous_llm:
         raise AssertionError("second relogin did not rebuild the active LLM")
     assert services.imagegen is unrelated_imagegen
 
@@ -1402,15 +1399,11 @@ async def test_model_login_logout_and_set_with_mock_flow(monkeypatch):
     assert "access-secret" not in started
     assert "refresh-secret" not in started
 
-    # Wait for background poll to finish.
-    import asyncio
-
-    for _ in range(100):
-        sub = await services.llm_credentials.load_subscription("supergrok")
-        if sub is not None:
-            break
-        await asyncio.sleep(0.02)
-    else:
+    # Wait for the background poll itself to finish (its second poll comes after the
+    # flow's >= 1 s interval), then read what it saved.
+    await _login_poll_finished(services, "supergrok")
+    sub = await services.llm_credentials.load_subscription("supergrok")
+    if sub is None:
         raise AssertionError("login poll never saved subscription")
 
     assert sub.access_token == "access-secret"

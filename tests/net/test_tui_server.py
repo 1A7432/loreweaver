@@ -56,6 +56,16 @@ async def _start(server: TuiServer) -> str:
     return f"ws://127.0.0.1:{server.bound_port}/"
 
 
+async def _wait_until(cond, what: str, *, bound: float = _RECV_TIMEOUT) -> None:
+    """Yield to the event loop until `cond()` holds; fail naming `what` after `bound` seconds."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + bound
+    while not cond():
+        if loop.time() > deadline:
+            raise AssertionError(f"gave up waiting for {what} after {bound}s")
+        await asyncio.sleep(0.001)
+
+
 async def _recv(ws) -> dict:
     raw = await asyncio.wait_for(ws.recv(), timeout=_RECV_TIMEOUT)
     return json.loads(raw)
@@ -230,7 +240,9 @@ async def test_connection_over_the_cap_is_refused_and_closed():
 
         # Freeing the slot lets a new connection back in.
         await ws_a.close()
-        await asyncio.sleep(0.05)  # let the server-side `finally` decrement land
+        # The client-side close returns before the server handler's `finally` has
+        # released the slot: wait for that release itself, not for a fixed delay.
+        await _wait_until(lambda: server._active_connections == 0, "the freed connection slot")
         ws_c, welcome_c, *_ = await _connect_and_join(url, key, "Alice")
         assert welcome_c["type"] == "welcome"
         await ws_c.close()
