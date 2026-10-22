@@ -169,6 +169,46 @@ describe("PartyRoster pregen labels (v2.5)", () => {
     act(() => renderer.destroy())
   })
 
+  // OpenTUI's own `truncate` miscounts CJK width and returns a line one cell wider than
+  // its box, so PartyRoster cuts the blurb itself. These are long UNBROKEN runs, with and
+  // without full-width commas — the fixture that used to be here dodged exactly that.
+  const LONG_BLURBS = [
+    "档案馆的抄写员记性好得过分什么都忘不掉连别人的秘密也是啊",
+    "档案馆的抄写员，记性好得过分，什么都忘不掉，连别人的秘密也是啊",
+    "A scribe of the archive who remembers far too much 档案馆的抄写员记性好得过分",
+  ]
+
+  for (const columns of [sidebarWidth(120), sidebarWidth(60)]) {
+    test(`a long CJK blurb never overflows a ${columns}-column sidebar`, async () => {
+      const recorder = new ClaimRecorder()
+      const pregens: PregenEntry[] = [
+        ...LONG_BLURBS.map((blurb, index) => ({ name: `沈拾遗${index}`, claimed_by: "", blurb })),
+        { name: "关五", claimed_by: "tui:1a2b3c4d", claimed_by_name: "档案馆的抄写员记性好得过分什么都忘不掉" },
+      ]
+      const { renderer, flush, captureCharFrame } = await testRender(
+        <PartyRoster
+          party={[]}
+          initiative={[]}
+          theme={theme}
+          locale="zh"
+          client={asClient(recorder)}
+          focused={false}
+          onFocus={() => {}}
+          pregens={pregens}
+        />,
+        { width: columns, height: 16 },
+      )
+      await flush()
+
+      const lines = captureCharFrame().split("\n")
+      expect(lines.some((line) => line.includes("档案馆"))).toBe(true)
+      expect(lines.some((line) => line.includes("…"))).toBe(true)
+      for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(columns)
+
+      act(() => renderer.destroy())
+    })
+  }
+
   test("clicking an unclaimed pregen's blurb line claims it too", async () => {
     const recorder = new ClaimRecorder()
     const { renderer, flush, captureCharFrame, mockMouse } = await renderRoster(recorder, LABELLED, { locale: "zh" })

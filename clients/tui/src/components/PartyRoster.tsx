@@ -7,6 +7,7 @@ import { tt } from "../i18n"
 import { getCachedMedia, renderHalfBlockPreview, type HalfBlockLine } from "../media"
 import type { Palette } from "../themes"
 import { bar, CharacterPanel, statColor } from "./CharacterPanel"
+import { FitText } from "./FitText"
 
 /** Who holds a claimed pregen: the claimer's display name (protocol 2.5
  * `claimed_by_name`, stored at claim time), else the raw member id an older server
@@ -252,22 +253,19 @@ export function PartyRoster({
           <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "party.pregens")}</text>
           {pregens.map((entry) =>
             entry.claimed_by ? (
-              <text key={entry.name} fg={theme.dim} wrapMode="none" truncate>
-                {"✓ "}{stripControlChars(entry.name)} · {tt(locale, "party.pregenClaimed", { who: pregenClaimer(entry) })}
-              </text>
+              <FitText key={entry.name} fg={theme.dim}>
+                {`✓ ${stripControlChars(entry.name)} · ${tt(locale, "party.pregenClaimed", { who: pregenClaimer(entry) })}`}
+              </FitText>
             ) : (
               <box key={entry.name} flexDirection="column" onMouseDown={() => claimPregen(entry.name)}>
                 <text fg={theme.player} wrapMode="none" truncate>
                   {"▸ "}{stripControlChars(entry.name)}
                 </text>
                 {/* v2.5: the card's one-line concept, so a player can choose before
-                    claiming. A dim, indented second line, truncated to the sidebar
-                    width — the name line above stays short and fully readable. */}
-                {pregenBlurb(entry) ? (
-                  <text fg={theme.dim} wrapMode="none" truncate>
-                    {"  "}{pregenBlurb(entry)}
-                  </text>
-                ) : null}
+                    claiming. A dim, indented second line, cut to the sidebar width by
+                    `FitText` (not OpenTUI's CJK-blind truncation) — the name line above
+                    stays short and fully readable. */}
+                {pregenBlurb(entry) ? <FitText fg={theme.dim}>{`  ${pregenBlurb(entry)}`}</FitText> : null}
               </box>
             ),
           )}
