@@ -38,6 +38,18 @@ describe("variableLine formatting", () => {
     )
   })
 
+  test("an enum shows its server-named option (v2.5 value_label), else the raw value", () => {
+    const column: ModuleVariable = { id: "column_state", label: "纵队", kind: "enum", value: "marching", value_label: "在道上" }
+    expect(variableLine(column, "zh")).toBe("纵队: 在道上")
+    expect(variableLine({ ...column, value_label: undefined }, "zh")).toBe("纵队: marching")
+    expect(variableLine({ ...column, value_label: "" }, "zh")).toBe("纵队: marching")
+    // Only an enum's value is relabelled: a label on any other kind is not display data.
+    expect(variableLine({ id: "pw", label: "Password", kind: "text", value: "swordfish", value_label: "x" }, "en")).toBe(
+      "Password: swordfish",
+    )
+    expect(variableLine({ ...column, value_label: "在\x1b[2J道上" }, "zh")).toBe("纵队: 在[2J道上")
+  })
+
   test("bool renders a check/cross + localized yes/no in both locales", () => {
     const alarm: ModuleVariable = { id: "alarm", label: "Alarm", kind: "bool", value: false }
     const armed: ModuleVariable = { id: "armed", label: "Armed", kind: "bool", value: true }

@@ -8,6 +8,21 @@ import { getCachedMedia, renderHalfBlockPreview, type HalfBlockLine } from "../m
 import type { Palette } from "../themes"
 import { bar, CharacterPanel, statColor } from "./CharacterPanel"
 
+/** Who holds a claimed pregen: the claimer's display name (protocol 2.5
+ * `claimed_by_name`, stored at claim time), else the raw member id an older server
+ * sends. Untrusted server text: control characters are stripped. */
+export function pregenClaimer(entry: PregenEntry): string {
+  const name = typeof entry.claimed_by_name === "string" ? stripControlChars(entry.claimed_by_name).trim() : ""
+  return name || stripControlChars(entry.claimed_by)
+}
+
+/** An unclaimed pregen's one-line concept (protocol 2.5 `blurb`) on a single line —
+ * newlines collapse to spaces so the sidebar row stays one row — or "" when absent. */
+export function pregenBlurb(entry: PregenEntry): string {
+  if (typeof entry.blurb !== "string") return ""
+  return stripControlChars(entry.blurb.replace(/\s+/g, " ")).trim()
+}
+
 export interface PartyRosterProps {
   character?: CharacterState
   party: PartyMember[]
@@ -238,13 +253,21 @@ export function PartyRoster({
           {pregens.map((entry) =>
             entry.claimed_by ? (
               <text key={entry.name} fg={theme.dim} wrapMode="none" truncate>
-                {"✓ "}{stripControlChars(entry.name)} · {tt(locale, "party.pregenClaimed", { who: stripControlChars(entry.claimed_by) })}
+                {"✓ "}{stripControlChars(entry.name)} · {tt(locale, "party.pregenClaimed", { who: pregenClaimer(entry) })}
               </text>
             ) : (
-              <box key={entry.name} flexDirection="row" onMouseDown={() => claimPregen(entry.name)}>
+              <box key={entry.name} flexDirection="column" onMouseDown={() => claimPregen(entry.name)}>
                 <text fg={theme.player} wrapMode="none" truncate>
                   {"▸ "}{stripControlChars(entry.name)}
                 </text>
+                {/* v2.5: the card's one-line concept, so a player can choose before
+                    claiming. A dim, indented second line, truncated to the sidebar
+                    width — the name line above stays short and fully readable. */}
+                {pregenBlurb(entry) ? (
+                  <text fg={theme.dim} wrapMode="none" truncate>
+                    {"  "}{pregenBlurb(entry)}
+                  </text>
+                ) : null}
               </box>
             ),
           )}
