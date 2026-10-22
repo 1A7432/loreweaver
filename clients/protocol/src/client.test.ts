@@ -550,10 +550,17 @@ describe("WsClient", () => {
 
   test("onStatus goes reconnecting -> online across an unexpected drop, and re-sends the last join", async () => {
     const sockets: MockWebSocket[] = []
+    // The backoff timer is captured, not scheduled: the redial happens when the test fires it.
+    const backoffs: Array<() => void> = []
     const client = new WsClient({
       reconnect: true,
       reconnectBaseMs: 5,
       reconnectMaxMs: 20,
+      setTimeoutFn: ((fn: () => void) => {
+        backoffs.push(fn)
+        return backoffs.length
+      }) as unknown as typeof setTimeout,
+      clearTimeoutFn: (() => {}) as unknown as typeof clearTimeout,
       webSocketFactory: (url) => {
         const socket = new MockWebSocket(url)
         sockets.push(socket)
@@ -574,7 +581,9 @@ describe("WsClient", () => {
     expect(statuses).toEqual(["connecting", "online", "reconnecting"])
 
     // After the backoff, a fresh socket dials in and the last join is auto-resent.
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(backoffs).toHaveLength(1)
+    backoffs[0]!()
+    await new Promise((resolve) => setTimeout(resolve, 0)) // the mock socket opens on a microtask
     expect(sockets.length).toBe(2)
     expect(JSON.parse(sockets[1].sent[0])).toEqual({ type: FrameType.Join, key: "room-key", name: "Ada" })
     expect(statuses).toEqual(["connecting", "online", "reconnecting", "connecting", "online"])
