@@ -571,6 +571,47 @@ async def test_a_check_round_s_own_text_counts_for_the_rows_after_it(monkeypatch
     assert _ARCHIVE_SCENE in llm.calls[-1][0][-1]["content"]
 
 
+async def test_a_one_round_row_answered_with_a_tool_call_still_gets_its_narration():
+    """Cursor Bugbot on #47. narration_lost has one round. A model that answers the re-ask
+    by restoring the scene BESIDE a bookkeeping call has spent that round on a tool round,
+    whose text the table never sees; ending the row there kept the short close and dropped
+    the scene a second time. The narration round that reads a tool round is not a new ask,
+    so it follows even past the row's cap."""
+    llm = FakeLLM(
+        script=[
+            _bookkeeping_round(_ARCHIVE_SCENE),
+            assistant_text(_CLOSING),
+            _bookkeeping_round(_FULL_SCENE),
+            assistant_text(_FULL_SCENE),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx(), services, Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert result.reply == _FULL_SCENE
+    assert len(llm.calls) == 4, "two main rounds, the re-ask answered with tools, the narration that follows"
+    assert _FULL_SCENE in llm.calls[-1][0][-1]["content"], "the narration ask hands back what the tool round wrote"
+
+
+async def test_a_model_that_keeps_calling_tools_stops_at_the_turn_ceiling():
+    """The other side of the rule above: following every tool round with a narration ask
+    must not make the check lane unbounded. The turn-wide ceiling is the hard stop, and the
+    reply the turn already had is what ships."""
+    opening = iter([_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(_CLOSING)])
+
+    def responder(messages, tools):
+        return next(opening, None) or _bookkeeping_round("Let me note that down once more.")
+
+    llm = FakeLLM(responder=responder)
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx(), services, Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert result.reply == _CLOSING
+    assert len(llm.calls) == 2 + MAX_ROUNDS_PER_TURN, "two main rounds, then every check round the turn allows"
+
+
 # ---------------------------------------------------------------------------
 # The table is data, and the engine owns its ceiling
 # ---------------------------------------------------------------------------
