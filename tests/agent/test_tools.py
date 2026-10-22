@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 
 from agent.context import AgentCtx
-from agent.tools import Toolset, tool
+from agent.tools import Toolset, _parse_docstring_args, tool
 from infra.i18n import t
 
 
@@ -150,6 +150,65 @@ def test_required_str_param_type_description_and_required_list():
         "description": "The widget's display name.",
     }
     assert params["required"] == ["name"]
+
+
+_WRAPPED_ARGS_DOC = """Do a thing.
+
+    Args:
+        value: Depends on action. For set, e.g. "1926-03-15 14:00"; for advance,
+            e.g. "+2 hours"/"+1 day"; for add_event, the event
+            description.
+        action: show / set / advance.
+        effort: How hard to think --
+            "low" for filler, "high" for climaxes.
+
+    Returns:
+        Confirmation text that is not an argument description.
+"""
+
+
+def test_parse_docstring_args_joins_continuation_lines_with_single_spaces():
+    parsed = _parse_docstring_args(_WRAPPED_ARGS_DOC)
+
+    assert parsed["value"] == (
+        'Depends on action. For set, e.g. "1926-03-15 14:00"; for advance, '
+        'e.g. "+2 hours"/"+1 day"; for add_event, the event description.'
+    )
+
+
+def test_parse_docstring_args_stops_each_description_at_the_next_arg_and_at_returns():
+    parsed = _parse_docstring_args(_WRAPPED_ARGS_DOC)
+
+    assert parsed["action"] == "show / set / advance."  # not swallowed into value, nor extended
+    assert parsed["effort"] == 'How hard to think -- "low" for filler, "high" for climaxes.'
+    assert set(parsed) == {"value", "action", "effort"}  # `Returns:` text is nobody's description
+
+
+def test_parse_docstring_args_single_line_args_are_unchanged():
+    assert _parse_docstring_args("Hi.\n\n    Args:\n        a: First.\n        b (int): Second.\n") == {
+        "a": "First.",
+        "b": "Second.",
+    }
+
+
+class _WrappedArgTool:
+    @tool
+    async def clock(self, ctx: AgentCtx, value: str, action: str = "show") -> str:
+        """Drive a clock.
+
+        Args:
+            value: For advance, e.g. "+2 hours"/"+1
+                day"; for set, a timestamp.
+            action: show or set.
+        """
+        return value + action
+
+
+def test_schema_param_description_keeps_the_wrapped_part_of_an_args_entry():
+    properties = _schema_of(Toolset(_WrappedArgTool()), "clock")["function"]["parameters"]["properties"]
+
+    assert properties["value"]["description"] == 'For advance, e.g. "+2 hours"/"+1 day"; for set, a timestamp.'
+    assert properties["action"]["description"] == "show or set."
 
 
 def test_self_and_ctx_are_never_in_the_schema():
@@ -387,12 +446,16 @@ async def test_dispatch_optional_typed_param_defaults_to_none_when_omitted():
     assert result == "clues/None"
 
 
-async def test_dispatch_ignores_unrecognized_extra_arguments():
+async def test_dispatch_refuses_unrecognized_extra_arguments_instead_of_ignoring_them():
     toolset = Toolset(SampleTools())
 
     result = await toolset.dispatch("create_widget", _ctx(), {"name": "Lantern", "bogus": 123})
 
-    assert result == "created Lantern in test-chat"
+    assert result == t(
+        "agent.tools.bad_arguments",
+        name="create_widget",
+        error="unknown argument 'bogus'; accepted parameters: name",
+    )
 
 
 async def test_dispatch_guarantees_str_return_for_non_str_results():
@@ -428,6 +491,90 @@ async def test_dispatch_uncoercible_argument_returns_a_localized_error_not_an_ex
     assert result == t(
         "agent.tools.bad_arguments", name="roll", error="cannot coerce 'not-a-number' to int"
     )
+
+
+class _CountingTools:
+    """A tool whose body records that it ran — an unknown-argument call must never reach it."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    @tool
+    async def note(self, ctx: AgentCtx, category: str, content: str = "") -> str:
+        """Write a note.
+
+        Args:
+            category: Where it goes.
+            content: The note text.
+        """
+        self.calls.append((category, content))
+        return f"noted {category}={content}"
+
+    @tool
+    async def ping(self, ctx: AgentCtx) -> str:
+        """A tool with no parameters."""
+        return "pong"
+
+
+async def test_dispatch_unknown_argument_is_refused_naming_it_and_the_accepted_parameters():
+    provider = _CountingTools()
+    toolset = Toolset(provider)
+
+    result = await toolset.dispatch("note", _ctx(), {"category": "scene", "value": "The Study"})
+
+    assert result == t(
+        "agent.tools.bad_arguments",
+        name="note",
+        error="unknown argument 'value'; accepted parameters: category, content",
+    )
+    assert provider.calls == []  # not run on defaults, which is what dropping the key used to do
+
+
+async def test_dispatch_unknown_arguments_are_all_named_even_when_a_required_one_is_missing():
+    toolset = Toolset(_CountingTools())
+
+    result = await toolset.dispatch("note", _ctx(), {"text": "x", "value": "y"})
+
+    assert result == t(
+        "agent.tools.bad_arguments",
+        name="note",
+        error="unknown arguments 'text', 'value'; accepted parameters: category, content",
+    )
+
+
+async def test_dispatch_unknown_argument_on_a_parameterless_tool_says_it_takes_none():
+    toolset = Toolset(_CountingTools())
+
+    result = await toolset.dispatch("ping", _ctx(), {"extra": 1})
+
+    assert result == t(
+        "agent.tools.bad_arguments", name="ping", error="unknown argument 'extra'; accepted parameters: (none)"
+    )
+    assert await toolset.dispatch("ping", _ctx(), {}) == "pong"
+    assert await toolset.dispatch("ping", _ctx(), {}) == "pong"
+
+
+async def test_dispatch_known_arguments_are_unaffected_by_the_unknown_argument_check():
+    provider = _CountingTools()
+    toolset = Toolset(provider)
+
+    assert await toolset.dispatch("note", _ctx(), {"category": "scene", "content": "The Study"}) == "noted scene=The Study"
+    assert await toolset.dispatch("note", _ctx(), {"category": "scene"}) == "noted scene="  # a default still applies
+    assert provider.calls == [("scene", "The Study"), ("scene", "")]
+
+
+async def test_dispatch_unknown_argument_error_is_localized_per_ctx_locale():
+    toolset = Toolset(_CountingTools())
+
+    result = await toolset.dispatch("note", AgentCtx(chat_key="test-chat", locale="zh"), {"category": "a", "value": "b"})
+
+    assert result == t(
+        "agent.tools.bad_arguments",
+        locale="zh",
+        name="note",
+        error="unknown argument 'value'; accepted parameters: category, content",
+    )
+    assert result.startswith("工具 note 参数无效")
 
 
 async def test_dispatch_error_messages_are_localized_per_ctx_locale():
@@ -467,9 +614,15 @@ async def test_underscore_prefixed_param_is_hidden_from_schema_and_dispatch_coer
     assert "_keeper" not in properties  # caller-injected, never model-facing
     assert schema["function"]["parameters"]["required"] == ["query"]
 
-    # A model-driven dispatch can NOT set the underscore param; the method default applies.
+    # A model-driven dispatch can NOT set the underscore param: it is refused as an
+    # argument the tool does not have, and the tool never runs.
     dispatched = await toolset.dispatch("peek", _ctx(), {"query": "chapel", "_keeper": False})
-    assert dispatched == "chapel:True"
+    assert dispatched == t(
+        "agent.tools.bad_arguments",
+        name="peek",
+        error="unknown argument '_keeper'; accepted parameters: query",
+    )
+    assert await toolset.dispatch("peek", _ctx(), {"query": "chapel"}) == "chapel:True"  # the default applies
 
     # A direct Python call (the command layer) can still pass it explicitly.
     direct = await _KeeperFlagTool().peek(_ctx(), "chapel", _keeper=False)

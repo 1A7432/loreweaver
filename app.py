@@ -608,15 +608,16 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     instantiated directly in tests.) `core` is a `net.session.SessionCore` — a `TuiServer` is one,
     so we borrow it as the shared engine without ever binding its socket.
 
-    The endpoint's secret key is persisted next to the keystore (`iroh-secret.key`) so the
-    NodeId — and therefore the shareable ticket — is STABLE across restarts.
+    The endpoint's secret key and its UDP port are persisted next to the keystore
+    (`iroh-secret.key`, `iroh-port.txt`) so the shareable ticket — NodeId AND direct
+    addresses — is STABLE across restarts (`TRPG_TUI__IROH_PORT` pins the port).
 
     Returns True once the endpoint came online and served (a clean stop), False if it never
     started — the caller turns a False into a non-zero exit code so a supervisor restarts it."""
     from net.iroh_server import IrohServer
 
     secret_path = Path(keys_path).with_name("iroh-secret.key")
-    iroh_server = IrohServer(core, secret_path=secret_path)
+    iroh_server = IrohServer(core, secret_path=secret_path, port=core.services.settings.tui.iroh_port)
     try:
         # Bound the relay handshake so an unreachable relay can't hang startup forever.
         ticket = await asyncio.wait_for(iroh_server.start(), timeout=45)
@@ -626,39 +627,56 @@ async def _serve_iroh(core: TuiServer, i18n: I18n, keys_path: str) -> bool:
     except Exception as exc:  # relay unreachable, bind failure, startup timeout, etc.
         print(i18n.t("tui.serve.iroh.failed", error=str(exc)), file=sys.stderr)
         return False
-    _announce_iroh_ticket(i18n, ticket, keys_path)
+    _announce_iroh_ticket(
+        i18n, ticket, keys_path, port=iroh_server.direct_port, port_changed_from=iroh_server.port_changed_from
+    )
 
-    # Graceful SIGTERM (systemd `stop`/`restart`): asyncio.run does NOT turn SIGTERM into
-    # KeyboardInterrupt, so without this a supervisor stop would hard-kill the process without
-    # closing the endpoint/store. Cancelling the serve task makes `iroh_server.serve()` return
-    # so the `finally: await iroh_server.close()` below runs — the same clean shutdown Ctrl-C
-    # already gets via the outer KeyboardInterrupt path, which is left untouched.
+    # Graceful stop on SIGTERM (systemd `stop`/`restart`) AND SIGINT (Ctrl-C, `kill -INT`):
+    # cancelling the serve task makes `iroh_server.serve()` return, so the `finally: await
+    # iroh_server.close()` below runs and every client gets a real close instead of waiting out
+    # the QUIC idle timeout. SIGINT is hooked here rather than left to `asyncio.run`, because
+    # the default path is not a reliable shutdown: (1) a process started with a shell `&`
+    # inherits SIGINT=SIG_IGN, so Python installs no SIGINT handler and `asyncio.Runner` (which
+    # only hooks SIGINT over Python's default one) installs none either — a plain SIGINT was a
+    # silent no-op; (2) when it does fire, the first SIGINT only cancels the main task (clean
+    # solely because of the `except CancelledError: pass` below) and the second raises
+    # KeyboardInterrupt from wherever the loop is, possibly mid-close. Both handlers are
+    # removed BEFORE `close()`, which hands SIGINT back to Python's default handler: during
+    # shutdown a SECOND Ctrl-C raises KeyboardInterrupt (caught in `_run_serve`, which still
+    # closes the store) — the escape for a close that hangs.
     loop = asyncio.get_running_loop()
     serve_task = asyncio.ensure_future(iroh_server.serve())
-    handler_installed = True
-    try:
-        loop.add_signal_handler(signal.SIGTERM, serve_task.cancel)
-    except NotImplementedError:
-        # Not available on Windows — laptop self-hosters there already stop via Ctrl-C.
-        handler_installed = False
+    stop_signals: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, serve_task.cancel)
+        except NotImplementedError:
+            # Not available on Windows — laptop self-hosters there stop via Ctrl-C, which
+            # still lands in asyncio.run / `_run_serve`'s KeyboardInterrupt path.
+            break
+        stop_signals.append(sig)
 
     try:
         await serve_task
     except asyncio.CancelledError:
         pass
     finally:
-        if handler_installed:
+        for sig in stop_signals:
             try:
-                loop.remove_signal_handler(signal.SIGTERM)
+                loop.remove_signal_handler(sig)
             except (NotImplementedError, ValueError):
                 pass
         await iroh_server.close()
     return True
 
 
-def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
+def _announce_iroh_ticket(
+    i18n: I18n, ticket: str, keys_path: str, *, port: int = 0, port_changed_from: int = 0
+) -> None:
     """Print the shareable Iroh ticket prominently + drop it in a sidecar file, mirroring the
-    keeper-key bootstrap banner. The operator shares this ticket (the address) + an invite key."""
+    keeper-key bootstrap banner. The operator shares this ticket (the address) + an invite key.
+    `port` is the pinned UDP port (for a firewall rule); `port_changed_from` is the remembered
+    port that was unavailable this start, i.e. saved tickets are stale until replaced."""
     sidecar = Path(keys_path).with_name("iroh-ticket.txt")
     try:
         atomic_write_private(sidecar, f"ticket={ticket}\n")  # i18n-exempt: data file
@@ -667,6 +685,10 @@ def _announce_iroh_ticket(i18n: I18n, ticket: str, keys_path: str) -> None:
     print(i18n.t("tui.serve.iroh.banner"), file=sys.stderr)
     print(i18n.t("tui.serve.iroh.ticket", ticket=ticket), file=sys.stderr)
     print(i18n.t("tui.serve.iroh.hint", path=str(sidecar)), file=sys.stderr)
+    if port:
+        print(i18n.t("tui.serve.iroh.port", port=port), file=sys.stderr)
+    if port_changed_from:
+        print(i18n.t("tui.serve.iroh.port_changed", old=port_changed_from, new=port or "?"), file=sys.stderr)
 
 
 def _uses_demo_llm(services) -> bool:

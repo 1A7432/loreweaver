@@ -172,6 +172,7 @@
   "kp_tools.know.note.list_empty": "📭 No notes in {category} yet.",
   "kp_tools.know.note.list_header": "📝 {category} notes ({count} total):",
   "kp_tools.know.note.list_item": "{index}. [{time}] {content}",
+  "kp_tools.know.note.scene_set_done": "✅ Set {category} = {content}. Players now see this on their scene card, so keep it table-facing.",
   "kp_tools.know.note.set_done": "✅ Set {category} = {content}",
   "kp_tools.know.note.update_done": "✅ Updated the last note in {category}.",
   "kp_tools.know.pool.invalid_type": "❌ pool_type must be 'keeper' or 'player'.",

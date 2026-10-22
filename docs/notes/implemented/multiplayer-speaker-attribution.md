@@ -18,8 +18,10 @@
 - **Reason:** the engine already knew the speaker; only the model-visible
   conversation dropped it. Old rooms are not rewritten; new turns tag going
   forward.
-- **Rule home:** `agent.player_line` (`attributed_player_line` /
-  `player_line_body`); hub + CLI wrap, the loop/assembler strip for
-  retrieval; `locales/{en,zh}/prompt.json` (`prompt.speaker_line`,
+- **Rule home:** `core.player_line` (`attributed_player_line` /
+  `split_player_line` / `player_line_body`; `agent.player_line` re-exports it
+  for the Keeper side); hub + CLI wrap, the loop/assembler strip for
+  retrieval, and the session report (Markdown + HTML) prints the name as the
+  line's label and the bare text as its body; `locales/{en,zh}/prompt.json` (`prompt.speaker_line`,
   `prompt.style.narrative`, `prompt.style.companions`).
 - **Date:** 2026-09-01.

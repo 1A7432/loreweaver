@@ -13,8 +13,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import stat
+import subprocess
+import sys
+import textwrap
+import threading
 import warnings
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -336,12 +343,13 @@ def test_iroh_server_start_passes_secret_key_as_bytes(monkeypatch, tmp_path) -> 
     assert isinstance(captured["options"].secret_key, bytes)
 
 
-def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> None:
-    """SIGTERM (systemd `stop`/`restart`) must cancel serve() and run the finally-close, not
-    hard-kill the process — so the endpoint/store shut down cleanly on a deploy restart."""
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGINT"])
+def test_serve_iroh_stop_signal_triggers_clean_shutdown(signame, monkeypatch, tmp_path) -> None:
+    """SIGTERM (systemd `stop`/`restart`) and SIGINT (Ctrl-C, `kill -INT`) must both cancel
+    serve() and run the finally-close, not hard-kill the process — so the endpoint/store shut
+    down cleanly on a deploy restart and a Ctrl-C closes every client's connection."""
     if os.name != "posix":
-        pytest.skip("add_signal_handler / SIGTERM handling is POSIX-only")
-    import signal
+        pytest.skip("add_signal_handler / signal handling is POSIX-only")
 
     import app as app_module
     from infra.i18n import get_i18n
@@ -350,7 +358,10 @@ def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> No
     closed = {"value": False}
 
     class _FakeIrohServer:
-        def __init__(self, core, *, secret_path=None) -> None:  # noqa: D401 - test stub
+        direct_port = 0
+        port_changed_from = 0
+
+        def __init__(self, core, *, secret_path=None, port=0) -> None:  # noqa: D401 - test stub
             pass
 
         async def start(self) -> str:
@@ -358,7 +369,7 @@ def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> No
 
         async def serve(self) -> None:
             started.set()
-            await asyncio.Event().wait()  # block until cancelled by the SIGTERM handler
+            await asyncio.Event().wait()  # block until cancelled by the signal handler
 
         async def close(self) -> None:
             closed["value"] = True
@@ -368,18 +379,156 @@ def test_serve_iroh_sigterm_triggers_clean_shutdown(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(app_module, "_announce_iroh_ticket", lambda *a, **k: None)
 
     async def go() -> bool:
-        task = asyncio.ensure_future(
-            app_module._serve_iroh(object(), get_i18n("en"), str(tmp_path / "keys.toml"))
-        )
+        core = SimpleNamespace(services=SimpleNamespace(settings=SimpleNamespace(tui=SimpleNamespace(iroh_port=0))))
+        task = asyncio.ensure_future(app_module._serve_iroh(core, get_i18n("en"), str(tmp_path / "keys.toml")))
         # The signal handler is installed BEFORE serve() runs, so once `started` is set it is
-        # safe to raise SIGTERM without the default disposition killing the test runner.
+        # safe to raise the signal without the default disposition killing the test runner.
         await asyncio.wait_for(started.wait(), timeout=5)
-        os.kill(os.getpid(), signal.SIGTERM)
+        os.kill(os.getpid(), getattr(signal, signame))
         return await asyncio.wait_for(task, timeout=5)
 
-    result = asyncio.run(go())
+    # Start SIGINT ignored, as a process launched with a shell `&` has it: asyncio.run then installs
+    # no SIGINT handling of its own, so only `_serve_iroh`'s explicit handler can make it stop.
+    previous = signal.getsignal(signal.SIGINT)
+    if signame == "SIGINT":
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        result = asyncio.run(go())
+        if signame == "SIGINT":
+            # Handlers are handed back before close(): a later Ctrl-C is Python's default again.
+            assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
     assert result is True  # a clean stop returns True
     assert closed["value"] is True  # the finally-close actually ran
+
+
+# A real child process running the real `app._run_serve` -> `_serve_iroh` -> signal wiring over a
+# fake IrohServer. SIGINT cannot be exercised in-process the way SIGTERM can (the SECOND one must
+# raise KeyboardInterrupt, and an inherited SIG_IGN is process-start state), so these spawn it.
+_SERVE_CHILD = textwrap.dedent(
+    """
+    import argparse, asyncio, signal, sys
+
+    import app
+    import net.iroh_server
+    from infra.i18n import get_i18n
+
+    mode, sigint_disposition, keys = sys.argv[1], sys.argv[2], sys.argv[3]
+    # What the process inherited at start: a shell `&` hands SIGINT over ignored.
+    signal.signal(signal.SIGINT, signal.SIG_IGN if sigint_disposition == "ignored" else signal.default_int_handler)
+
+
+    class _Store:
+        def close(self):
+            print("store-closed", flush=True)
+
+
+    class _Core:
+        class services:
+            store = _Store()
+
+            class settings:
+                class tui:
+                    iroh_port = 0
+
+
+    class _FakeIroh:
+        direct_port = 0
+        port_changed_from = 0
+
+        def __init__(self, core, *, secret_path=None, port=0):
+            pass
+
+        async def start(self):
+            return "ticket-test"
+
+        async def serve(self):
+            print("serving", flush=True)
+            await asyncio.Event().wait()
+
+        async def close(self):
+            print("closing", flush=True)
+            if mode == "hang":
+                await asyncio.Event().wait()  # a close that never returns
+            print("closed", flush=True)
+
+
+    net.iroh_server.IrohServer = _FakeIroh
+    app.build_tui_server = lambda *a, **k: _Core()
+    app._bootstrap_keystore = lambda *a, **k: None
+    app._announce_iroh_ticket = lambda *a, **k: None
+    app._uses_demo_llm = lambda services: False
+    ns = argparse.Namespace(keys=keys, host="127.0.0.1", port=0)
+    sys.exit(app._run_serve(None, get_i18n("en"), ns))
+    """
+)
+
+
+def _spawn_serve_child(tmp_path: Path, mode: str, sigint_disposition: str):
+    script = tmp_path / "serve_child.py"
+    script.write_text(_SERVE_CHILD)
+    repo_root = Path(__file__).resolve().parents[2]
+    proc = subprocess.Popen(
+        [sys.executable, str(script), mode, sigint_disposition, str(tmp_path / "keys.toml")],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    watchdog = threading.Timer(20, proc.kill)  # never hang the suite on a regression
+    watchdog.daemon = True
+    watchdog.start()
+    return proc, watchdog
+
+
+def _read_until(proc, marker: str) -> list[str]:
+    lines: list[str] = []
+    for line in proc.stdout:
+        lines.append(line.strip())
+        if line.strip() == marker:
+            return lines
+    raise AssertionError(f"child exited before printing {marker!r}: {lines}\n{proc.stderr.read()}")
+
+
+@pytest.mark.parametrize("sigint_disposition", ["default", "ignored"])
+def test_serve_sigint_closes_cleanly_even_when_inherited_ignored(tmp_path, sigint_disposition) -> None:
+    """ONE SIGINT runs the whole clean shutdown (close, then store, exit 0). `ignored` is the
+    shell-`&` case: the process starts with SIGINT=SIG_IGN, where asyncio.run installs no handler
+    of its own, so only `_serve_iroh`'s explicit one makes the signal do anything."""
+    if os.name != "posix":
+        pytest.skip("POSIX signals")
+    proc, watchdog = _spawn_serve_child(tmp_path, "clean", sigint_disposition)
+    try:
+        _read_until(proc, "serving")
+        proc.send_signal(signal.SIGINT)
+        rest = [line.strip() for line in proc.stdout]
+        assert proc.wait(timeout=30) == 0
+    finally:
+        watchdog.cancel()
+        proc.kill()
+        proc.wait()
+    assert rest == ["closing", "closed", "store-closed"]
+
+
+def test_serve_second_sigint_during_a_hung_close_forces_exit(tmp_path) -> None:
+    """The escape hatch: a close() that never returns is abandoned by a SECOND SIGINT, which
+    raises KeyboardInterrupt into `_run_serve` — the store is still closed and the exit is 0."""
+    if os.name != "posix":
+        pytest.skip("POSIX signals")
+    proc, watchdog = _spawn_serve_child(tmp_path, "hang", "default")
+    try:
+        _read_until(proc, "serving")
+        proc.send_signal(signal.SIGINT)
+        _read_until(proc, "closing")  # handlers are already handed back by the time close() runs
+        proc.send_signal(signal.SIGINT)
+        rest = [line.strip() for line in proc.stdout]
+        assert proc.wait(timeout=30) == 0
+    finally:
+        watchdog.cancel()
+        proc.kill()
+        proc.wait()
+    assert rest == ["store-closed"]  # never "closed": the hung close was abandoned
 
 
 # --- lifecycle: close drain + join-handshake fatals (deterministic fakes) ----

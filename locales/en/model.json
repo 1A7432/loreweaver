@@ -7,7 +7,7 @@
   "commands.model.base_default": "(provider default)",
   "commands.model.key_none": "(not set)",
   "commands.model.list": "Providers — OpenAI-compatible: {compatible}; native: {native}; subscription: {subscription}. Any OpenAI-compatible endpoint works by pointing base_url at it. Subscription providers need `.model login` first.",
-  "commands.model.denied": "Only a group admin or Keeper can change the LLM configuration.",
+  "commands.model.denied": "Only a room admin can change the LLM configuration.",
   "commands.model.set_usage": "Usage: .model set <provider> [chat_model]",
   "commands.model.unknown_provider": "Unknown provider: {provider}. Use .model list to see the options.",
   "commands.model.set_done": "LLM switched to provider {provider}, chat model {chat_model}.",

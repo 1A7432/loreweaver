@@ -25,6 +25,26 @@ are also written next to the keystore as `keeper-key.txt` / `iroh-ticket.txt`. S
 the keeper key; connect with them, then mint more keys / create rooms right in the client's *Rooms
 & invites* screen — no server access needed. State (SQLite + keys) lives next to `--keys`.
 
+### A ticket that survives restarts
+
+The ticket is stable across restarts, and **directly** reachable, not just through the relay. Two
+small files next to the keystore make it so:
+
+- `iroh-secret.key` fixes the server's identity (the first half of the ticket).
+- `iroh-port.txt` remembers the UDP port the server bound (the direct addresses inside the
+  ticket). The first start picks a port and saves it; every later start binds the same one. A
+  client holding an old ticket (Loreweaver Studio remembers the last table) dials those addresses
+  first, so it reconnects in a moment instead of waiting on the relay, which can take tens of
+  seconds from far away.
+
+Keep both files (a backup of the `--keys` directory covers them); deleting either one gives the
+server a new ticket. To choose the port yourself, for example to open exactly that port in a cloud
+firewall or security group, set `TRPG_TUI__IROH_PORT=<port>` (it wins over the saved one and is
+saved in turn). If the port cannot be bound at startup (another process holds it), the server
+logs a warning, picks a random port instead, and the ticket changes this once: re-share the new
+one. Only the IPv4 socket is pinned; IPv6 addresses in a ticket still change per start, which is
+harmless because the IPv4 and relay paths carry the connection.
+
 > Behind a SOCKS proxy for a non-China LLM? `uv pip install socksio`. A China-direct provider
 > (e.g. DeepSeek) needs no proxy — run with a clean env.
 
@@ -112,6 +132,7 @@ All settings use the `TRPG_` env prefix with `__` for nesting (see
 | `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest release |
 | `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
 | `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
+| `TRPG_TUI__IROH_PORT` | UDP port the Iroh endpoint binds (IPv4); pin it for a firewall rule. `0` = remembered in `iroh-port.txt` next to the keys, picked on first start. See [A ticket that survives restarts](#a-ticket-that-survives-restarts) | `0` |
 | `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
 | `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
 

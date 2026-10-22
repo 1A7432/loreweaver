@@ -18,3 +18,22 @@
 - **Rule home:** `clients/protocol/src/client.ts` (validator table),
   `agent/loop.py::_run_max_rounds_finalizer`, `infra/llm.py::OpenAILLM.chat`.
 - **Date:** 2026-08-17.
+
+## Follow-up: one slice in flight at a time (2026-10-21)
+
+- **Problem:** the 2026-10-21 Studio playtest showed three half-sentence KP
+  bubbles, each with a live cursor, stacked above a finished reply. The gate
+  scheduled every slice as its own free task. The Keeper had written a scene in
+  a round that also made a bookkeeping call, so that round's draft was still
+  open when the final round began to stream; the first slice of the final round
+  closed it with an await, and the slices behind it, already running, saw the
+  old round too — each closed the same draft again and opened a draft of its
+  own. A slice of a tool round could likewise land behind the public tool event
+  (dice, an NPC line) that had just closed its draft.
+- **Decision:** the gate's tasks form a chain — a slice is published only after
+  the previous one — and a tool round drains its slices before any tool runs.
+  The draft bookkeeping in `gateway.turn` is unchanged; it was correct for
+  slices that arrive one at a time.
+- **Rule home:** `agent/loop.py::_ReplyStreamGate`, the tool-round branch of
+  `agent/loop.py::_run_kp_turn_body`; pinned by
+  `tests/gateway/test_turn_stream_drafts.py` and `tests/agent/test_loop_streaming.py`.

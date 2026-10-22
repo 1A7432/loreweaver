@@ -53,6 +53,7 @@ from core.character_rules import render_validation_notice, validate_sheet
 from core.check_outcome import CheckOutcome, outcome_wire
 from core.check_roll import favor_modifiers, graded_roll
 from core.dice_engine import DiceResult
+from core.pregen_roster import pregen_release_deleted
 from core.rulepacks import RulePack, load_rulepack
 from core.sheets import check_value, has_check_value, set_sheet_value, sheet_value
 from infra.i18n import I18n
@@ -475,6 +476,10 @@ class CharacterTools:
 
             success = await characters.delete_character(ctx.uid(), ctx.chat_key, name)
             if success:
+                # A claimed pregen's roster entry must not outlive its copy. The owner
+                # gate above makes this user the sheet's owner, and so its claimant; the
+                # turn publishes room state when it ends, so the roster refresh is covered.
+                await pregen_release_deleted(self.services.documents, ctx.chat_key, name, ctx.uid())
                 return i18n.t("kp_tools.character.delete.success", name=name)
             return i18n.t("kp_tools.character.delete.failed_generic", name=name)
         except Exception as exc:

@@ -157,6 +157,22 @@ def test_transcript_uses_the_markdown_reports_cut(monkeypatch):
     assert i18n.t("battle.report.html.transcript.truncated", omitted=omitted, kept=len(kept)) in page
 
 
+def test_a_tagged_player_line_is_labelled_with_the_speaker_and_loses_the_tag():
+    transcript = [
+        {"role": "user", "content": "[平知章 (Dirac)]\nI listen at the door.", "_lw_turn": 1},
+        {"role": "assistant", "content": "[not a speaker]\nFootsteps.", "_lw_turn": 1},
+        {"role": "user", "content": "[<b>Eve</b>]\nI knock.", "_lw_turn": 2},
+        {"role": "user", "content": "I wait.", "_lw_turn": 3},
+    ]
+    page = _render(transcript=transcript)
+    assert '<span class="speaker">平知章 (Dirac)</span><div class="text"><p>I listen at the door.</p>' in page
+    assert "[平知章 (Dirac)]" not in page
+    assert '<span class="speaker">&lt;b&gt;Eve&lt;/b&gt;</span>' in page  # a name is untrusted text too
+    assert "<b>Eve</b>" not in page
+    assert '<span class="speaker">Player</span><div class="text"><p>I wait.</p>' in page  # untagged: generic label
+    assert "[not a speaker]" in page  # only player lines are un-tagged
+
+
 def test_world_card_reveal_without_a_pool_omits_only_that_part():
     page = _render(reveal=RevealSections(module=None, npc_secrets=[]))
     i18n = I18n(locale="en")
