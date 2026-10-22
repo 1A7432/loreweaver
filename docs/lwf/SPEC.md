@@ -167,7 +167,7 @@ reference refuses `manifest_version: 1` packs.
 | Rule systems | [formats/rulepacks.md](formats/rulepacks.md) | 2.0 stable |
 | Skills, hooks, templates | [formats/skills-hooks.md](formats/skills-hooks.md) | 2.0 stable |
 | Module UI panels | [formats/panels.md](formats/panels.md) | 1.0 stable |
-| Wire protocol | engine `docs/protocol.md` + npm `loreweaver-protocol` | 2.4 stable |
+| Wire protocol | engine `docs/protocol.md` + npm `loreweaver-protocol` | 2.5 stable |
 
 Lorebooks: LWF accepts the SillyTavern lorebook shapes (`character_book`, or
 `{entries: [...]}`) as they are. Their import trust rules (cards.md §6) apply identically

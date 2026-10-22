@@ -1,7 +1,7 @@
 # LWF: module UI panels
 
 **Version 1.0 · stable (additive-only).** Requires wire protocol **2.1** or later; the
-current protocol is 2.4. Reference implementation: `core/panels.py` (schema and
+current protocol is 2.5. Reference implementation: `core/panels.py` (schema and
 template instantiation), `core/hooks.py` (the `ui` block vocabulary), `core/pack.py`
 (pack-level panel rules) and `gateway/panels.py` (per-viewer manifests) in the
 Loreweaver engine. The reference text-first client is `clients/tui`. The wire frames are
@@ -183,6 +183,15 @@ prefixed `mvu.`.
    then `en`, then any non-empty value.
 6. **Coordinates.** A `map_pin`'s `x` and `y` are fractions of the map image's own box,
    clamped to [0, 1].
+7. **Labels, not ids, are displayed** (protocol 2.5). Where a binding — `$var`, or a
+   repeat's `$leaf: value` — yields a variable's value for **display** (any localized text
+   field, and a `stat`'s `value`), and that variable's state entry carries a non-empty
+   `value_label`, the displayed text is the label. Everything else reads the raw `value`:
+   `visible_when`, a badge `tone`, and every numeric field (`meter` bounds and value,
+   `map_pin` coordinates). `$leaf: label` is still the variable's own name. A variable
+   without `value_label` (a pack without `option_labels`, a 2.4 server) renders exactly as
+   before. Authors therefore write conditions against option ids
+   (`column_state == 'marching'`), never against the label text.
 
 ### 5.2 The portable condition subset
 

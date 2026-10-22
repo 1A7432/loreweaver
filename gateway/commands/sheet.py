@@ -467,13 +467,17 @@ class SheetCommands:
         if sub in {"claim", "认领", "認領"}:
             if not rest:
                 return ctx.fail(ctx.i18n.t("pregen.commands.claim_usage"))
-            status, sheet = await pregen_claim(documents, chat_key, rest, ctx.user_id, ctx.services.characters)
+            # The claimer's display name: the reply is broadcast (in a shared room "you now
+            # play X" names nobody), and protocol 2.5 stores it with the claim so every
+            # client's roster can say who holds the cast member.
+            extra = getattr(ctx.raw_ctx, "extra", None)
+            player = str(extra.get("member_name") or "").strip() if isinstance(extra, dict) else ""
+            status, sheet = await pregen_claim(
+                documents, chat_key, rest, ctx.user_id, ctx.services.characters, player_name=player
+            )
             if status in {"ok", "yours"} and sheet is not None:
                 if ctx.router.hub is not None:
                     await publish_state(ctx.router.hub, ctx.services, ctx.raw_ctx)
-                # The reply is broadcast: in a shared room "you now play X" names nobody.
-                extra = getattr(ctx.raw_ctx, "extra", None)
-                player = str(extra.get("member_name") or "").strip() if isinstance(extra, dict) else ""
                 key = "pregen.commands.claimed" if status == "ok" else "pregen.commands.reclaimed"
                 if player:
                     return ctx.i18n.t(f"{key}_by", name=sheet.name, system=sheet.system, player=player)

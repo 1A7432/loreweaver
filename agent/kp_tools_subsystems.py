@@ -250,6 +250,7 @@ async def _run_script_flow(services: Services, ctx: AgentCtx, i18n: I18n, spec: 
         {
             "kind": "subsystem",
             "subsystem": spec.id,
+            "subsystem_label": spec.label(ctx.locale),
             "expr": label,
             "rolls": [entry["total"] for entry in rolls.values()],
             "total": sum(entry["total"] for entry in rolls.values()),
@@ -332,6 +333,7 @@ async def _run_check_with_loss(
         {
             "kind": "subsystem",
             "subsystem": spec.id,
+            "subsystem_label": spec.label(ctx.locale),
             # What the table reads: the localized stat ("理智"/"Sanity"), as a typed check
             # shows "侦查" — never the storage key ("SAN").
             "expr": _stat_display(pack, spec.stat, ctx.locale),
@@ -558,6 +560,7 @@ async def _run_resource_spend(
             {
                 "kind": "subsystem",
                 "subsystem": spec.id,
+                "subsystem_label": spec.label(ctx.locale),
                 "expr": _stat_display(pack, spec.stat, ctx.locale),
                 "rolls": [adjustment.after_roll],
                 "total": adjustment.after_roll,

@@ -469,7 +469,9 @@ Reference: `core/rulepacks.py::_parse_commands_section`, `pack_declaring_command
 
 - **`display`**: `{locale: {canonical: display name}}`, looked up by the locale's primary
   subtag. It never affects resolution, and an unmapped name falls back to its canonical
-  name.
+  name. Since protocol 2.5 it also names things on the wire: each character attribute key
+  is labelled with the `display` name of its canonical name (`attribute_labels`), and a
+  subsystem's own `display` (§10) is sent as the dice frame's `subsystem_label`.
 - **`initiative`**: a mapping with a required `roll`, a dice expression whose
   `{name}` slots are replaced by the sheet's canonical values before rolling.
 - **`expertise`**: `{locale: text}`, text a runtime MAY give its game-master agent about

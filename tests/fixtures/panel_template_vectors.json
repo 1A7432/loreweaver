@@ -380,6 +380,54 @@
       "variables": [],
       "locale": "en",
       "expect": [{"kind": "text", "text": "门"}]
+    },
+    {
+      "id": "value-label-is-the-displayed-text",
+      "why": "protocol 2.5, panels.md §5.1 rule 7: a bound enum whose state entry carries `value_label` SHOWS the label — in a stat value and in a text field alike — while the raw option id stays what the variable holds",
+      "blocks": [{"kind": "stat", "label": {"en": "Column", "zh": "纵队"}, "value": {"$var": "column_state"}}, {"kind": "text", "text": {"$var": "column_state"}}],
+      "variables": [{"id": "column_state", "label": "纵队", "kind": "enum", "value": "marching", "value_label": "在道上"}],
+      "locale": "zh",
+      "expect": [{"kind": "stat", "label": "纵队", "value": "在道上"}, {"kind": "text", "text": "在道上"}]
+    },
+    {
+      "id": "visible-when-compares-the-raw-value-not-the-label",
+      "why": "the label is display only: a gate written against the option id still decides on the id, and a gate written against the label text never matches",
+      "blocks": [{"kind": "badge", "label": {"en": "On the road"}, "visible_when": "column_state == 'marching'"}, {"kind": "badge", "label": {"en": "Never"}, "visible_when": "column_state == '在道上'"}],
+      "variables": [{"id": "column_state", "label": "纵队", "kind": "enum", "value": "marching", "value_label": "在道上"}],
+      "locale": "zh",
+      "expect": [{"kind": "badge", "label": "On the road"}]
+    },
+    {
+      "id": "repeat-leaf-value-shows-the-label",
+      "why": "a repeat's `$leaf: value` is a display binding too; `$leaf: label` is still the variable's own name",
+      "blocks": [{"repeat": {"prefix": "gate.", "block": {"kind": "stat", "label": {"$leaf": "label"}, "value": {"$leaf": "value"}}}}],
+      "variables": [{"id": "gate.north", "label": "North gate", "kind": "enum", "value": "open", "value_label": "Open wide"}, {"id": "gate.south", "label": "South gate", "kind": "enum", "value": "shut"}],
+      "locale": "en",
+      "expect": [{"kind": "stat", "label": "North gate", "value": "Open wide"}, {"kind": "stat", "label": "South gate", "value": "shut"}]
+    },
+    {
+      "id": "badge-tone-reads-the-raw-value",
+      "why": "a tone is a token, not text: it binds to the option id, so a label never turns a valid tone into an invalid one",
+      "blocks": [{"kind": "badge", "label": {"$var": "alarm"}, "tone": {"$var": "alarm"}}],
+      "variables": [{"id": "alarm", "label": "Alarm", "kind": "enum", "value": "warn", "value_label": "Raised"}],
+      "locale": "en",
+      "expect": [{"kind": "badge", "label": "Raised", "tone": "warn"}]
+    },
+    {
+      "id": "numbers-ignore-value-label",
+      "why": "anything numeric always reads the raw value: a meter's bound value is the number even beside a label",
+      "blocks": [{"kind": "meter", "label": {"en": "Gauge"}, "value": {"$var": "gauge"}, "min": 0, "max": 10}],
+      "variables": [{"id": "gauge", "label": "Gauge", "kind": "number", "value": 4, "value_label": "four"}],
+      "locale": "en",
+      "expect": [{"kind": "meter", "label": "Gauge", "value": 4, "min": 0, "max": 10}]
+    },
+    {
+      "id": "empty-value-label-falls-back-to-the-value",
+      "why": "an empty label names nothing: the displayed text is the raw value, exactly as for a pack without option labels",
+      "blocks": [{"kind": "stat", "label": "Window", "value": {"$var": "window_state"}}],
+      "variables": [{"id": "window_state", "label": "Window", "kind": "enum", "value": "waiting", "value_label": ""}],
+      "locale": "en",
+      "expect": [{"kind": "stat", "label": "Window", "value": "waiting"}]
     }
   ]
 }

@@ -635,12 +635,29 @@ def _block_visible(block: Mapping[str, Any], variables: Sequence[Mapping[str, An
     return evaluate_safe(block["visible_when"], lambda path: _variable_value(variables, path), default=False)
 
 
-def _resolve_scalar(value: Any, variables: Sequence[Mapping[str, Any]], leaf: Mapping[str, Any] | None) -> Any:
+def _shown_value(entry: Mapping[str, Any], display: bool) -> Any:
+    """A variable's value as a binding yields it. For DISPLAY (protocol 2.5, panels.md
+    §5.1 rule 7) an entry carrying a non-empty string ``value_label`` shows that label;
+    everywhere else — numbers, tones, ``visible_when`` — it is the raw ``value``."""
+    label = entry.get("value_label")
+    if display and isinstance(label, str) and label:
+        return label
+    return entry.get("value")
+
+
+def _resolve_scalar(
+    value: Any,
+    variables: Sequence[Mapping[str, Any]],
+    leaf: Mapping[str, Any] | None,
+    *,
+    display: bool = False,
+) -> Any:
     """One template scalar with its bindings applied, or :data:`_MISSING` when a binding
     names something this viewer does not have — the fail-closed rule that hides the block.
 
     A mapping merely CONTAINING ``$var`` is a binding (the client tests `"$var" in value`,
     not "is exactly this key"), and ``$var`` wins over ``$leaf`` when both are present.
+    ``display`` marks a field whose result is SHOWN as text (see `_shown_value`).
     """
     if isinstance(value, Mapping) and "$var" in value:
         name = value["$var"]
@@ -648,7 +665,7 @@ def _resolve_scalar(value: Any, variables: Sequence[Mapping[str, Any]], leaf: Ma
             return _MISSING
         for entry in variables:
             if entry.get("id") == name:
-                return entry.get("value")
+                return _shown_value(entry, display)
         return _MISSING
     if isinstance(value, Mapping) and "$leaf" in value:
         # `$leaf` reads the repeat instance's matched variable — its id, label or value,
@@ -657,6 +674,8 @@ def _resolve_scalar(value: Any, variables: Sequence[Mapping[str, Any]], leaf: Ma
         field = value["$leaf"]
         if leaf is None or field not in _LEAF_FIELDS:
             return _MISSING
+        if field == "value":
+            return _shown_value(leaf, display)
         return leaf.get(field)
     return value
 
@@ -664,7 +683,7 @@ def _resolve_scalar(value: Any, variables: Sequence[Mapping[str, Any]], leaf: Ma
 def _resolve_text(
     value: Any, variables: Sequence[Mapping[str, Any]], locale: str | None, leaf: Mapping[str, Any] | None
 ) -> str | None:
-    resolved = _resolve_scalar(value, variables, leaf)
+    resolved = _resolve_scalar(value, variables, leaf, display=True)
     if resolved is _MISSING:
         return None
     if isinstance(resolved, (bool, int, float)):
@@ -720,7 +739,7 @@ def _resolve_one(
 
     if kind == "stat":
         label = _resolve_text(block.get("label"), variables, locale, leaf)
-        resolved = _resolve_scalar(block.get("value"), variables, leaf)
+        resolved = _resolve_scalar(block.get("value"), variables, leaf, display=True)
         if label is None or resolved is _MISSING:
             return None
         if isinstance(resolved, (bool, int, float)):  # numbers and bools ride as themselves
