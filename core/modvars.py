@@ -223,7 +223,8 @@ def build_spec(
 def _clean_option_labels(options: list[str], raw: Any) -> dict[str, dict[str, str]]:
     """``{locale: {option: text}}`` reduced to what can be shown: locale keys normalized to
     their primary subtag (as ``labels``), option keys mapped onto the canonical option
-    (case-insensitive) and dropped when they name none, texts trimmed and capped at
+    (case-insensitive, after the same strip + `MAX_OPTION_LEN` cap the options got) and dropped
+    when they name none, texts trimmed and capped at
     `MAX_LABEL_LEN`, empties dropped. Total: anything malformed simply contributes nothing."""
     if not isinstance(raw, dict):
         return {}
@@ -234,7 +235,10 @@ def _clean_option_labels(options: list[str], raw: Any) -> dict[str, dict[str, st
             continue
         language = locale.strip().split("-")[0].lower()
         for option, text in names.items():
-            target = canonical.get(option.strip().lower()) if isinstance(option, str) else None
+            # Normalize the key EXACTLY like `build_spec` normalizes an option (strip, then cap
+            # at MAX_OPTION_LEN), so an over-long option's label still finds its stored,
+            # truncated option instead of being dropped as "unknown".
+            target = canonical.get(option.strip()[:MAX_OPTION_LEN].lower()) if isinstance(option, str) else None
             if target is None or not isinstance(text, str) or not text.strip():
                 continue
             out.setdefault(language, {})[target] = text.strip()[:MAX_LABEL_LEN]
