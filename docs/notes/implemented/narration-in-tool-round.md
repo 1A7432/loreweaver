@@ -34,3 +34,19 @@
   `locales/*/prompt.json` `prompt.system.guidelines`;
   `tests/architecture/test_turn_check_budget.py` (why the caps may sum past the ceiling).
 - **Date:** 2026-10-21.
+
+## Follow-up: the narration after a check's tool round is not a new ask (2026-10-22)
+
+- **Problem:** Cursor Bugbot on #47. The runner looped `range(check.max_rounds)`, so a
+  row whose last allowed round was answered with tool calls ended on that tool round and
+  kept the reply it had fired on. `narration_lost` has one round: a model that restored
+  the scene beside a bookkeeping call had it dropped a second time (`dice_contradicts`,
+  also one round, kept its wrong numbers the same way).
+- **Decision:** a row's cap counts its asks; a tool round is always followed by the
+  narration round that reads it, even past the cap. `MAX_ROUNDS_PER_TURN` (5) stays the
+  hard stop, so the per-turn budget does not move. One consequence for the paragraph
+  above: when rows answer with tools, the ceiling can be reached sooner and the cut can
+  land on an earlier row than `stale_scene_hud`.
+- **Rule home:** `agent/loop.py::_run_turn_checks` (docstring);
+  `tests/architecture/test_turn_check_budget.py`; pinned by
+  `tests/agent/test_turn_checks.py` (the one-round row and the turn-ceiling tests).
