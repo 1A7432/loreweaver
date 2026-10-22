@@ -16,6 +16,7 @@ import pytest
 from core.lorecard import LORECARD_FORMAT, parse_lorecard_bytes
 from core.modvars import (
     MAX_LABEL_LEN,
+    MAX_OPTION_LEN,
     apply_define,
     apply_set,
     build_spec,
@@ -199,3 +200,16 @@ def test_lorecard_option_labels_are_tolerant_dropped_with_a_warning(variable, fr
     assert "option_labels" not in card.variable_specs[0]
     assert len(card.warnings) == 1 and fragment in card.warnings[0]
     assert card.warnings[0].startswith("variables[0].option_labels")
+
+
+def test_label_key_of_an_overlong_option_matches_the_stored_truncated_option():
+    long_option = "Marching-" + "x" * 80
+    stored = long_option[:MAX_OPTION_LEN]
+    spec = build_spec(
+        "column",
+        "enum",
+        options=[f"  {long_option}  ", "calm"],
+        option_labels={"en": {long_option: "On the road", "  CALM ": "Calm"}},
+    )
+    assert spec["options"][0] == stored
+    assert spec["option_labels"] == {"en": {stored: "On the road", "calm": "Calm"}}

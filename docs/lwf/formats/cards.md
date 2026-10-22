@@ -95,7 +95,8 @@ a warning.
   locale-first like `labels` and like a rulepack's `display`:
   `{locale: {option: text}}`, each text at most 50 characters, e.g.
   `{"zh": {"marching": "在道上"}, "en": {"marching": "On the road"}}`. Option keys match
-  `options` case-insensitively. The variable's value stays the option id — conditions,
+  `options` case-insensitively, normalized like the options themselves (trimmed and cut to
+  50 characters), so the label of an over-long option still finds the option as stored. The variable's value stays the option id — conditions,
   hooks and `.var set` keep using ids; players see the name for the current option
   (`value_label` on the wire, picked like `labels`: the server's language, then `en`, then
   any). The field is **tolerant**, like `labels`: a key that names no option, a text that
