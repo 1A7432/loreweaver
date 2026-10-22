@@ -31,7 +31,8 @@ export function isBounded(variable: ModuleVariable): boolean {
 /** One sidebar line of text per variable, exported so tests can pin the formatting
  * without a renderer. Bounded numbers reuse CharacterPanel's exact `bar` glyphs
  * (rescaled to the min..max span); bool gets a check/cross + localized yes/no;
- * everything else is a `label: value` one-liner. Label and value are untrusted
+ * everything else is a `label: value` one-liner (an enum shows its `value_label` when
+ * the server sent one). Label and value are untrusted
  * server text — control characters are stripped like every other panel does. */
 export function variableLine(variable: ModuleVariable, locale?: string): string {
   const label = `${variable.hidden ? HIDDEN_GLYPH : ""}${stripControlChars(variable.label)}`
@@ -46,7 +47,18 @@ export function variableLine(variable: ModuleVariable, locale?: string): string 
     const value = Number(variable.value)
     return `${label} ${bar(value - min, max - min, VARIABLE_BAR_WIDTH)} ${value}/${max}`
   }
-  return `${label}: ${stripControlChars(String(variable.value))}`
+  return `${label}: ${stripControlChars(variableValueText(variable))}`
+}
+
+/** The text a non-bar, non-bool variable shows for its value: an enum's server-named
+ * option (protocol 2.5 `value_label`) when present, else the raw value — what an older
+ * server, or a pack that names nothing, always showed. Only the DISPLAY changes; the
+ * raw `value` is still what conditions and commands use. */
+export function variableValueText(variable: ModuleVariable): string {
+  if (variable.kind === "enum" && typeof variable.value_label === "string" && variable.value_label) {
+    return variable.value_label
+  }
+  return String(variable.value)
 }
 
 /** The module-variables ("trackers") sidebar panel: one truncating line per

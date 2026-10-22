@@ -2,6 +2,8 @@ import { stripControlChars, type CharacterState } from "loreweaver-protocol"
 
 export interface AttributeLine {
   key: string
+  /** What the line shows for the key: `attribute_labels[key]` (protocol 2.5), else the key. */
+  label: string
   value: unknown
   line: string
 }
@@ -19,12 +21,31 @@ export function trueRuleAttributes(character?: CharacterState): Array<[string, u
   return Object.entries(character.attributes)
 }
 
+/** The name a line shows for `key`: the server's display label when it sent one
+ * (protocol 2.5 `attribute_labels`, e.g. APP → 外貌), else the key itself — exactly
+ * what an older server's frames always showed. Untrusted server text: control
+ * characters are stripped. */
+export function attributeLabel(character: CharacterState | undefined, key: string): string {
+  const label = character?.attribute_labels?.[key]
+  const cleaned = typeof label === "string" ? stripControlChars(label).trim() : ""
+  return cleaned || stripControlChars(key)
+}
+
+/** `text` padded with spaces to `width` terminal CELLS. A CJK character is two cells
+ * wide, so `String.padEnd` (which counts UTF-16 units) would misalign 外貌 against STR. */
+function padCells(text: string, width: number): string {
+  return text + " ".repeat(Math.max(0, width - Bun.stringWidth(text)))
+}
+
 export function attributeLines(character?: CharacterState): AttributeLine[] {
-  const entries = trueRuleAttributes(character)
-  const width = Math.max(3, ...entries.map(([key]) => key.length))
-  return entries.map(([key, value]) => ({
+  const entries = trueRuleAttributes(character).map(
+    ([key, value]) => [key, attributeLabel(character, key), value] as const,
+  )
+  const width = Math.max(3, ...entries.map(([, label]) => Bun.stringWidth(label)))
+  return entries.map(([key, label, value]) => ({
     key,
+    label,
     value,
-    line: stripControlChars(`${key.padEnd(width)} ${String(value)}`),
+    line: `${padCells(label, width)} ${stripControlChars(String(value))}`,
   }))
 }
