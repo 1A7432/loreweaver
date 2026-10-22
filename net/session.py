@@ -537,7 +537,8 @@ class SessionCore:
             elif not legacy_blob:
                 await _deliver_anchored("")
             for entry in window:
-                text = str(entry.get("content") or "").strip()
+                stored = str(entry.get("content") or "")
+                text = stored.strip()
                 role = entry.get("role")
                 # Replay is STORY continuity, not an ops log: dot-command echoes and
                 # their system responses (setup acks, ".panels enable" …) read as
@@ -553,8 +554,11 @@ class SessionCore:
                 # a rejoining member sees the same bubble — not the tag inside it. The
                 # command-echo filter still reads the STORED line, as it always has: a
                 # tagged line was never filtered, and a tagged "..." line (a player
-                # trailing off) must not start being dropped now.
-                speaker, body = split_player_line(text) if role == "user" else ("", text)
+                # trailing off) must not start being dropped now. The tag is split off the
+                # RAW stored line: stripping first would eat the newline the tag needs, so a
+                # blank body (`[name]\n   `) would replay as a nameless "[name]" bubble. The
+                # body is stripped after, and an empty one renders nothing.
+                speaker, body = split_player_line(stored) if role == "user" else ("", text)
                 body = body.strip()
                 if body and role == "user" and not text.startswith((".", "/")):
                     await self._deliver_replay(

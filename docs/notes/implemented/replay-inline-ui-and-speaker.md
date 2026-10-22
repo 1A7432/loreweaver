@@ -19,7 +19,10 @@
   laned frame (a pack disabled since would leave a broken picture); the lane holds
   hashes only, and room media outlives the lane in every reset scope. A replayed player
   line is split with `agent.player_line.split_player_line` and sent in the live echo's
-  shape (`name` + plain body).
+  shape (`name` + plain body). The split reads the RAW stored line and only the body is
+  stripped (2026-10-22, Cursor Bugbot): stripping first ate the newline the tag needs, so a
+  whitespace-only line the session had accepted (`[Rook]\n   `) replayed as a nameless
+  "[Rook]" bubble. A tagged line with an empty body replays as nothing.
 - **Undo:** no leak. `agent.undo.restore` cancels and drains the pass before swapping the
   lane for the snapshot's copy, and a record anchored on an abandoned branch is never on
   the path a replay walks. The residual is a LOSS: hook frames and Director staging land

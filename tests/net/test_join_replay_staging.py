@@ -328,6 +328,33 @@ async def test_a_replayed_player_line_has_the_live_echo_s_shape(tmp_path):
     assert replayed["name"] == "平知章 (Dirac)" and replayed["text"] == "我拔营。"
 
 
+@pytest.mark.parametrize("blank", ["   ", "\n", " \n\t "])
+async def test_a_tagged_player_line_with_a_blank_body_replays_as_nothing(tmp_path, blank):
+    """Cursor Bugbot on #45. The session takes a whitespace-only line and the turn stores
+    it tagged, `[Rook]\n   `. Stripping the STORED line before splitting it collapsed that
+    to `[Rook]`, the tag no longer matched (it needs its newline), and the replay showed
+    a nameless bubble reading "[Rook]". The tag is split off the raw line; the body is
+    what gets stripped, and an empty body renders nothing — as the live echo of a blank
+    line carries nothing to read."""
+    room = "blank-room"
+    services = build_services(
+        Settings(_env_file=None, data_dir=str(tmp_path / "data"), locale="en"),
+        llm=FakeLLM(script=[assistant_text("The camp is quiet.")]),
+        embeddings=FakeEmbeddings(8),
+    )
+    keystore = Keystore()
+    key = keystore.add(room=room, name="Ann")
+
+    await _turn(services, room, blank, actor_name="Rook")
+
+    replayed = await _replayed(services, room, key, keystore)
+    assert [frame for frame in replayed if frame.get("speaker") == "player"] == []
+    assert all("[Rook]" not in str(frame.get("text") or "") for frame in replayed)
+    assert any(frame.get("speaker") == "kp" and frame.get("text") == "The camp is quiet." for frame in replayed), (
+        "positive control: the turn ran and its reply still replays"
+    )
+
+
 async def test_a_replayed_picture_the_room_can_no_longer_fetch_is_dropped_from_its_frame(tmp_path):
     """The lane keeps a frame's blocks as they were published, but a pack asset stops
     being fetchable once the pack is disabled in the room. Replay re-runs the same
