@@ -2,25 +2,12 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ClientFrame, type ServerFrame } from "loreweaver-protocol"
-import { Keyring, MAX_KEY_NAME_CHARS, keyIdFromSecret, keyNameFromDisplay, memberName, type ControlLink } from "./keyring"
+import { FrameType, type ServerFrame } from "loreweaver-protocol"
+import { Keyring, MAX_KEY_NAME_CHARS, keyIdFromSecret, keyNameFromDisplay, memberName } from "./keyring"
+import { FakeControl, ManualClock, waitForEntry } from "./keyring.testkit"
 
-class FakeControl implements ControlLink {
-  sent: ClientFrame[] = []
-  private readonly handlers = new Set<(frame: ServerFrame) => void>()
-  send(frame: ClientFrame): void {
-    this.sent.push(frame)
-  }
-  onMessage(cb: (frame: ServerFrame) => void): () => void {
-    this.handlers.add(cb)
-    return () => {
-      this.handlers.delete(cb)
-    }
-  }
-  push(frame: ServerFrame): void {
-    for (const handler of this.handlers) handler(frame)
-  }
-}
+// Every ring runs on a ManualClock: no request timeout fires unless the test fires it, and
+// every reply is pushed only once the keyring has SENT the frame it answers.
 
 function minted(name: string, key: string, role: "player" | "keeper", keys: Array<{ id: string; name: string; role: "player" | "keeper" }> = []): ServerFrame {
   return {
@@ -30,15 +17,15 @@ function minted(name: string, key: string, role: "player" | "keeper", keys: Arra
   } as ServerFrame
 }
 
-async function ring(control: FakeControl, extra: { admins?: string[]; mintTimeoutMs?: number } = {}) {
+async function ring(control: FakeControl, extra: { admins?: () => string[]; clock?: ManualClock } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "lw-keyring-names-"))
   return Keyring.load({
     path: join(dir, "g.keyring.json"),
     groupId: "99",
     control,
-    admins: () => extra.admins ?? [],
+    admins: extra.admins ?? (() => []),
     keeperKey: "KEEP-SECRET",
-    mintTimeoutMs: extra.mintTimeoutMs,
+    ...(extra.clock ?? new ManualClock()).options,
   })
 }
 
@@ -47,16 +34,14 @@ describe("Keyring — keys are named after the group card", () => {
     const control = new FakeControl()
     const keyring = await ring(control)
     const pending = keyring.ensure("111", "阿绫")
-    await Promise.resolve()
-    expect(control.sent[0]).toEqual({ type: FrameType.AdminMintKey, name: "阿绫", role: "player", purpose: "join" })
+    expect(await control.waitForSent(1)).toEqual({ type: FrameType.AdminMintKey, name: "阿绫", role: "player", purpose: "join" })
     control.push(minted("阿绫", "key-aaaa", "player"))
     const entry = await pending
     expect(entry.name).toBe("阿绫")
     expect(entry.key_id).toBe(keyIdFromSecret("key-aaaa"))
 
     const nameless = keyring.ensure("222")
-    await Promise.resolve()
-    expect(control.sent[1]).toMatchObject({ type: FrameType.AdminMintKey, name: memberName("222") })
+    expect(await control.waitForSent(2)).toMatchObject({ type: FrameType.AdminMintKey, name: memberName("222") })
     control.push(minted(memberName("222"), "key-bbbb", "player"))
     expect((await nameless).name).toBe(memberName("222"))
     keyring.close()
@@ -66,14 +51,14 @@ describe("Keyring — keys are named after the group card", () => {
     const control = new FakeControl()
     const keyring = await ring(control)
     const first = keyring.ensure("111", "阿绫")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(minted("阿绫", "key-aaaa", "player"))
     await first
     expect(await keyring.ensure("111", "绫绫")).toMatchObject({ key: "key-aaaa", name: "阿绫" })
     expect(control.sent).toHaveLength(1)
     await keyring.drainWrites()
     const path = (keyring as unknown as { options: { path: string } }).options.path
-    const reloaded = await Keyring.load({ path, groupId: "99", control: new FakeControl(), admins: () => [], keeperKey: "KEEP-SECRET" })
+    const reloaded = await Keyring.load({ path, groupId: "99", control: new FakeControl(), admins: () => [], keeperKey: "KEEP-SECRET", ...new ManualClock().options })
     expect(reloaded.get("111")).toMatchObject({ key: "key-aaaa", name: "阿绫" })
     keyring.close()
   })
@@ -82,13 +67,12 @@ describe("Keyring — keys are named after the group card", () => {
     const control = new FakeControl()
     const keyring = await ring(control)
     const a = keyring.ensure("111", "路人")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(minted("路人", "key-aaaa", "player", [{ id: keyIdFromSecret("key-aaaa"), name: "路人", role: "player" }]))
     await a
     const b = keyring.ensure("222", "路人")
-    await Promise.resolve()
     // Nobody wears another seat's name: the second 路人 is minted as qq:222.
-    expect(control.sent[1]).toMatchObject({ type: FrameType.AdminMintKey, name: memberName("222") })
+    expect(await control.waitForSent(2)).toMatchObject({ type: FrameType.AdminMintKey, name: memberName("222") })
     control.push(
       minted(memberName("222"), "key-bbbb", "player", [
         { id: keyIdFromSecret("key-aaaa"), name: "路人", role: "player" },
@@ -100,8 +84,7 @@ describe("Keyring — keys are named after the group card", () => {
     expect(entry.key_id).toBe(keyIdFromSecret("key-bbbb"))
     expect(keyring.get("111")!.key_id).toBe(keyIdFromSecret("key-aaaa"))
     const c = keyring.ensure("333", "qq:observer:99")
-    await Promise.resolve()
-    expect(control.sent[2]).toMatchObject({ type: FrameType.AdminMintKey, name: memberName("333") })
+    expect(await control.waitForSent(3)).toMatchObject({ type: FrameType.AdminMintKey, name: memberName("333") })
     control.push(minted(memberName("333"), "key-cccc", "player"))
     await c
     keyring.close()
@@ -110,17 +93,10 @@ describe("Keyring — keys are named after the group card", () => {
   test("a late mint for a user kicked meanwhile is deleted, not adopted", async () => {
     let admins: string[] = []
     const control = new FakeControl()
-    const dir = await mkdtemp(join(tmpdir(), "lw-keyring-names-"))
-    const keyring = await Keyring.load({
-      path: join(dir, "g.keyring.json"),
-      groupId: "99",
-      control,
-      admins: () => admins,
-      keeperKey: "KEEP-SECRET",
-      mintTimeoutMs: 15,
-    })
+    const clock = new ManualClock()
+    const keyring = await ring(control, { admins: () => admins, clock })
     const first = keyring.ensure("111", "阿绫")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(minted("阿绫", "key-player", "player"))
     await first
     admins = ["111"]
@@ -128,17 +104,19 @@ describe("Keyring — keys are named after the group card", () => {
     // which times out client-side while the server is still working on it. (A TIMEOUT of
     // the role update itself never re-mints: the seat would be lost.)
     const promote = keyring.ensure("111", "阿绫")
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    expect(await control.waitForSent(2)).toMatchObject({ type: FrameType.AdminUpdateKey })
     control.push({ type: FrameType.AdminError, code: "bad_request", message: "unknown admin frame" } as ServerFrame)
+    expect(await control.waitForSent(3)).toMatchObject({ type: FrameType.AdminMintKey, name: "阿绫", role: "keeper" })
+    clock.fire() // the re-mint times out client-side
     await expect(promote).rejects.toThrow("admin_mint_key timed out")
     const kick = keyring.kick("111")
-    await Promise.resolve()
+    await control.waitForSent(4)
     control.push({ type: FrameType.AdminKeys, keys: [] } as ServerFrame)
     await kick
     expect(keyring.get("111")).toBeUndefined()
     // The late keeper key lands: it must be deleted, never become a live seat for a kicked user.
     control.push(minted("阿绫", "key-late-keeper", "keeper"))
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await control.waitForSent(5)
     expect(keyring.get("111")).toBeUndefined()
     expect(control.sent.at(-1)).toEqual({ type: FrameType.AdminDeleteKey, id: keyIdFromSecret("key-late-keeper") })
     keyring.close()
@@ -146,12 +124,17 @@ describe("Keyring — keys are named after the group card", () => {
 
   test("a mint that timed out is adopted when the reply finally lands, by remembered user", async () => {
     const control = new FakeControl()
-    const keyring = await ring(control, { mintTimeoutMs: 15 })
-    await expect(keyring.ensure("111", "阿绫")).rejects.toThrow("admin_mint_key timed out")
+    const clock = new ManualClock()
+    const keyring = await ring(control, { clock })
+    const pending = keyring.ensure("111", "阿绫")
+    await control.waitForSent(1)
+    clock.fire() // the mint times out client-side
+    await expect(pending).rejects.toThrow("admin_mint_key timed out")
     expect(keyring.get("111")).toBeUndefined()
     control.push(minted("阿绫", "key-late", "player"))
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await waitForEntry(keyring, "111")
     expect(keyring.get("111")).toMatchObject({ key: "key-late", name: "阿绫" })
+    await keyring.drainWrites()
     keyring.close()
   })
 
@@ -159,14 +142,15 @@ describe("Keyring — keys are named after the group card", () => {
     const control = new FakeControl()
     const keyring = await ring(control)
     const first = keyring.ensure("111", "阿绫")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(minted("阿绫", "key-aaaa", "player"))
     await first
     const pending = keyring.remint("111", "绫绫")
-    await Promise.resolve()
+    await control.waitForSent(2)
     expect(control.sent.at(-1)).toMatchObject({ type: FrameType.AdminMintKey, name: "绫绫", role: "player" })
     control.push(minted("绫绫", "key-bbbb", "player"))
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The previous key's delete goes out only once the new entry is on disk.
+    expect(await control.waitForSent(3)).toEqual({ type: FrameType.AdminDeleteKey, id: keyIdFromSecret("key-aaaa") })
     control.push({ type: FrameType.AdminKeys, keys: [] } as ServerFrame)
     const { previous, entry } = await pending
     expect(previous?.key).toBe("key-aaaa")

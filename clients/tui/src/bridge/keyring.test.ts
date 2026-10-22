@@ -2,7 +2,7 @@ import { mkdtemp, readdir, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ClientFrame, type ServerFrame } from "loreweaver-protocol"
+import { FrameType, type ServerFrame } from "loreweaver-protocol"
 import {
   Keyring,
   keyIdFromSecret,
@@ -12,21 +12,10 @@ import {
   observerName,
   observerUserId,
 } from "./keyring"
+import { FakeControl, ManualClock, settle, waitForEntry } from "./keyring.testkit"
 
-class FakeControl {
-  sent: ClientFrame[] = []
-  private readonly handlers = new Set<(frame: ServerFrame) => void>()
-  send(frame: ClientFrame): void {
-    this.sent.push(frame)
-  }
-  onMessage(cb: (frame: ServerFrame) => void): () => void {
-    this.handlers.add(cb)
-    return () => this.handlers.delete(cb)
-  }
-  push(frame: ServerFrame): void {
-    for (const handler of this.handlers) handler(frame)
-  }
-}
+// Every ring runs on a ManualClock: no request timeout fires unless the test fires it, and
+// every reply is pushed only once the keyring has SENT the frame it answers.
 
 function mintedKeys(name: string, key: string, role: "player" | "keeper", id = "kid-1", extra: ServerFrame["type"] extends never ? never : { keys?: AdminKey[] } = {}): ServerFrame {
   const keys = extra.keys ?? [
@@ -72,10 +61,10 @@ describe("keyring", () => {
       control,
       admins: () => [],
       keeperKey: "KEEP-SECRET",
+      ...new ManualClock().options,
     })
     const pending = ring.ensure("111")
-    await Promise.resolve()
-    expect(control.sent[0]).toEqual({
+    expect(await control.waitForSent(1)).toEqual({
       type: FrameType.AdminMintKey,
       name: memberName("111"),
       role: "player",
@@ -87,7 +76,7 @@ describe("keyring", () => {
     expect(entry.role).toBe("player")
     expect(ring.get("111")?.key).not.toBe("KEEP-SECRET")
     expect(control.sent.every((frame) => frame.type !== FrameType.Join)).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    await ring.drainWrites()
     const info = await stat(path)
     expect(info.mode & 0o777).toBe(0o600)
 
@@ -97,6 +86,7 @@ describe("keyring", () => {
       control: new FakeControl(),
       admins: () => [],
       keeperKey: "KEEP-SECRET",
+      ...new ManualClock().options,
     })
     expect(reloaded.get("111")?.key).toBe("player-key-aaaa")
     expect(reloaded.get("111")?.key).not.toBe("KEEP-SECRET")
@@ -113,9 +103,10 @@ describe("keyring", () => {
       control,
       admins: () => [],
       keeperKey: "KEEP-SECRET",
+      ...new ManualClock().options,
     })
     const pending = ring.ensureObserver()
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(observerName("99"), "obs-key", "player", "id-obs"))
     const observer = await pending
     expect(observer.key).not.toBe("KEEP-SECRET")
@@ -135,10 +126,10 @@ describe("keyring", () => {
       control,
       admins: () => ["42"],
       keeperKey: "KEEP-SECRET",
+      ...new ManualClock().options,
     })
     const pending = ring.ensure("42")
-    await Promise.resolve()
-    expect(control.sent[0]).toEqual({
+    expect(await control.waitForSent(1)).toEqual({
       type: FrameType.AdminMintKey,
       name: memberName("42"),
       role: "keeper",
@@ -160,14 +151,15 @@ describe("keyring", () => {
       control,
       admins: () => ["42"],
       keeperKey: "KEEP-SECRET",
+      ...new ManualClock().options,
     })
     const pending = ring.ensure("42")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(memberName("42"), "admin-key-bbbb", "keeper", "id-42"))
     await pending
 
     const kick = ring.kick("42")
-    await Promise.resolve()
+    await control.waitForSent(2)
     expect(control.sent.at(-1)).toEqual({ type: FrameType.AdminDeleteKey, id: keyIdFromSecret("admin-key-bbbb") })
     control.push({ type: FrameType.AdminError, code: "last_keeper", message: "cannot delete the last keeper key" })
     await expect(kick).rejects.toBeInstanceOf(LastKeeperError)
@@ -184,22 +176,25 @@ describe("keyring", () => {
       control,
       admins: () => ["42"],
       keeperKey: "KEEP-SECRET",
+      ...new ManualClock().options,
     })
     const first = ring.ensure("42")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(memberName("42"), "admin-key-bbbb", "keeper", "id-42"))
     await first
 
     const kick = ring.kick("42")
     const mint = ring.ensure("111")
-    await Promise.resolve()
-    await Promise.resolve()
+    await control.waitForSent(2)
+    // The delete is outstanding and its timeout never fires on its own: give the queued
+    // mint every chance to go out early — it must not.
+    await settle()
     expect(control.sent.filter((frame) => frame.type === FrameType.AdminDeleteKey)).toHaveLength(1)
     expect(control.sent.filter((frame) => frame.type === FrameType.AdminMintKey)).toHaveLength(1)
 
     control.push({ type: FrameType.AdminKeys, keys: [] })
     await kick
-    await Promise.resolve()
+    await control.waitForSent(3)
     expect(control.sent.filter((frame) => frame.type === FrameType.AdminMintKey)).toHaveLength(2)
     control.push(mintedKeys(memberName("111"), "player-key-cccc", "player", "id-111"))
     const player = await mint
@@ -211,35 +206,42 @@ describe("keyring", () => {
   test("a late mint reply with no pending is adopted; a late reply never blocks a subsequent mint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     const control = new FakeControl()
+    const clock = new ManualClock()
     const ring = await Keyring.load({
       path: join(dir, "g.keyring.json"),
       groupId: "99",
       control,
       admins: () => [],
       keeperKey: "KEEP-SECRET",
-      mintTimeoutMs: 20,
+      ...clock.options,
     })
     const first = ring.ensure("111")
+    await control.waitForSent(1)
+    clock.fire() // the mint times out client-side
     await expect(first).rejects.toThrow(/timed out/)
     expect(ring.get("111")).toBeUndefined()
     control.push(mintedKeys(memberName("111"), "adopted-key", "player", "id-adopt"))
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    await waitForEntry(ring, "111")
     expect(ring.get("111")?.key).toBe("adopted-key")
+    await ring.drainWrites()
     ring.close()
 
     const control2 = new FakeControl()
+    const clock2 = new ManualClock()
     const ring2 = await Keyring.load({
       path: join(dir, "g2.keyring.json"),
       groupId: "99",
       control: control2,
       admins: () => [],
       keeperKey: "KEEP-SECRET",
-      mintTimeoutMs: 20,
+      ...clock2.options,
     })
     const timed = ring2.ensure("222")
+    await control2.waitForSent(1)
+    clock2.fire()
     await expect(timed).rejects.toThrow(/timed out/)
     const second = ring2.ensure("222")
-    await Promise.resolve()
+    await control2.waitForSent(2)
     control2.push(mintedKeys(memberName("222"), "late-key", "player", "id-late"))
     const entry = await second
     expect(entry.key).toBe("late-key")
@@ -252,16 +254,16 @@ describe("keyring", () => {
     const path = join(dir, "g.keyring.json")
     let admins = ["42"]
     const control = new FakeControl()
-    const ring = await Keyring.load({ path, groupId: "99", control, admins: () => admins, keeperKey: "KEEP-SECRET" })
+    const ring = await Keyring.load({ path, groupId: "99", control, admins: () => admins, keeperKey: "KEEP-SECRET", ...new ManualClock().options })
     const first = ring.ensure("42")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(memberName("42"), "keeper-old", "keeper", keyIdFromSecret("keeper-old")))
     await first
     const sentBefore = control.sent.length
 
     admins = []
     const demote = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await control.waitForSent(sentBefore + 1)
     expect(control.sent.slice(sentBefore)).toEqual([
       { type: FrameType.AdminUpdateKey, id: keyIdFromSecret("keeper-old"), role: "player" },
     ])
@@ -271,12 +273,12 @@ describe("keyring", () => {
 
     admins = ["42"]
     const promote = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await control.waitForSent(sentBefore + 2)
     control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-old"), memberName("42"), "keeper")] })
     expect((await promote).key).toBe("keeper-old")
     expect(control.sent.some((frame) => frame.type === FrameType.AdminMintKey && control.sent.indexOf(frame) >= sentBefore)).toBe(false)
     expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey)).toBe(false)
-    const reloaded = await Keyring.load({ path, groupId: "99", control: new FakeControl(), admins: () => admins })
+    const reloaded = await Keyring.load({ path, groupId: "99", control: new FakeControl(), admins: () => admins, ...new ManualClock().options })
     expect(reloaded.get("42")?.role).toBe("keeper")
     ring.close()
   })
@@ -285,26 +287,27 @@ describe("keyring", () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     let admins = ["42", "43"]
     const control = new FakeControl()
-    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins })
+    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, ...new ManualClock().options })
     const first = ring.ensure("42")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(memberName("42"), "keeper-42", "keeper", keyIdFromSecret("keeper-42")))
     await first
 
     admins = ["43"]
     const refused = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await control.waitForSent(2) // admin_update_key
     control.push({ type: FrameType.AdminError, code: "last_keeper", message: "cannot demote the last keeper key" })
     await expect(refused).rejects.toBeInstanceOf(LastKeeperError)
     expect(ring.get("42")?.role).toBe("keeper")
 
     // An older server (no role update): the old behavior — a fresh key, then the old one deleted.
     const fallback = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await control.waitForSent(3) // admin_update_key again
     control.push({ type: FrameType.AdminError, code: "bad_request", message: "unknown admin frame" })
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await control.waitForSent(4) // the fallback admin_mint_key
     control.push(mintedKeys(memberName("42"), "player-42", "player", keyIdFromSecret("player-42")))
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    // The old key's delete goes out only once the new entry is on disk.
+    await control.waitForSent(5)
     control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("player-42"), memberName("42"), "player")] })
     expect((await fallback).key).toBe("player-42")
     expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey && "id" in frame && frame.id === keyIdFromSecret("keeper-42"))).toBe(true)
@@ -315,16 +318,19 @@ describe("keyring", () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     let admins = ["42", "43"]
     const control = new FakeControl()
-    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, mintTimeoutMs: 20 })
+    const clock = new ManualClock()
+    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, ...clock.options })
     const first = ring.ensure("42")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(memberName("42"), "keeper-42", "keeper", keyIdFromSecret("keeper-42")))
     await first
     const sentBefore = control.sent.length
 
     admins = ["43"]
     const demote = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 30)) // the first send timed out; the retry is out
+    await control.waitForSent(sentBefore + 1)
+    clock.fire() // the first send timed out; the retry is out
+    await control.waitForSent(sentBefore + 2)
     const update = { type: FrameType.AdminUpdateKey, id: keyIdFromSecret("keeper-42"), role: "player" }
     expect(control.sent.slice(sentBefore)).toEqual([update, update])
     control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-42"), memberName("42"), "player")] })
@@ -340,15 +346,21 @@ describe("keyring", () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-keyring-"))
     let admins = ["42", "43"]
     const control = new FakeControl()
-    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, mintTimeoutMs: 20 })
+    const clock = new ManualClock()
+    const ring = await Keyring.load({ path: join(dir, "g.keyring.json"), groupId: "99", control, admins: () => admins, ...clock.options })
     const first = ring.ensure("42")
-    await Promise.resolve()
+    await control.waitForSent(1)
     control.push(mintedKeys(memberName("42"), "keeper-42", "keeper", keyIdFromSecret("keeper-42")))
     await first
     const sentBefore = control.sent.length
 
     admins = ["43"]
-    await expect(ring.ensure("42")).rejects.toThrow(/admin_update_key timed out/)
+    const silent = ring.ensure("42")
+    await control.waitForSent(sentBefore + 1)
+    clock.fire() // the first send: no answer
+    await control.waitForSent(sentBefore + 2)
+    clock.fire() // the one retry: no answer either
+    await expect(silent).rejects.toThrow(/admin_update_key timed out/)
     const update = { type: FrameType.AdminUpdateKey, id: keyIdFromSecret("keeper-42"), role: "player" }
     expect(control.sent.slice(sentBefore)).toEqual([update, update])
     expect(control.sent.some((frame) => frame.type === FrameType.AdminDeleteKey)).toBe(false)
@@ -356,7 +368,7 @@ describe("keyring", () => {
 
     // The next message: the same frame again, answered this time — same key, new role.
     const again = ring.ensure("42")
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await control.waitForSent(sentBefore + 3)
     control.push({ type: FrameType.AdminKeys, keys: [keyRow(keyIdFromSecret("keeper-42"), memberName("42"), "player")] })
     expect((await again).key).toBe("keeper-42")
     expect(control.sent.some((frame) => frame.type === FrameType.AdminMintKey && control.sent.indexOf(frame) >= sentBefore)).toBe(false)
@@ -372,6 +384,7 @@ describe("keyring", () => {
       groupId: "99",
       control: new FakeControl(),
       admins: () => [],
+      ...new ManualClock().options,
     })
     expect(ring.get("111")).toBeUndefined()
     const names = await readdir(dir)

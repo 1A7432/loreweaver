@@ -166,6 +166,8 @@ export class Keyring {
       setTimeoutFn?: typeof setTimeout
       clearTimeoutFn?: typeof clearTimeout
       mintTimeoutMs?: number
+      /** Clock for the late-mint TTL (defaults to `Date.now`); tests inject a manual one. */
+      now?: () => number
     },
   ) {
     this.unsubscribe = options.control.onMessage((frame) => this.onControl(frame))
@@ -408,7 +410,7 @@ export class Keyring {
           // The server may still answer: remember who this mint was for so the late
           // reply is adopted instead of orphaned (names no longer encode the QQ id).
           this.pruneLateMints()
-          this.lateMints.push({ name, role, userId, at: Date.now() })
+          this.lateMints.push({ name, role, userId, at: this.now() })
           while (this.lateMints.length > LATE_MINT_CAP) this.lateMints.shift()
           reject(new ControlTimeoutError("mint"))
         }
@@ -502,7 +504,7 @@ export class Keyring {
 
   private pruneLateMints(): void {
     const ttl = 2 * (this.options.mintTimeoutMs ?? MINT_TIMEOUT_MS)
-    const cutoff = Date.now() - ttl
+    const cutoff = this.now() - ttl
     for (let i = this.lateMints.length - 1; i >= 0; i -= 1) {
       if (this.lateMints[i]!.at < cutoff) this.lateMints.splice(i, 1)
     }
@@ -529,6 +531,10 @@ export class Keyring {
     if (!entry) return
     this.entries.set(userId, entry)
     void this.flush()
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)()
   }
 
   private clearPending(): void {
