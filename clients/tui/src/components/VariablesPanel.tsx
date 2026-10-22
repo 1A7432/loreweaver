@@ -2,6 +2,7 @@ import { stripControlChars, type ModuleVariable } from "loreweaver-protocol"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"
+import { FitText } from "./FitText"
 
 export interface VariablesPanelProps {
   variables?: ModuleVariable[]
@@ -72,9 +73,9 @@ export function VariablesPanel({ variables, theme, locale }: VariablesPanelProps
     <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
       <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "vars.title")}</text>
       {variables.map((variable) => (
-        <text key={variable.id} fg={variable.hidden ? theme.dim : theme.fg} wrapMode="none" truncate>
+        <FitText key={variable.id} fg={variable.hidden ? theme.dim : theme.fg} cut="middle">
           {variableLine(variable, locale)}
-        </text>
+        </FitText>
       ))}
     </box>
   )
