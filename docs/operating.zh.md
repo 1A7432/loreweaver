@@ -58,7 +58,7 @@ Subscription providers need `.model login` first.
                                 （筹备阶段；模组装进本房间）
 ```
 
-key 是**按 provider 记住**的，所以换回一个用过的不会再问你要。但新的 `base_url` 永远不会配旧 key：要么你在同一条请求里把对应的 key 给上，要么这个端点拿到的是空 key。守秘人客户端在模型页也能做同样的事。
+key 是**按 provider 记住**的，所以换回一个用过的不会再问你要。但新的 `base_url` 永远不会配旧 key：要么你在同一条请求里把对应的 key 给上，要么这个端点拿到的是空 key。管理员客户端在模型页也能做同样的事。
 
 ### 书记官——小模型，正经活
 
@@ -74,7 +74,7 @@ Mode: source
 Locales: en (29 files), zh (29 files)
 Rulepacks: coc7 (resolution: dsl +6 variants; subsystems: sanity_check, skill_growth, spend_luck,
 opposed_check, random_madness), dnd5e (resolution: dsl; subsystems: opposed_check), wod (resolution: dsl)
-KP skills: image-gen, mature-mode, module-forge, romance-relationships, rule-forge, skill-forge, svg-mapmaker (7)
+Keeper skills: image-gen, mature-mode, module-forge, romance-relationships, rule-forge, skill-forge, svg-mapmaker (7)
 Data dir: ./data
 NOTE: the Scribe is paying flagship prices for ledger work (xai / grok-4.5). It runs one extra call
 after every AI-KP turn. Point TRPG_SCRIBE__* at a small, cheap model — see .env.example.
@@ -204,7 +204,7 @@ TRPG_SCRIBE__REASONING_EFFORT=low
 
 ### 备份
 
-守秘人客户端的“房间与邀请”页里有**导出房间备份**和**导入房间备份**。备份是服务端生成的 JSON 快照，限制在 `<data_dir>/room_backups/` 里；路径留空会自动命名。它包含房间状态、向量数据、内嵌的媒体二进制，**以及这个房间的原始访问密钥**。请完全按 `keys.toml` 的标准保护它，别丢进公开仓库或者聊天窗口。
+管理员客户端的“房间与邀请”页里有**导出房间备份**和**导入房间备份**。备份是服务端生成的 JSON 快照，限制在 `<data_dir>/room_backups/` 里；路径留空会自动命名。它包含房间状态、向量数据、内嵌的媒体二进制，**以及这个房间的原始访问密钥**。请完全按 `keys.toml` 的标准保护它，别丢进公开仓库或者聊天窗口。
 
 导入时可以把快照重映射到另一个房间名，这就是克隆一份战役来做测试的办法。
 
@@ -231,11 +231,11 @@ This will permanently clear EVERYTHING — characters, the module, lore, media a
 
 每一种都要在 120 秒内补一句 `.reset confirm`。**不会自动备份**——你要是可能还想要，先自己导一份。客户端会收到一个标了 `reset` 的状态帧，顺便把本地聊天记录也清掉，所以每块屏幕上看起来都是干净的重开。
 
-如果你想要的是把房间**删掉**而不是重开，守秘人页上的“删除整个房间”默认会先备份，再清掉密钥、房间状态和向量。
+如果你想要的是把房间**删掉**而不是重开，管理员页上的“删除整个房间”默认会先备份，再清掉密钥、房间状态和向量。
 
 ### 自更新
 
-守秘人在“房间与邀请”页里就能更新服务器，不用 SSH。那页会显示服务端和客户端的版本，客户端更新时给出**更新服务器**按钮。按下去，服务器跑的是它**自己**配置的命令（`TRPG_TUI__UPDATE_COMMAND`，默认 `git pull --ff-only && uv sync`），然后把进程 re-exec 进新代码——**PID 不变，所以 Iroh ticket 不变**，谁都不用换邀请码。客户端闪一下就重连上了。
+管理员在“房间与邀请”页里就能更新服务器，不用 SSH。那页会显示服务端和客户端的版本，客户端更新时给出**更新服务器**按钮。按下去，服务器跑的是它**自己**配置的命令（`TRPG_TUI__UPDATE_COMMAND`，默认 `git pull --ff-only && uv sync`），然后把进程 re-exec 进新代码——**PID 不变，所以 Iroh ticket 不变**，谁都不用换邀请码。客户端闪一下就重连上了。
 
 ```dotenv
 TRPG_TUI__UPDATE_COMMAND=git pull --ff-only && uv sync    # 默认（git 检出）
@@ -263,14 +263,14 @@ TRPG_TUI__UPDATE_COMMAND=git pull --ff-only && uv sync    # 默认（git 检出�
 
 - 偶尔瞄一眼 `上下文` 和 `缓存`。`上下文` 应该是锯齿状的，不该一路只涨。
 - 回复变慢先去日志里找 `LLM throttled`，再怪模型。
-- 守秘人专属的回复（`.model`、`.imagegen`、`.forge`、`.lore`、`.chronicle`、`.var`、`.npc`）按设计只发给你自己。哪天你看见这类回复落进了房间日志，那是个值得报的 bug。
+- 管理员专属的回复（`.model`、`.imagegen`、`.forge`、`.lore`、`.chronicle`、`.var`、`.npc`）按设计只发给你自己。哪天你看见这类回复落进了房间日志，那是个值得报的 bug。
 - `.npc` / `.companion` 是你对这桌名录的那只手：列出来，`show <名字>` 看完整记录（人设、秘密议程、这个 NPC 知道什么），`delete <名字>` 删掉守秘人临场编出来而你不想要的。删伙伴会连它的角色卡一起删（伙伴 = 记录 + 卡）；删普通 NPC 不碰任何卡。
 - `.panel` 把模组面板渲成文字——终端上有用，也是看"玩家的面板此刻到底显示着什么"最快的办法。
 
 结束后：
 
 - `.report` 导出战报。
-- `.团报 网页`（`.report html`）把同一份团报做成一个自包含网页发到提出请求的客户端（任何玩家都能要一份自己的）；`.团报 复盘`（`.report html reveal`）是守秘人的复盘版，多一段“幕后”剧透——暗骰、你在编年史里的旁注、模组的秘密、隐藏变量——只发给你自己的连接。本机 CLI 上两种都直接写进共享报告目录。
+- `.团报 网页`（`.report html`）把同一份团报做成一个自包含网页发到提出请求的客户端（任何玩家都能要一份自己的）；`.团报 复盘`（`.report html reveal`）是管理员的复盘版，多一段“幕后”剧透——暗骰、你在编年史里的旁注、模组的秘密、隐藏变量——只发给你自己的连接。本机 CLI 上两种都直接写进共享报告目录。
 - `.chronicle` / `.recap` 对一遍，看账本和实际发生的事对不对得上。如果某个追踪器要么停在过去、要么跑到了剧情**前面**，那正是我们做实测想抓的那类问题，值得开个 issue。
 
 ---

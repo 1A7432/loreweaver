@@ -286,7 +286,7 @@ export function PartyRoster({
                       32 columns (`layout.sidebarWidth`), so anything appended after the
                       card + pack name is the first thing `truncate` eats — which left a
                       player's inert world-card row looking like an ordinary one. */}
-                  {world ? `${tt(locale, locked ? "party.packCardKeeperOnly" : "party.packCardWorld")} ` : ""}
+                  {world ? `${tt(locale, locked ? "party.packCardAdminOnly" : "party.packCardWorld")} ` : ""}
                   {stripControlChars(entry.name)} · {stripControlChars(entry.pack)}
                 </text>
               </box>

@@ -30,7 +30,7 @@
   "companion.tools.auto.on": "✅ Auto companion combat turns are ON (each companion acts on its initiative).",
   "companion.tools.learns.done": "✅ {name} learned: {fact}",
   "companion.tools.learns.failed": "❌ Failed to record what the companion learned: {error}",
-  "companion.tools.list.empty": "📄 No AI companions in the party yet. A keeper can add one with .party add.",
+  "companion.tools.list.empty": "📄 No AI companions in the party yet. A room admin can add one with .party add.",
   "companion.tools.list.failed": "❌ Failed to list companions: {error}",
   "companion.tools.list.header": "🧭 AI Companions ({count}):",
   "companion.tools.list.item": "- {name} [{id}] — playstyle: {playstyle}",

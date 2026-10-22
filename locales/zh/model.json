@@ -1,5 +1,5 @@
 {
-  "commands.help.model": "查看或切换 Keeper 的 LLM 提供方/模型。",
+  "commands.help.model": "查看或切换守秘人用的 LLM 提供方/模型。",
   "commands.model.usage": "用法：.model [list | set <提供方> [聊天模型] | login <chatgpt|supergrok> | logout <提供方> | key <api_key> | reset]",
   "commands.model.show": "LLM：提供方 {provider}，聊天模型 {chat_model}，base_url {base_url}，api_key {api_key}。覆盖：{override}",
   "commands.model.override_on": "已启用（运行时覆盖）",

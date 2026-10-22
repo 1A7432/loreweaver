@@ -1,7 +1,7 @@
 {
   "agent.forge.bad_id": "Could not derive a usable KP-skill id: {error}. Nothing was installed.",
-  "agent.forge.installed": "Created and installed a new KP skill: {name} ({skill_id}) at {path}. Enable it for this room with `.skill enable {skill_id}`.",
-  "agent.forge.invalid": "Could not generate a valid KP skill: {error}. Nothing was installed.",
+  "agent.forge.installed": "Created and installed a new Keeper skill: {name} ({skill_id}) at {path}. Enable it for this room with `.skill enable {skill_id}`.",
+  "agent.forge.invalid": "Could not generate a valid Keeper skill: {error}. Nothing was installed.",
   "agent.forge.module_bad_id": "Could not derive a usable module id: {error}. Nothing was installed.",
   "agent.forge.module_id_fallback": "The generated metadata did not contain a usable ASCII id, so the module was installed with the stable id `{module_id}`.",
   "agent.forge.module_id_requirement": "Mandatory output envelope (this overrides the earlier instruction to begin directly with a heading): start with YAML frontmatter exactly shaped as `---\nid: <lowercase ASCII slug using only a-z, 0-9, and hyphens>\n---`, then write the level-1 module title and the rest of the Markdown document.",
@@ -20,7 +20,7 @@
   "agent.tools.bad_arguments": "Invalid arguments for tool {name}: {error}",
   "agent.tools.capability_missing": "Tool {name} needs this room's `{capability}`, which it does not have — it is not offered here.{hint}",
   "agent.tools.capability_hint.module_pool": "A module imported as a world card carries its lore as worldbook entries: use query_lore instead.",
-  "agent.tools.prep_phase_only": "Tool {name} belongs to the prep phase; this room is in the play phase. Ask the keeper to run `.phase prep` if this really needs doing now.",
+  "agent.tools.prep_phase_only": "Tool {name} belongs to the prep phase; this room is in the play phase. Ask the room admin to run `.phase prep` if this really needs doing now.",
   "agent.tools.tool_not_available": "Tool {name} is not available in this room.",
   "agent.tools.unknown_tool": "Unknown tool: {name}"
 }

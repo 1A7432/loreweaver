@@ -28,12 +28,12 @@ STALE_CLAIMS: dict[str, tuple[str, ...]] = {
     "docs/authoring.md": ("Forced off for uploaded files",),
 }
 
-# What each one must say instead: the flag survives a keeper world import.
+# What each one must say instead: the flag survives a keeper-grade (room admin) world import.
 KEEPER_CLAIMS: dict[str, tuple[str, ...]] = {
-    "docs/cards.md": ("honored for the Keeper's `world` import",),
-    "docs/cards.zh.md": ("在守秘人的 `world` 导入里生效",),
-    "docs/plugins.md": ("`constant` honored for a keeper world import",),
-    "docs/authoring.md": ("Honored for the keeper's `world` import",),
+    "docs/cards.md": ("honored for the admin's `world` import",),
+    "docs/cards.zh.md": ("在管理员的 `world` 导入里生效",),
+    "docs/plugins.md": ("`constant` honored for an admin world import",),
+    "docs/authoring.md": ("Honored for the admin's `world` import",),
 }
 
 

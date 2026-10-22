@@ -35,7 +35,7 @@ async def test_run_script_help_and_bot_commands_work():
 
     assert len(replies) == 2
     assert "Commands:" in replies[0]
-    assert "Keeper:" in replies[0]
+    assert "Admin:" in replies[0]
     assert replies[1] == "Bot disabled."
 
 

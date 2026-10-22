@@ -94,7 +94,7 @@
   "kp_tools.image.generate.error.imagegen_not_configured": "尚未配置图像生成。",
   "kp_tools.image.generate.error.imagegen_timeout": "图像生成超时。",
   "kp_tools.image.generate.failed": "❌ 生成图片失败：{error}",
-  "kp_tools.image.generate.not_configured": "尚未配置图像生成。请先让守秘人配置图像 provider。",
+  "kp_tools.image.generate.not_configured": "尚未配置图像生成。请先让管理员配置图像 provider。",
   "kp_tools.image.generate.rate_limited": "本房间的图像生成额度已用完，请稍后再试。",
   "kp_tools.initiative.added": "✅ 已添加 {name} 的先攻: {initiative}",
   "kp_tools.initiative.cleared": "✅ 先攻列表已清空",

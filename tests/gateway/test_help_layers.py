@@ -32,8 +32,8 @@ async def test_player_help_lists_play_verbs_and_hides_operator_surfaces():
         assert verb in reply
     for verb in _KEEPER_VERBS:
         assert verb not in reply
-    assert "Keeper:" not in reply
-    assert "The keeper has more commands for running the table." in reply
+    assert "Admin:" not in reply
+    assert "The commands for managing the table are in the room admin's hands." in reply
 
 
 async def test_keeper_help_adds_operator_section():
@@ -44,10 +44,10 @@ async def test_keeper_help_adds_operator_section():
     assert first.startswith("Commands:")
     for verb in _PLAYER_VERBS:
         assert verb in first
-    assert "Keeper:" in rest
+    assert "Admin:" in rest
     for verb in _KEEPER_VERBS:
         assert verb in rest
-    assert "The keeper has more commands for running the table." not in reply
+    assert "The commands for managing the table are in the room admin's hands." not in reply
 
 
 async def test_cli_help_is_the_keeper_list():
@@ -56,7 +56,7 @@ async def test_cli_help_is_the_keeper_list():
     reply = await router.dispatch(_keeper_ctx(), ".help")
     assert reply is not None
     assert "Commands:" in reply
-    assert "Keeper:" in reply
+    assert "Admin:" in reply
 
 
 async def test_help_zh_uses_locale_labels():
@@ -64,5 +64,5 @@ async def test_help_zh_uses_locale_labels():
     reply = await router.dispatch(_keeper_ctx(locale="zh"), ".help")
     assert reply is not None
     assert "命令：" in reply
-    assert "守秘人：" in reply
+    assert "管理员：" in reply
     assert ".dev" in reply

@@ -15,9 +15,9 @@ corner mean.
 ## 1. Get in
 
 Install a client ([see the README](../README.md#1-install-the-client)): **Loreweaver Studio**, the
-desktop app, is the recommended one — the graphical play surface with live panels and the keeper
+desktop app, is the recommended one — the graphical play surface with live panels and the admin
 screens; the **terminal client** is one line to install and runs anywhere with a terminal. Open
-Studio, or run `loreweaver`, and paste the two things your Keeper sent you:
+Studio, or run `loreweaver`, and paste the two things your room admin sent you:
 
 - a **ticket** — the server's peer-to-peer address, a long string starting with `endpoint`;
 - an **invite key** — yours alone, and it is also your identity: there are no accounts and no
@@ -41,7 +41,7 @@ sheet, and an invalid one does not get saved no matter where it came from.
 | **From a description** | write a sentence ("calm doctor investigating disappearances in a foggy port") and the AI drafts a sheet, which the rules then check |
 | **Import a card** | a SillyTavern V2/V3 card, PNG or JSON — see [cards.md](cards.md) |
 
-If the Keeper has imported a module with a pre-generated cast, there is a fifth route: claim one.
+If the room admin has imported a module with a pre-generated cast, there is a fifth route: claim one.
 
 ```
 .pc                    list the module's cast and who has claimed whom
@@ -100,7 +100,7 @@ system.
 **A failed check should move the story, not stop it.** If you are stuck after a failure, say what
 you try instead. Being pushed onto a worse plan is the game working, not the game breaking.
 
-**Your sheet.** `.st` shows it; `.st <skill>=<value>` edits it, if your Keeper allows edits:
+**Your sheet.** `.st` shows it; `.st <skill>=<value>` edits it, if your table allows edits:
 
 ```
 .st 力量=60             = assigns exactly that number
@@ -124,7 +124,7 @@ system does not permit, whoever asked for it.
 .recap
 ```
 
-The recap is a real document the Keeper can edit, and its player view is produced by the same
+The recap is a real document the room admin can edit, and its player view is produced by the same
 projection that keeps every other secret out of your client — keeper annotations about what you
 *missed* are not in there at all. Just joined a campaign in progress? Start here.
 
@@ -185,12 +185,12 @@ projection that keeps every other secret out of your client — keeper annotatio
 | `.recap` | the spoiler-free story so far |
 | `.report` | export a session report — the scoreboard; `.report full` adds every dice roll and the whole conversation |
 | `.report html` | the same keepsake as a printable, self-contained web page, sent to **your** client only — the terminal client saves it (`~/Downloads/loreweaver`, else `~/.loreweaver/reports`) for you to open in a browser |
-| `.report html reveal` | keeper only: the reveal edition — the player page plus a spoiler section behind the screen (hidden rolls, the Keeper's chronicle margins, the module's secrets, hidden variables). Delivered to the keeper's connection alone |
+| `.report html reveal` | admin only: the reveal edition — the player page plus a spoiler section behind the screen (hidden rolls, the Keeper's chronicle margins, the module's secrets, hidden variables). Delivered to the admin's connection alone |
 | `.jrrp` | today's luck, for no mechanical reason whatsoever |
 
 Both dialects work at once: the Chinese SealDice style (`.ra 侦查`, `.st 力量50`, `.sc 1/1d6`) and
 the English Avrae style (`/roll 4d6kh3`, `/check`). Use whichever your fingers know. The complete
-reference, including everything the Keeper can do, is the
+reference, including everything the room admin can do, is the
 [player command manual](https://1a7432.site/commands-en.html).
 
 ## 7. What the AI can and cannot do to you
@@ -200,7 +200,7 @@ Worth knowing, because it changes how you play:
 - **It cannot fake a roll.** Every check goes through the dice engine. The Keeper narrates the
   result; it does not choose it.
 - **It cannot quietly change your sheet.** Every write is validated against the rule system, whoever
-  requested it — you, the Keeper, or the model.
+  requested it — you, the room admin, or the model.
 - **NPCs do not have X-ray vision.** An NPC or AI companion is built from its own record and sheet
   and nothing else, so it cannot know a secret it was never given. The Keeper itself *is* shown the
   module's secrets — it has to be, to run a mystery — and is instructed not to repeat them. That last

@@ -68,7 +68,7 @@ Switching is hot — no restart, mid-session is fine:
 
 Keys are remembered **per provider**, so switching back to one you've used before doesn't re-ask. A
 new `base_url` is never paired with an older key: supply the matching key on the same request, or the
-endpoint gets an empty one. Keeper clients can do all of this from the model screen instead.
+endpoint gets an empty one. Admin clients can do all of this from the model screen instead.
 
 ### The Scribe — small model, real job
 
@@ -92,7 +92,7 @@ Mode: source
 Locales: en (29 files), zh (29 files)
 Rulepacks: coc7 (resolution: dsl +6 variants; subsystems: sanity_check, skill_growth, spend_luck,
 opposed_check, random_madness), dnd5e (resolution: dsl; subsystems: opposed_check), wod (resolution: dsl)
-KP skills: image-gen, mature-mode, module-forge, romance-relationships, rule-forge, skill-forge, svg-mapmaker (7)
+Keeper skills: image-gen, mature-mode, module-forge, romance-relationships, rule-forge, skill-forge, svg-mapmaker (7)
 Data dir: ./data
 NOTE: the Scribe is paying flagship prices for ledger work (xai / grok-4.5). It runs one extra call
 after every AI-KP turn. Point TRPG_SCRIBE__* at a small, cheap model — see .env.example.
@@ -272,7 +272,7 @@ is `ctx` sitting high because the fold trigger was raised?
 
 ### Backups
 
-From a Keeper client, *Rooms & invites* has **Export room backup** and **Import room backup**. A
+From an admin client, *Rooms & invites* has **Export room backup** and **Import room backup**. A
 backup is a server-side JSON snapshot confined to `<data_dir>/room_backups/`; leaving the path blank
 auto-names it. It contains room state, vector data, self-contained media blobs — **and the room's raw
 access keys**. Protect it exactly like `keys.toml`, and never put one in a public repo or a chat.
@@ -306,12 +306,12 @@ Each needs `.reset confirm` within 120 seconds. **No backup is taken** — take 
 want it. Clients receive a state frame marked `reset`, which also clears their local chat scrollback,
 so a fresh start looks fresh on every screen.
 
-If you want the room *gone* rather than restarted, the Keeper screen's **Delete full room** takes a
+If you want the room *gone* rather than restarted, the admin screen's **Delete full room** takes a
 backup first by default and then removes keys, room state and vectors.
 
 ### Self-update
 
-A Keeper updates the server from *Rooms & invites* — no SSH. The screen shows the server and client
+A room admin updates the server from *Rooms & invites* — no SSH. The screen shows the server and client
 versions and offers **Update server** when the client is newer. Pressing it runs the server's **own**
 configured command (`TRPG_TUI__UPDATE_COMMAND`, default `git pull --ff-only && uv sync`) and then
 re-execs the process into the new code — **same PID, so the Iroh ticket does not change** and nobody
@@ -351,7 +351,7 @@ During:
 
 - Glance at `ctx` and `cache` once in a while. `ctx` should sawtooth, not climb forever.
 - If replies get slow, check the log for `LLM throttled` before blaming the model.
-- Keeper-only replies (`.model`, `.imagegen`, `.forge`, `.lore`, `.chronicle`, `.var`, `.npc`) are unicast to you by design
+- Admin-only replies (`.model`, `.imagegen`, `.forge`, `.lore`, `.chronicle`, `.var`, `.npc`) are unicast to you by design
   — if you ever see one land in the room's log, that's a bug worth reporting.
 - `.npc` / `.companion` are your hand on the room's cast: list it, `show <name>` for the full record
   (persona, secret agenda, what that NPC knows), `delete <name>` when the Keeper improvised one you
@@ -365,7 +365,7 @@ After:
 - `.report` exports a session report — the scoreboard on its own, or `.report full` for the keepsake:
   every dice roll with its result, and the table's whole conversation.
 - `.report html` sends the same keepsake as one self-contained web page to the asking client
-  (any player may ask for their own copy); `.report html reveal` is the keeper's reveal edition with
+  (any player may ask for their own copy); `.report html reveal` is the admin's reveal edition with
   a spoiler section behind the screen — hidden rolls, your chronicle margins, the module's secrets,
   hidden variables — delivered to your connection only. On the local CLI both are written to the
   shared reports folder instead.

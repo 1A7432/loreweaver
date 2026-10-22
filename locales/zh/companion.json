@@ -30,7 +30,7 @@
   "companion.tools.auto.on": "✅ 战斗中同伴自动行动已开启（每名同伴按先攻各行动一次）。",
   "companion.tools.learns.done": "✅ {name} 得知了：{fact}",
   "companion.tools.learns.failed": "❌ 记录同伴新得知的信息失败：{error}",
-  "companion.tools.list.empty": "📄 队伍中还没有 AI 同伴。守秘人可用 .party add 添加。",
+  "companion.tools.list.empty": "📄 队伍中还没有 AI 同伴。管理员可以用 .party add 添加。",
   "companion.tools.list.failed": "❌ 列出同伴失败：{error}",
   "companion.tools.list.header": "🧭 AI 同伴（共 {count} 名）：",
   "companion.tools.list.item": "- {name} [{id}] —— 行事风格：{playstyle}",

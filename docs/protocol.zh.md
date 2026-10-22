@@ -15,7 +15,7 @@
 
 **显示名与语言。**线上所有由服务端解析的显示名——上面这些，以及原有的 `Resource.label`、`variables[].label`、`outcome.label`、`expr`——都按服务端运行的语言解析（它的 `settings.locale`，即 `welcome.locale`）。`join` 不携带语言，所以连同一个服务端的所有连接收到的是同一种语言；帧仍是**按连接**构建的，将来若要每条连接各用各的语言，这一点是前提。面板文本（`{en,zh}` 映射）不同：由客户端自己挑。
 
-**2.4（增量）**新增 `report` 帧（服务端 → 客户端）：HTML 团报（`.report html`，以及仅守秘人可用的 `.report html reveal`），存为房间不公开 blob，只通知请求它的那条连接。2.3 客户端忽略此帧，只是收不到文件。
+**2.4（增量）**新增 `report` 帧（服务端 → 客户端）：HTML 团报（`.report html`，以及仅管理员可用的 `.report html reveal`），存为房间不公开 blob，只通知请求它的那条连接。2.3 客户端忽略此帧，只是收不到文件。
 
 **版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整合——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。`loreweaver-protocol` 自带这个判定（`protocolMismatch`），任何客户端都不必自己写；两个参考客户端——TUI 与 Loreweaver Studio——都取更强的那一档：**拒绝连接**、断开、并把两边的版本号都说出来。继续与主版本不同的服务端对话，结果是误读帧而不是失败，比拒绝难排查得多。版本号解析不出来时不算证据，不能当成版本不一致来处理。同一个主版本里，小版本只做增量；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：无视这个条件，等于把作者藏起来的内容画到屏幕上，所以判不出来的一律不画，和 `$var` 取不到值是同一条规矩。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清它**不是**什么：带条件的块，内容无论条件成不成立都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了哪些东西，各自了结了哪个老毛病：
 
@@ -34,7 +34,7 @@
   `{type:"input", text:string}`
 - `media_offer` — 打开字节通道前先提交图片/音频元数据：
   `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
-- `media_set_enabled` — 仅守秘人可用的房间媒体上传开关：
+- `media_set_enabled` — 仅管理员可用的房间媒体上传开关：
   `{type:"media_set_enabled", enabled:boolean}`
 - `avatar_set` — 将本房间已经上传的一张图片绑定到调用者自己的当前角色头像。服务端会拒绝试图指定其他角色/用户的帧：
   `{type:"avatar_set", hash:string}`
@@ -56,7 +56,7 @@
   `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
 - `media` — 媒体元数据广播和历史回放条目；字节按需拉取：
   `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
-- `media_enabled` — 房间的玩家上传政策。守秘人切换时向全房间广播；成员加入时若上传处于关闭态（非默认态）会在回放阶段补发一帧（加入时没有此帧即默认：允许上传）。客户端可以据此显示或禁用自己的上传入口：
+- `media_enabled` — 房间的玩家上传政策。管理员切换时向全房间广播；成员加入时若上传处于关闭态（非默认态）会在回放阶段补发一帧（加入时没有此帧即默认：允许上传）。客户端可以据此显示或禁用自己的上传入口：
   `{type:"media_enabled", enabled:boolean}`
 - `audio_library_item` — 由上传音频 blob 生成的房间音频库条目：
   `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`
@@ -91,7 +91,7 @@
   后四种是 M19 的**演出模板**：声明式，不是标记语言。富客户端把 `letter` 画成信笺、把 `title_card` 画成整幅幕卡；文本优先客户端把同样的字段打成几行。`map_pin` 的 `x`/`y` 是地图图片自身画框的**比例**（0..1），客户端按自己渲染的尺寸缩放标记。它们由房间的演出导演（`agent.stage_director`）在剧情节拍上发出，钩子与模组面板同样可用。
   `image` 块用**内容 hash** 指名一张图——正是媒体字节通道已经在应答的地址（`{op:"get", hash}`）。服务端只会发出**本房间**可取的 hash（房间自己的媒体，或本房间已启用包的资产），并盖上权威 `mime`，因此客户端可以像对待任何媒体一样拉取与缓存；取不到的 hash 在组帧前就已在服务端丢弃。文本优先客户端降级为 `caption`/`alt` 一行文字加自己既有的媒体查看方式。
   `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
-- `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，守秘人执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文“模组 UI 面板”：
+- `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，管理员执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文“模组 UI 面板”：
   `{type:"ui_manifest", panels:[UiManifestPanel]}`
 - `panel_event`— 房间钩子经 `emitPanel(panelId, payload)` 发射的不透明 JSON 载荷（见 `docs/plugins.md`），供目标面板自己的代码（Tier 2）消费。在本回合 `ui` 帧之后送达，且**只**送达清单中含该面板的成员；每回合 ≤ 20 条（超额丢弃并记日志）、单条序列化 ≤ 32 KB。不运行面板代码的客户端（TUI）直接忽略：
   `{type:"panel_event", panel:string, payload:any}`
@@ -101,10 +101,10 @@
   `character.attributes`（v2.3）只含卡的**特征值**——规则系统 `sheet.attributes` 声明的那些键，按包自己的顺序（CoC 7e 的 `STR CON SIZ …`、D&D 5e 的 `STR DEX CON …`、社区包自己系统的自己那套）；生命体征**不**在这里重复（它们是 `resources`），派生值从不发送——客户端照线上顺序原样渲染，每个键都是 `.st <key>=<n>` 接受的名字。没有声明卡表规格的系统按存储原样发送。
   `character.attribute_labels`（v2.5，可有可无）把 `attributes` 的每个键映射到它的显示名，数据来自规则系统自己（键对应的规范名，再经规则包的 `display` 表）：`zh` 服务端上的 CoC 7e 发 `{"APP":"外貌", …}`。显示 `attribute_labels[key]`，没有就显示键本身；`attributes` 的**键**不变，仍是 `.st` 接受的名字。找不到名字的键不进这张表，表为空时（没有卡表规格的系统）整个省略。
   `pregens` 是模组可认领的预设角色（`.pc list`/`.pc claim`）；`claimed_by` 是认领者的成员 id，未认领时为 `""`；没有名册时整个省略。v2.5 新增两项，各自只在非空时出现：`blurb`，卡里写给玩家挑角色看的一句话人设（绝不是作者写给守秘人的备注，也不是角色卡）；`claimed_by_name`，认领者认领当时的显示名（随认领一起存下，所以离线的认领者也有名字；释放时清掉）。显示 `claimed_by_name`，没有就显示 `claimed_by`。
-  `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已本地化（用服务端的语言，见「显示名与语言」）；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。`value_label`（v2.5，可有可无）只出现在包给**当前**选项起了名字的 `enum` 上（卡格式里的 `option_labels`），解析方式同 `label`：**显示**时用它代替 `value`，但比较、保存、发送都用 `value`——`visible_when`、钩子和 `.var set` 认的是原始选项 id。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**守秘人挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带守秘人公开过的路径（`.var expose`）；守秘人自己连接的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
+  `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已本地化（用服务端的语言，见「显示名与语言」）；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。`value_label`（v2.5，可有可无）只出现在包给**当前**选项起了名字的 `enum` 上（卡格式里的 `option_labels`），解析方式同 `label`：**显示**时用它代替 `value`，但比较、保存、发送都用 `value`——`visible_when`、钩子和 `.var set` 认的是原始选项 id。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**管理员挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带管理员公开过的路径（`.var expose`）；管理员自己的连接收到的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
   `systems`（v2.3，可有可无）是本服务端发现的全部规则系统，每条带上「在这个系统里建卡」用的方言词（`make_char`；规则包没声明就没有这个字段）。客户端要提供建卡入口，需要的就是这两样，不必认识任何一个规则系统——于是自带系统的内容包，不用等客户端发版就会出现在每个客户端的选择器里。
   `reset:true` 标记的是战役被清空（`.reset` / `admin_reset_room`）之后服务端推的那份快照：面板数据已经是最新的（空的），客户端还应该把本地攒下的聊天记录也清掉。
-- `pack_cards`（v2.2）— 对 `list_pack_cards` 的单播回复：每个已安装扩展包携带的卡文件。`ref` 就是 `.import <ref>` 接受的引用；`pack` 与 `name`（文件名主干）用于展示。`kind`（v2.3）是这张卡的拆卡归类，它决定用哪个动词：`character` 走 `.import <ref> pc`，`world` 是模组机器部件，只能走守秘人的 `.import <ref> world`（面向玩家的选择器应把它标成守秘人专用，而不是当角色卡给出）。2.3 之前的服务端不发 `kind`，缺失按 `"character"` 处理。没有任何包携带卡文件时 `cards` 为空数组（不是缺省）：
+- `pack_cards`（v2.2）— 对 `list_pack_cards` 的单播回复：每个已安装扩展包携带的卡文件。`ref` 就是 `.import <ref>` 接受的引用；`pack` 与 `name`（文件名主干）用于展示。`kind`（v2.3）是这张卡的拆卡归类，它决定用哪个动词：`character` 走 `.import <ref> pc`，`world` 是模组机器部件，只能走管理员的 `.import <ref> world`（面向玩家的选择器应把它标成管理员专用，而不是当角色卡给出）。2.3 之前的服务端不发 `kind`，缺失按 `"character"` 处理。没有任何包携带卡文件时 `cards` 为空数组（不是缺省）：
   `{type:"pack_cards", cards:[{ref:string, pack:string, name:string, kind:"character"|"world"}]}`
 - `presence` — 连接的玩家名单，在加入/离开时发送：
   `{type:"presence", players:[{id,name,online}], online:int}`
@@ -117,7 +117,7 @@
   而不是新一轮回合。
 - `report`（v2.4）— 服务端生成的团报已为**本连接**准备好。只发给发出该 `.report html` / `.report html reveal` 的那一条连接——绝不广播、不进加入回放、不出现在任何列表里：
   `{type:"report", hash:string, name:string, size:int, mime:"text/html", variant:"player"|"reveal"}`
-  页面是一个自包含的 HTML 文件（内联 CSS，无脚本，无外部资源），存为房间的**不公开** blob；用普通的媒体 GET（`{op:"get", hash}`）拉取并校验 sha256。`variant:"reveal"` 是守秘人的剧透复盘版：它的 blob 只回应本房间守秘人密钥连接的 GET——其他连接得到 `media_not_found`，与房间里不存在的哈希完全一样。`name` 是建议文件名，按不可信处理（只保留基础文件名）。
+  页面是一个自包含的 HTML 文件（内联 CSS，无脚本，无外部资源），存为房间的**不公开** blob；用普通的媒体 GET（`{op:"get", hash}`）拉取并校验 sha256。`variant:"reveal"` 是管理员的剧透复盘版：它的 blob 只回应本房间守秘人密钥连接的 GET——其他连接得到 `media_not_found`，与房间里不存在的哈希完全一样。`name` 是建议文件名，按不可信处理（只保留基础文件名）。
   **客户端规则（规范性）：**客户端**不得**在自己的界面里渲染团报（不用 webview、不做内联 HTML 面板）——只把文件存下来，**可以**把存好的文件交给系统浏览器打开。页面内容是不可信的桌面文本；浏览器打开本地文件才是它被设计面对的沙箱，客户端自己的界面不是。
 - `pong`: `{type:"pong", t:number}`
 
@@ -142,7 +142,7 @@
 
 ## 模组 UI 面板
 
-`.lwpack` 可以携带命名 UI 面板（`contents.panels` + `ui/panels.yaml`——创作指南见 `docs/plugins.md`）；守秘人用 `.panels enable <packId>` 才把已安装包的面板准入房间（安装 ≠ 启用，与技能完全一致）。房间清单按观看者解析后经 `ui_manifest` 下发（见上文）。特权模型一句话说完：**面板以正在观看它的玩家身份行事**——入站只收到该观看者过滤后的数据，出站（`panel_intent`）只能发出该玩家自己能敲出的东西。
+`.lwpack` 可以携带命名 UI 面板（`contents.panels` + `ui/panels.yaml`——创作指南见 `docs/plugins.md`）；管理员用 `.panels enable <packId>` 才把已安装包的面板准入房间（安装 ≠ 启用，与技能完全一致）。房间清单按观看者解析后经 `ui_manifest` 下发（见上文）。特权模型一句话说完：**面板以正在观看它的玩家身份行事**——入站只收到该观看者过滤后的数据，出站（`panel_intent`）只能发出该玩家自己能敲出的东西。
 
 `UiManifestPanel`（`audience` 永不出现——已在服务端解析）：
 
@@ -202,7 +202,7 @@ MediaChannel 的传输格式：
 - Iroh：在同一连接上打开新的双向流。流以一行 JSON header 开头（`\n` 结尾）。PUT 时客户端随后按不超过 64 KiB 的块写入原始字节，服务端存好后回一行 `{op:"put_ok", hash}`（拒收则回一行 `{type:"error", code, message}`）；GET 时服务端先写一行 `{op:"get",hash,size,mime,name}` 响应 header，再按不超过 64 KiB 的块写入原始字节，出错则只回一行 `{type:"error", ...}`、无字节体。
 - WebSocket：一条二进制消息为 `uint32_be header_length` + UTF-8 JSON header + 原始字节。PUT 发送 `{op:"put", upload_id}` 加 body，成功以房间广播的 `media` / `audio_library_item` 帧为准，拒收则以标准 `error` 文本帧返回。GET 发送 `{op:"get", hash}` 且无 body；服务端回复 `{op:"get",hash,size,mime,name}` 加 body。
 
-音频控制与字节传输是分离的。上传音频文件只会创建或更新房间音频库。守秘人的命令，比如 `.bgm play <音频>`、`.ambience stop`、`.sfx <音频>` 会广播 `audio_control` 帧；TUI 客户端用同一套 GET 流程拉取字节并在本机播放。服务端自身不播放音频。
+音频控制与字节传输是分离的。上传音频文件只会创建或更新房间音频库。管理员的命令，比如 `.bgm play <音频>`、`.ambience stop`、`.sfx <音频>` 会广播 `audio_control` 帧；TUI 客户端用同一套 GET 流程拉取字节并在本机播放。服务端自身不播放音频。
 
 ## 认证与密钥
 
@@ -223,9 +223,9 @@ role = "player"  # 或 "keeper"；默认为 "player"
 
 在 `join` 时，服务器查找 `key`；未知的密钥被拒绝，返回 `error bad_key` 并关闭连接。已识别的密钥将连接绑定到 `SessionSource(platform="tui", chat_type="group", chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` —— 见 `net/keystore.py` 和附带的 `keys.example.toml`。
 
-## 管理帧（v1.1，仅守秘人）
+## 管理帧（v1.1，仅管理员）
 
-部署者（守秘人）可以在终端客户端的守秘人页面里，用**守秘人角色的密钥**在同一条连接上管理服务器。`join` 时绑在这条连接上的角色就是唯一的管理员判据，没有第二套认证。服务器只对 `keeper` 连接回答这些帧；其他连接得到 `admin_error{code:"forbidden"}`，且不会读取或修改数据。实现在 `net/admin.py`。
+部署者（房间管理员）可以在终端客户端的管理员页面里，用**守秘人角色的密钥**在同一条连接上管理服务器。`join` 时绑在这条连接上的角色就是唯一的管理员判据，没有第二套认证。服务器只对 `keeper` 连接回答这些帧；其他连接得到 `admin_error{code:"forbidden"}`，且不会读取或修改数据。实现在 `net/admin.py`。
 
 客户端 → 服务器：
 
@@ -251,11 +251,11 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_import_room", path:string, room?:string}`
 - `admin_delete_room_data` — 删除这个房间的访问密钥、按房间存的 KV 状态、文档向量和世界书向量。`backup` 默认为 `true`；启用备份时，删除仅在备份写入成功后进行：
   `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
-- `admin_reset_room` — 原地重开战役，保留密钥、绑定、在线连接和房间设置（语言、房规、已启用的技能），所以这一桌不用重新配置就能重开。不做备份，也不踢任何人（这点和 `admin_delete_room_data` 相反）。`scope` 决定清到哪一步：`"story"`（默认）只清剧情和进度（角色、模组、设定、媒体都留着）；`"chars"` 连角色一起换（模组留着）；`"all"` 全部清空（角色、模组、设定、媒体）。仅守秘人可用，且限于调用者自己的房间：
+- `admin_reset_room` — 原地重开战役，保留密钥、绑定、在线连接和房间设置（语言、房规、已启用的技能），所以这一桌不用重新配置就能重开。不做备份，也不踢任何人（这点和 `admin_delete_room_data` 相反）。`scope` 决定清到哪一步：`"story"`（默认）只清剧情和进度（角色、模组、设定、媒体都留着）；`"chars"` 连角色一起换（模组留着）；`"all"` 全部清空（角色、模组、设定、媒体）。仅管理员可用，且限于调用者自己的房间：
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
-- `admin_update_server` — 守秘人请求服务端原地自更新。不带参数：服务端跑的是运维自己配好的那条命令（`TRPG_TUI__UPDATE_COMMAND`，比如 `git pull && uv sync`），绝不执行客户端递过来的东西，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
+- `admin_update_server` — 管理员请求服务端原地自更新。不带参数：服务端跑的是运维自己配好的那条命令（`TRPG_TUI__UPDATE_COMMAND`，比如 `git pull && uv sync`），绝不执行客户端递过来的东西，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
   `{type:"admin_update_server"}`
-- `admin_list_skills` — 列出所有可发现的 KP 技能（Layer B.1），并按调用者自己的房间标记 `enabled`。可选 `locale`（`"en"`/`"zh"`，增量字段）请求按客户端自身界面语言返回技能显示名/描述（技能需带 `name-zh`/`description-zh` frontmatter），与服务端语言无关；缺省时按服务端语言返回：
+- `admin_list_skills` — 列出所有可发现的守秘人技能（Layer B.1），并按调用者自己的房间标记 `enabled`。可选 `locale`（`"en"`/`"zh"`，增量字段）请求按客户端自身界面语言返回技能显示名/描述（技能需带 `name-zh`/`description-zh` frontmatter），与服务端语言无关；缺省时按服务端语言返回：
   `{type:"admin_list_skills", locale?:string}`
 - `admin_enable_skill` — 为调用者房间启用/停用一个技能；回复一份新的 `admin_skills`（同样支持可选 `locale`）：
   `{type:"admin_enable_skill", id:string, on:boolean, locale?:string}`
@@ -273,7 +273,7 @@ role = "player"  # 或 "keeper"；默认为 "player"
 - `admin_models` — 某 provider 的实时模型列表：
   `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
 - `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`。API key 永不以明文返回。
-- `admin_keys` — 仅含调用者自己房间的 key 名单；每个条目的 key 值被遮蔽。`mint` 请求会额外在 `minted` 里把新密钥明文返回一次，供守秘人复制：
+- `admin_keys` — 仅含调用者自己房间的 key 名单；每个条目的 key 值被遮蔽。`mint` 请求会额外在 `minted` 里把新密钥明文返回一次，供管理员复制：
   `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
 - `admin_room_op` — 导出/导入/完全删除房间操作的结果：
   `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number, scope?:"story"|"chars"|"all"}`
