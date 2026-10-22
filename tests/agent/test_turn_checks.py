@@ -22,6 +22,7 @@ from agent.tools import Toolset, tool
 from agent.turn_checks import (
     MAX_ROUNDS_PER_CHECK,
     MAX_ROUNDS_PER_TURN,
+    TurnCheck,
     TurnState,
     dice_rolled,
     reply_states_a_roll,
@@ -410,6 +411,167 @@ async def test_the_gate_reads_a_prefix_the_main_loop_already_paid_for():
 
 
 # ---------------------------------------------------------------------------
+# Lost narration — a scene written beside the bookkeeping never reaches the table
+# ---------------------------------------------------------------------------
+
+# The live shape (Studio playtest, 2026-10-21, turn 14): after a failed Accounting check the
+# Keeper wrote the whole archive scene in the SAME response as its game_clock / kp_note
+# calls, then closed with three sentences. The loop discards a tool round's text, so the
+# table got the three sentences.
+_ARCHIVE_SCENE = (
+    "The ledgers are bound in cracked calfskin, their spines labelled in a clerk's cramped hand: "
+    "1919 through 1924, one volume per year, and a thinner book with no label at all. You work "
+    "through them by lamplight while the archivist pretends not to watch. The columns refuse to "
+    "settle. Figures carried from one page fail to arrive on the next; a shipment of rope is "
+    "entered twice, priced differently each time; a whole quarter of 1922 has been totalled in "
+    "pencil and then inked over in a different, heavier hand. Somewhere in here money moved and "
+    "someone covered the move, but the pattern slides away every time you think you have it, and "
+    "the unlabelled book is written in a private shorthand you cannot begin to read. By the time "
+    "the archivist coughs pointedly and reaches for the lamp, your eyes ache and your notes are a "
+    "page of crossed-out sums that prove nothing except that the books were kept by a liar."
+)
+_CLOSING = "Outside, the bells are ringing four. The archivist locks the cabinet behind you."
+_FULL_SCENE = _ARCHIVE_SCENE + "\n\n" + _CLOSING
+
+
+def _bookkeeping_round(text: str | None) -> ChatResult:
+    return ChatResult(
+        content=text,
+        tool_calls=[
+            tool_call("game_clock", action="set", value="16:00"),
+            tool_call("kp_note", action="add", category="world_changes", content="Ledgers read; 1922 cooked."),
+        ],
+    )
+
+
+async def test_a_scene_narrated_beside_the_bookkeeping_is_handed_back_and_restored():
+    """THE 2026-10-21 defect. The final no-tool round is all the table gets, so a turn
+    whose scene rode in a tool round must not end on the closing lines alone: the gate
+    hands the lost text back (the check conversation drops tool rounds, so the model could
+    not otherwise read it) and the full narration it gets is what ships."""
+    llm = FakeLLM(script=[_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(_CLOSING), assistant_text(_FULL_SCENE)])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx(), services, Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert result.reply == _FULL_SCENE
+    assert len(llm.calls) == 3, "one bookkeeping round, the short close, one re-ask"
+    corrective = llm.calls[-1][0][-1]
+    assert corrective["role"] == "user" and _ARCHIVE_SCENE in corrective["content"]
+    assert [entry["name"] for entry in result.tool_trace] == ["game_clock", "kp_note"]
+    assert all(_ARCHIVE_SCENE not in str(entry) for entry in result.tool_trace), "the trace is published; the text stays out"
+
+
+async def test_the_probe_names_the_row_that_asked():
+    """A play-test probe row that says only `round: check` cannot tell a dropped scene from
+    a forged roll; the row id rides along so the next live run can count them apart."""
+    from infra.model_call_trace import current_lane
+
+    lanes: list[dict] = []
+
+    class _LaneRecordingLLM(FakeLLM):
+        async def chat(self, messages, **kwargs):
+            lanes.append(current_lane())
+            return await super().chat(messages, **kwargs)
+
+    llm = _LaneRecordingLLM(
+        script=[_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(_CLOSING), assistant_text(_FULL_SCENE)]
+    )
+
+    await run_kp_turn(_ctx(), _services(llm), Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert [lane.get("round") for lane in lanes] == [1, 2, "check"]
+    assert lanes[-1].get("check") == "narration_lost"
+
+
+async def test_the_narration_check_asks_once_and_keeps_what_it_gets():
+    """One refusal, not a loop: a model that answers short again still ends its turn."""
+    llm = FakeLLM(script=[_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(_CLOSING), assistant_text("You leave.")])
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx(), services, Toolset(_StateProvider()), "I go through the ledgers.")
+
+    assert result.reply == "You leave."
+    assert len(llm.calls) == 3
+
+
+async def test_interim_chatter_beside_a_tool_call_costs_no_extra_round():
+    """The tool-round text the loop discards on purpose — "let me check first" — is a
+    sentence, and a final reply that carries the scene it promised is the normal turn.
+    Neither may buy a re-ask."""
+    chatter = FakeLLM(
+        script=[_bookkeeping_round("Let me note the time and the ledger finding first."), assistant_text(_CLOSING)]
+    )
+    await run_kp_turn(_ctx(), _services(chatter), Toolset(_StateProvider()), "I go through the ledgers.")
+    assert len(chatter.calls) == 2
+
+    repeated = FakeLLM(script=[_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(_FULL_SCENE)])
+    result = await run_kp_turn(_ctx(), _services(repeated), Toolset(_StateProvider()), "I go through the ledgers.")
+    assert len(repeated.calls) == 2 and result.reply == _FULL_SCENE
+
+    # POSITIVE CONTROL: the same harness, the scene dropped — the check is live, so the two
+    # passes above are about the sizes, not a missing row.
+    dropped = FakeLLM(script=[_bookkeeping_round(_ARCHIVE_SCENE), assistant_text(_CLOSING), assistant_text(_FULL_SCENE)])
+    await run_kp_turn(_ctx(), _services(dropped), Toolset(_StateProvider()), "I go through the ledgers.")
+    assert len(dropped.calls) == 3
+
+
+def test_the_narration_check_compares_sizes_in_both_languages():
+    """Sizes are the chronicle's token estimate, so one threshold is the same amount of
+    prose in Chinese and English — a character count would ask four times as much English."""
+    check = {c.condition: c for c in turn_checks_for(None)}["narration_lost"]
+
+    def holds(reply: str, *texts: str) -> bool:
+        return check.holds(TurnState(reply=reply, tool_trace=[], tool_round_texts=texts))
+
+    zh_scene = (
+        "账本用龟裂的小牛皮装订，书脊上是书记员挤在一起的字迹：一九一九到一九二四，一年一册，另有一本更薄的、没有标签。"
+        "你借着灯光一页页翻过去，管理员装作没在看你。数字怎么也对不上：上一页结转的金额到下一页就不见了；同一批麻绳记了两次，"
+        "价钱还不一样；一九二二年整整一个季度先用铅笔合计，又被另一只更重的手用墨水盖掉。钱在这里动过，有人替它遮掩过，"
+        "可每当你以为抓住了规律，它就又滑走了。"
+    )
+    assert holds("你合上账本，钟敲了四下。", zh_scene), "a Chinese scene of ~200 characters is narration-sized"
+    assert holds(_CLOSING, _ARCHIVE_SCENE)
+
+    assert not holds("Ok.", "Let me check the ledger rules first."), "chatter is under the floor however short the reply"
+    assert not holds("好。", "我先查一下账本相关的设定，再推进时间。")
+    assert not holds("Ok.", *["Checking the next ledger before I narrate anything."] * 8), "the longest round counts, not the sum"
+    assert not holds(_ARCHIVE_SCENE[: len(_ARCHIVE_SCENE) * 3 // 5], _ARCHIVE_SCENE), "a reply that kept most of it stands"
+    assert not holds(""), "no tool round, nothing lost"
+
+
+async def test_a_check_round_s_own_text_counts_for_the_rows_after_it(monkeypatch):
+    """A check round that calls tools is a tool round too: its text is not shown either.
+    A pack may order the table so a row runs after narration_lost would have; the scene a
+    HUD re-ask writes beside its kp_note/game_clock calls is then still caught."""
+    table = (
+        TurnCheck(id="stale_scene_hud", condition="stale_scene_hud", instruction_key="loop.check.stale_scene_hud"),
+        TurnCheck(id="narration_lost", condition="narration_lost", instruction_key="loop.check.narration_lost", max_rounds=1),
+    )
+    monkeypatch.setattr("agent.loop.turn_checks_for", lambda pack: table)
+    llm = FakeLLM(
+        script=[
+            assistant_text(_TITLE_REPLY),
+            ChatResult(
+                content=_ARCHIVE_SCENE,
+                tool_calls=[
+                    tool_call("kp_note", action="set", category="current_scene", content="Pier 5"),
+                    tool_call("game_clock", action="set", value="22:15"),
+                ],
+            ),
+            assistant_text("The HUD agrees now."),
+            assistant_text(_FULL_SCENE),
+        ]
+    )
+    services = _services(llm)
+
+    result = await run_kp_turn(_ctx(), services, Toolset(_StateProvider()), "We head to the pier.")
+
+    assert result.reply == _FULL_SCENE
+    assert _ARCHIVE_SCENE in llm.calls[-1][0][-1]["content"]
+
+
+# ---------------------------------------------------------------------------
 # The table is data, and the engine owns its ceiling
 # ---------------------------------------------------------------------------
 
@@ -469,6 +631,7 @@ def test_a_pack_may_drop_a_check_but_not_invent_a_condition():
 
 def test_a_pack_without_a_table_gets_the_engine_default():
     assert [check.condition for check in turn_checks_for(None)] == [
+        "narration_lost",
         "dice_forged",
         "dice_contradicts",
         "stale_scene_hud",

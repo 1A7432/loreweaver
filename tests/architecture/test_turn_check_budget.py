@@ -33,7 +33,21 @@ def test_the_global_ceiling_matches_what_the_budget_note_assumes():
 
 
 def test_the_engine_default_table_fits_inside_the_ceiling():
-    assert sum(check.max_rounds for check in DEFAULT_TURN_CHECKS) <= MAX_ROUNDS_PER_TURN
+    """The default table spends from the ceiling; it never raises it.
+
+    Until 2026-10-21 its caps summed to exactly the ceiling. The narration check added one
+    round without moving the ceiling — that IS the budget — so the caps now sum one past it,
+    and the runner's own counter is what holds. Only a turn on which every row fires reaches
+    the ceiling, and then the cut falls on the last row alone, at no earlier than its first
+    round. That is why stale_scene_hud is last: its first round is the bookkeeping call, so
+    a cut run has still synced the HUD and keeps the reply that drew the heading. Every row
+    that can leave a wrong number or a dropped scene on the table runs in full.
+    """
+    caps = [check.max_rounds for check in DEFAULT_TURN_CHECKS]
+
+    assert sum(caps[:-1]) <= MAX_ROUNDS_PER_TURN, "every row but the last runs in full"
+    assert sum(caps) - MAX_ROUNDS_PER_TURN < caps[-1], "the last row keeps at least its first round"
+    assert DEFAULT_TURN_CHECKS[-1].condition == "stale_scene_hud"
 
 
 def test_every_default_check_names_a_condition_that_exists():

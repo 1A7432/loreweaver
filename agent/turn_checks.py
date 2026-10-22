@@ -20,6 +20,13 @@ What is left here is only what can be decided WITHOUT reading the fiction:
   targets and faces this turn actually produced.
 - **stale HUD** — the reply drew a scene/time heading but the turn never touched the
   deterministic scene/clock state the HUD reads.
+- **lost narration** — an earlier tool round of this turn carried narration-sized text and
+  the final reply is a fraction of it. The loop discards a tool round's text on purpose
+  (interim chatter like "let me check the lore" stays off the table), so a model that
+  narrates the scene TOGETHER with its bookkeeping calls and then closes with a few
+  sentences has handed the table only those sentences — while believing, from its own
+  context, that the scene was delivered. Measured, never read: the condition compares
+  sizes, and the corrective hands the lost text back for the model to judge.
 
 Both dice checks exist because of one contract: **narration carries no roll numbers.**
 The dice frames already carry them (`gateway/render_chat.py`, `clients/tui`), so a number
@@ -54,6 +61,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.chronicle import estimate_tokens
 from core.rulepacks import RulePack, all_subsystem_tool_names
 
 logger = logging.getLogger(__name__)
@@ -274,6 +282,11 @@ class TurnState:
 
     reply: str
     tool_trace: list[dict]
+    # The text each tool round of this turn came back with, in order ("" for none). It never
+    # reaches the table by design; it lives here in memory only — never in the tool trace,
+    # which leaves the loop for the transport and the probe — so the narration check can
+    # tell when a scene went with it.
+    tool_round_texts: tuple[str, ...] = ()
 
 
 def _dice_forged(state: TurnState) -> bool:
@@ -298,6 +311,36 @@ def _stale_scene_hud(state: TurnState) -> bool:
     return bool(scene_title_lines(state.reply)) and not state_bookkeeping_done(state.tool_trace)
 
 
+# ---------------------------------------------------------------------------
+# The lost-narration condition
+# ---------------------------------------------------------------------------
+
+# Sizes are `core.chronicle.estimate_tokens` (a CJK character ~1 token, latin prose ~4
+# characters per token), so one threshold means the same amount of prose in zh and en —
+# a character count would demand four times as much English as Chinese.
+#
+# A tool round's text is narration-sized from here: ~600 characters of English, ~150 of
+# Chinese. Interim chatter ("let me check the ledger first") is a sentence; a scene is
+# paragraphs.
+LOST_NARRATION_MIN_TOKENS = 150
+# ...and the final reply has dropped it when it is under this fraction of that round. A
+# reply that carries the scene is at least as long as the scene; one that is under half
+# of it is, at best, the scene's last few sentences.
+LOST_NARRATION_KEPT_FRACTION = 0.5
+
+
+def interim_texts(state: TurnState) -> list[str]:
+    """The non-empty text this turn's tool rounds carried, in order."""
+    return [text.strip() for text in state.tool_round_texts if text and text.strip()]
+
+
+def _narration_lost(state: TurnState) -> bool:
+    longest = max((estimate_tokens(text) for text in interim_texts(state)), default=0)
+    if longest < LOST_NARRATION_MIN_TOKENS:
+        return False
+    return estimate_tokens((state.reply or "").strip()) < longest * LOST_NARRATION_KEPT_FRACTION
+
+
 # The whole condition vocabulary. Conditions are CODE (they are structural predicates over
 # the turn's real tool trace), so a pack chooses among them, reorders them, rewords their
 # instruction and shortens their cap — it never authors a new one. That boundary is what
@@ -306,6 +349,7 @@ CONDITIONS: dict[str, Callable[[TurnState], bool]] = {
     "dice_forged": _dice_forged,
     "dice_contradicts": _dice_contradicts,
     "stale_scene_hud": _stale_scene_hud,
+    "narration_lost": _narration_lost,
 }
 
 
@@ -332,7 +376,15 @@ class TurnCheck:
         return i18n.t(self.instruction_key, **fields)
 
 
+# Order is part of the table: the runner verifies each row once, top to bottom, so the row
+# that REPLACES the whole reply (narration_lost) goes first and the dice and HUD rows read
+# its result, not the short reply it replaced. Its round comes out of the same
+# `MAX_ROUNDS_PER_TURN`; why the caps may now sum past it, and why that puts
+# stale_scene_hud last, is pinned in `tests/architecture/test_turn_check_budget.py`.
 DEFAULT_TURN_CHECKS: tuple[TurnCheck, ...] = (
+    TurnCheck(
+        id="narration_lost", condition="narration_lost", instruction_key="loop.check.narration_lost", max_rounds=1
+    ),
     TurnCheck(id="dice_forged", condition="dice_forged", instruction_key="loop.check.dice_forged", max_rounds=2),
     TurnCheck(
         id="dice_contradicts", condition="dice_contradicts", instruction_key="loop.check.dice_contradicts", max_rounds=1

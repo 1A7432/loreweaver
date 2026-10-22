@@ -1,0 +1,36 @@
+# Implemented: a scene written beside the bookkeeping is handed back, not dropped
+
+- **Problem:** only the last round with no tool calls reaches the table; a tool round's
+  text is discarded on purpose. On 2026-10-21 (Studio play-test, Keeper
+  `claude-opus-5-5`, effort medium, Anthropic Messages API) turn 14 ran 7 Keeper rounds:
+  round 6 returned 2,034 completion tokens TOGETHER WITH `game_clock set` and
+  `kp_note add world_changes` (the model wrote the whole archive scene after a failed
+  Accounting check, then did its bookkeeping in the same response), and round 7 wrote
+  ~430 tokens, three closing sentences, because the model's own context showed the scene
+  as written. The players got three sentences for a 164-second turn. Nothing in the
+  prompt told the model which of its messages the table sees.
+- **Decision:** two halves. (1) The engine fact, once, as the first system guideline:
+  only the last message without tool calls reaches the players; finish every tool call,
+  state updates included, then narrate. (2) A structural end-of-turn row,
+  `narration_lost`, first in the default table: when a tool round of this turn carried
+  at least 150 estimated tokens of text (`core.chronicle.estimate_tokens`: ~600
+  characters of English, ~150 of Chinese) and the final reply is under half of the
+  longest such round, the turn is refused once (`max_rounds: 1`) with a corrective that
+  quotes the lost text back (the check conversation drops tool rounds, so the model
+  could not read it otherwise) and asks for the complete narration, or the same reply if
+  that text was only working notes. The round comes out of the existing
+  `MAX_ROUNDS_PER_TURN` (5); a pack may reword, reorder or disable the row like any
+  other. The tool-round texts live in memory only, never in the published tool trace.
+- **Reason:** the prompt half alone is a hope, and on the first-party API Opus 5.5 may
+  return text-between-tools as thinking with empty text, so the check cannot see every
+  case; the check half alone pays a round for every model that never learned the fact.
+  Interim text still never reaches the table: "let me check the lore" chatter is the
+  reason it is discarded, and streaming it would put that chatter in front of players.
+  The default caps now sum to 6 against the ceiling of 5, so only a turn on which every
+  row fires reaches it, and the cut lands on the last row, `stale_scene_hud`, after its
+  bookkeeping round.
+- **Rule home:** `agent/turn_checks.py` (module docstring, the condition and its
+  thresholds, the table order); `agent/loop.py` (THE MAP step 7, `_check_fields`);
+  `locales/*/prompt.json` `prompt.system.guidelines`;
+  `tests/architecture/test_turn_check_budget.py` (why the caps may sum past the ceiling).
+- **Date:** 2026-10-21.
