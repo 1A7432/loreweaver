@@ -398,17 +398,27 @@ async def _publish(
     ctx: AgentCtx,
     blocks: list[dict[str, Any]],
     cues: list[tuple[Any, str]],
+    *,
+    anchor: str | None = None,
 ) -> None:
-    """Broadcast one beat's staging: `ui` frames first (the visual), then audio."""
+    """Broadcast one beat's staging: `ui` frames first (the visual), then audio.
+
+    The `ui` frames also join the join-replay lane at ``anchor`` (see `run_director`),
+    so a member who reconnects sees the picture and the handout where the table saw
+    them. Audio is not laned: the room's persisted audio state replays on join already.
+    """
     from gateway.audio import build_audio_control
     from gateway.hub import Event
+    from gateway.turn import record_turn_events
     from gateway.ui_media import filter_ui_media
 
-    if blocks:
+    if blocks and hub is not None:
         frames = sanitize_ui_emissions([{"blocks": blocks, "panel": "inline"}])
-        for frame in await filter_ui_media(services, ctx.chat_key, frames):
-            if hub is not None:
-                await hub.publish(ctx.chat_key, Event.ui(frame))
+        staged = [Event.ui(frame) for frame in await filter_ui_media(services, ctx.chat_key, frames)]
+        for event in staged:
+            await hub.publish(ctx.chat_key, event)
+        if staged and anchor is not None:
+            await record_turn_events(services, ctx.chat_key, staged, anchor=anchor)
     for cue, action in cues:
         try:
             control, state = await build_audio_control(
@@ -436,11 +446,18 @@ async def run_director(
     *,
     beat: str,
     hub: RoomHub | None = None,
+    anchor: str | None = None,
 ) -> bool:
     """Stage ONE beat. Returns whether anything was published. Never raises.
 
     Called fire-and-forget after the reply has already streamed, so a slow image or a
     dead provider costs the table nothing.
+
+    ``anchor`` is the history message the beat's own turn ended on, handed down from
+    where the pass was SCHEDULED (`agent.scribe_coord.ScribeEpoch.transcript_leaf`):
+    the staging's place in the join replay. It is never derived here — this runs
+    outside the turn lock, often after the next turn has already written its player
+    line. ``None`` shows the staging live only.
     """
     settings = services.settings.director
     if not settings.enabled or beat not in BEATS or not reply_text.strip():
@@ -517,7 +534,7 @@ async def run_director(
         if entry is not None and action in ("play", "stop"):
             cues.append((entry, action))
 
-    await _publish(hub, services, ctx, blocks, cues)
+    await _publish(hub, services, ctx, blocks, cues, anchor=anchor)
 
     # 慢菜先备: warm likely-next subjects AFTER this beat is on screen, so the latency
     # lands in the quiet turns instead of in front of a player.

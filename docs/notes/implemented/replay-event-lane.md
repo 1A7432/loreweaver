@@ -30,4 +30,5 @@
   have swallowed it), with a deduped final's held deltas dropped alongside it.
 - **Rule home:** `gateway/turn.py::record_turn_events` / `_emit_tool_event`,
   `agent/loop.py` (write timing), `agent/history.py`, `net/session.py::_replay_history`.
-- **Date:** 2026-08-18.
+- **Date:** 2026-08-18. Extended 2026-10-21 to inline `ui` frames and the late
+  Director writer (`replay-inline-ui-and-speaker.md`).

@@ -67,7 +67,11 @@ names where it bit us; the fix commit is the proof it was paid for.
    chronicle counter, never the player turn's `result.turn` (companion
    sub-turns have already photographed the later indexes) — and stand down
    when that counter has moved past the turn the pass was scheduled on,
-   because a newer turn owns that boundary. `CancelledError` is a
+   because a newer turn owns that boundary. Anything the pass shows the table
+   is placed by what was captured at scheduling, too: the Stage Director's
+   staging anchors in the join-replay lane at `ScribeEpoch.transcript_leaf`,
+   because the leaf at publish time is the next turn's player line whenever
+   the pass runs late. `CancelledError` is a
    `BaseException`: `except Exception` never sees it, so a cancel cannot be
    logged as a bookkeeping failure and an `except asyncio.CancelledError:
    raise` beside one is dead code. Room delete and `.reset all` drop the
