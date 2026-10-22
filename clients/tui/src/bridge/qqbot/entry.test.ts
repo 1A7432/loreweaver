@@ -325,7 +325,7 @@ describe("qqbot bridge entry", () => {
   test(
     "group @-message mints a seat; observer narrative is passive then active; unbound C2C is ignored; unknown GROUP_ADD_ROBOT is ignored; stop tears down",
     async () => {
-    const { handle, iroh, gw, rest, clock, logs, observerKey } = await startHarness()
+    const { handle, iroh, gw, rest, transport, clock, logs, observerKey } = await startHarness()
     try {
       expect(logs.some((line) => line.includes(SECRET))).toBe(false)
       expect(logs.some((line) => /claim code: [A-Z2-9]{8}/.test(line))).toBe(true)
@@ -363,8 +363,8 @@ describe("qqbot bridge entry", () => {
           format: "plain",
         })}\n`,
       )
-      await settle(WINDOW_MS + 150)
-      await waitFor(() => messageCalls(rest).some((call) => call.path.includes("/groups/")))
+      // The coalescer holds the line for its real WINDOW_MS window; wait for the POST itself.
+      await waitFor(() => messageCalls(rest).some((call) => call.path.includes("/groups/")), WINDOW_MS + 8000)
       const passive = messageCalls(rest).filter((call) => call.path.includes(`/groups/${SAMPLE_GROUP_OPENID}/messages`))
       expect(passive.length).toBeGreaterThanOrEqual(1)
       const first = passive[0]!.body
@@ -373,8 +373,15 @@ describe("qqbot bridge entry", () => {
       expect(JSON.stringify(first)).toContain("The door opens.")
 
       clock.advance(GROUP_WINDOW_MS + 1_000)
+      // The bridge's own handler runs before this later subscriber, so once it has seen the
+      // switch event the group is active; only then may the next narrative be posted.
+      let switchedOn = false
+      const offSwitch = transport.onEvent((event) => {
+        if (event.type === "groupMsgReceive") switchedOn = true
+      })
       gw.sendDispatch(dispatch("GROUP_MSG_RECEIVE", groupMsgReceive({ timestamp: "" }), { id: "evt-on", s: 3 }))
-      await settle(20)
+      await waitFor(() => switchedOn)
+      offSwitch()
       observer.stream.push(
         `${JSON.stringify({
           type: FrameType.Narrative,
@@ -384,11 +391,12 @@ describe("qqbot bridge entry", () => {
           format: "plain",
         })}\n`,
       )
-      await settle(WINDOW_MS + 150)
-      await waitFor(() =>
-        messageCalls(rest).some(
-          (call) => call.path.includes("/groups/") && JSON.stringify(call.body).includes("A lantern flickers."),
-        ),
+      await waitFor(
+        () =>
+          messageCalls(rest).some(
+            (call) => call.path.includes("/groups/") && JSON.stringify(call.body).includes("A lantern flickers."),
+          ),
+        WINDOW_MS + 8000,
       )
       const active = messageCalls(rest).find((call) => JSON.stringify(call.body).includes("A lantern flickers."))!
       expect(active.body.msg_id).toBeUndefined()
@@ -419,7 +427,7 @@ describe("qqbot bridge entry", () => {
           s: 5,
         }),
       )
-      await settle(40)
+      await waitFor(() => logs.some((line) => line.includes("qqbot.group.unknown UNKNOWN-GROUP-OPENID")))
       expect(logs.some((line) => line.includes("qqbot.group.unknown UNKNOWN-GROUP-OPENID"))).toBe(true)
       expect(logs.some((line) => line.includes(tt("en", "bridge.qqbot.unknownGroup", { group: "UNKNOWN-GROUP-OPENID" })))).toBe(
         true,
@@ -505,7 +513,6 @@ describe("qqbot bridge entry", () => {
       await ungate(iroh, keeperJoin.key, "keeper")
 
       keeperJoin.stream.push(`${JSON.stringify({ type: FrameType.System, level: "info", text: "secret lore" })}\n`)
-      await settle(200)
       await waitFor(() => messageCalls(rest).some((call) => JSON.stringify(call.body).includes("secret lore")))
       const loreCalls = messageCalls(rest).filter((call) => JSON.stringify(call.body).includes("secret lore"))
       expect(loreCalls.some((call) => call.path.includes(`/users/${ADMIN_USER_OPENID}/messages`))).toBe(true)
@@ -733,7 +740,11 @@ describe("qqbot bridge entry", () => {
     try {
       gw.sendDispatch(dispatch("GROUP_DEL_ROBOT", groupAddRobot({ group_openid: "LEFT-GROUP" }), { id: "evt-left", s: 2 }))
       gw.sendDispatch(dispatch("FRIEND_ADD", friendAdd({ openid: "U-NEW" }), { id: "evt-friend", s: 3 }))
-      await settle(40)
+      await waitFor(
+        () =>
+          logs.some((line) => line.includes("qqbot.group.left LEFT-GROUP")) &&
+          logs.some((line) => line.includes("qqbot.friend.add U-NEW")),
+      )
       expect(logs.some((line) => line.includes("qqbot.group.left LEFT-GROUP"))).toBe(true)
       expect(logs.some((line) => line.includes("qqbot.friend.add U-NEW"))).toBe(true)
     } finally {

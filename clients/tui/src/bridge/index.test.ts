@@ -1052,10 +1052,10 @@ describe("QQ bridge entry", () => {
   test("OneBot not up yet at startup (NapCat waiting for its QR login): the bridge waits, then starts", async () => {
     const iroh = createMockIroh()
     const socket = new AckSocket()
+    // NapCat comes up only once the bridge has given up on its first connect and said it is
+    // waiting: sequenced on that log line, not on a wall-clock guess at when it lands.
+    const waiting = tt("en", "bridge.cli.onebotWaiting")
     let up = false
-    setTimeout(() => {
-      up = true
-    }, 2_300)
     const logs: string[] = []
     const handle = await runBridge(baseConfig(await tmpState(), { locale: "en" }), {
       loadIroh: iroh.loadIroh,
@@ -1064,10 +1064,13 @@ describe("QQ bridge entry", () => {
         return socket
       },
       installSignals: false,
-      onLog: (text) => logs.push(text),
+      onLog: (text) => {
+        logs.push(text)
+        if (text === waiting) up = true
+      },
       startupRetryMs: 50,
     })
-    expect(logs.filter((line) => line === tt("en", "bridge.cli.onebotWaiting"))).toHaveLength(1)
+    expect(logs.filter((line) => line === waiting)).toHaveLength(1)
     expect(logs).toContain(tt("en", "bridge.cli.ready", { groups: "99" }))
     await handle.stop()
   }, 15_000)
