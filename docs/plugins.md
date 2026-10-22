@@ -12,7 +12,7 @@
 > | Layer | State |
 > |---|---|
 > | **A — data plugins** | rule systems, cards, lorebooks, module variables. `core/rulepacks.py` is a discovery-based data loader; since M16 a rulepack also owns **the tiers a check lands on, the sheet shape, the subsystems, the dot-commands it answers to and what to tell the Keeper**, so coc7/dnd5e/wod are ordinary packs and deleting a file removes the system |
-> | **B.1 — KP skills** | `SKILL.md` loader, prompt-section binding, per-room `.skill enable`, mature-mode content gate |
+> | **B.1 — Keeper skills** | `SKILL.md` loader, prompt-section binding, per-room `.skill enable`, mature-mode content gate |
 > | **B.2 — `allowed-tools`** | extra tools that stay hidden until a skill asks for them (`@tool(gated=…)`); `romance-relationships` ships on it |
 > | **B.3 — self-extension forges** | `generate_skill` / `generate_rulepack` / `generate_module`, each invisible until its forge skill is enabled. The rulepack forge writes the M16 `resolution:` / `subsystems:` / `expertise:` fields |
 > | **B.4 — TUI management** | describe→generate on the KP-skills screen |
@@ -40,7 +40,7 @@ migrate with minimal friction. Concretely:
 |---|---|---|
 | Character cards | **SillyTavern Character Card V2/V3** (`chara_card_v2` / `chara_card_v3`) | Huge existing library; Loreweaver already parses it (`core/charcard.py`) |
 | World info / lore | **SillyTavern World Info / lorebook** (`character_book` entries) | Cards embed it; already mapped to `core/worldbook.py` |
-| KP skills | **Claude Code `SKILL.md`** (YAML frontmatter + Markdown + `allowed-tools`) | Familiar to agent-tooling authors; no new schema to learn |
+| Keeper skills | **Claude Code `SKILL.md`** (YAML frontmatter + Markdown + `allowed-tools`) | Familiar to agent-tooling authors; no new schema to learn |
 | Rule systems | Loreweaver **rulepack YAML** (the one place with no external standard) | TTRPG dice/skill systems have no ST/CC analogue; documented below |
 | LLM providers | OpenAI-compatible + a `PRESETS` entry (already data) | Standard OpenAI API surface |
 
@@ -361,7 +361,7 @@ pattern.
 
 ---
 
-## Layer B — KP skills (Claude Code `SKILL.md`)
+## Layer B — Keeper skills (Claude Code `SKILL.md`)
 
 A **skill** packages a *play style* — combat refereeing, mystery clue-tracking,
 romance/relationship dynamics, a horror tone — as a declarative bundle a room admin
@@ -699,7 +699,7 @@ so this costs nothing until an author asks for it.
   <ref>` in the room. Same refs, same install function (`gateway/pack_install.py`
   serves both doors). On a remote table install IS enable, and enable means
   PLAYABLE: the command throws every switch the pack ships — its panels and
-  presentation kit, its KP skills, and its world card when the pack ships exactly
+  presentation kit, its Keeper skills, and its world card when the pack ships exactly
   one (which also pins the pack's character system). The terminal's per-item
   confirmation has no honest wire equivalent and an admin who typed the ref has
   already made the trust decision, so the reply carries the trust card and one
@@ -864,7 +864,7 @@ actually shipped as, for anyone reading the code.)*
    (engine-generic behavior templates, pack-parameterized), `commands:` (the dot-commands it answers to,
    which materializes the room's KP toolset — a wod room simply has no `sanity_check`),
    `expertise:` and `labels:`. `tests/architecture/` pins `agent/` to zero rule-system tokens.
-2. **Layer B.1 — KP skills** — **landed**: `SKILL.md` loader (`core/skills.py`),
+2. **Layer B.1 — Keeper skills** — **landed**: `SKILL.md` loader (`core/skills.py`),
    prompt-section binding (`agent/prompt_builder.py`), per-room enable (`.skill`
    command), and the mature/explicit content gate that lifts the output censor;
    `mature-mode` shipped as the first built-in skill.

@@ -107,8 +107,8 @@ loreweaver
   <img src="assets/tui-character-zh.png" width="49%" alt="建卡：四条路，手填模式实时校验点数预算" />
 </p>
 <p align="center">
-  <img src="assets/tui-menu-zh.png" width="49%" alt="管理员主菜单：房间与邀请、导入模组、规则系统、KP 技能、模型配置" />
-  <img src="assets/tui-skills-zh.png" width="49%" alt="KP 技能：开关玩法包，或描述一句话当场生成一个新的" />
+  <img src="assets/tui-menu-zh.png" width="49%" alt="管理员主菜单：房间与邀请、导入模组、规则系统、守秘人技能、模型配置" />
+  <img src="assets/tui-skills-zh.png" width="49%" alt="守秘人技能：开关玩法包，或描述一句话当场生成一个新的" />
 </p>
 
 ---

@@ -9,10 +9,10 @@
 > | 层 | 状态 |
 > |---|---|
 > | **A——数据插件** | 规则系统、卡、世界书、模组变量。`core/rulepacks.py` 是基于发现的数据加载器；M16 之后，一个规则包还拥有自己的**检定档位、卡表形状、子系统、命令写法和守秘人须知**，所以 coc7/dnd5e/wod 就是普通的包，删掉文件就删掉了系统 |
-> | **B.1——KP 技能** | `SKILL.md` 加载器、提示段绑定、按房间 `.skill enable`、成人内容开关 |
+> | **B.1——守秘人技能** | `SKILL.md` 加载器、提示段绑定、按房间 `.skill enable`、成人内容开关 |
 > | **B.2——`allowed-tools`** | `@tool(gated=…)`：技能没要就看不见的额外工具；`romance-relationships` 跑在这套上 |
 > | **B.3——自扩展 forge** | `generate_skill` / `generate_rulepack` / `generate_module` 三个工具，各自在对应的 forge 技能启用之前完全不可见。规则包 forge 说的是 M16 的 `resolution:` / `subsystems:` / `expertise:` 词汇 |
-> | **B.4——TUI 管理页** | KP 技能页支持“描述一句话→生成” |
+> | **B.4——TUI 管理页** | 守秘人技能页支持“描述一句话→生成” |
 > | **C.1——事件钩子** | 沙箱 `hooks.js` 挂在回合生命周期上，带声明式 UI 输出 |
 > | **C.2——Python 入口点插件** | **推迟**——唯一会以服务端权限运行的一层 |
 > | **`.lwpack` 打包** | 清单 v2：完整文件清册、按真实载荷检测的卡类型、带迁移槽的 schema 版本；`gh:` release 分发 |
@@ -32,7 +32,7 @@ Loreweaver 是一个自托管的、世界与故事优先的 AI 守秘人，不�
 |---|---|---|
 | 人物卡 | **SillyTavern Character Card V2/V3** | 现成的素材库巨大，`core/charcard.py` 已经能解析 |
 | 世界信息 / 设定 | **SillyTavern World Info / lorebook** | 卡里就内嵌它，已映射到 `core/worldbook.py` |
-| KP 技能 | **Claude Code `SKILL.md`**（YAML frontmatter + Markdown + `allowed-tools`） | agent 工具作者熟悉，不用学新 schema |
+| 守秘人技能 | **Claude Code `SKILL.md`**（YAML frontmatter + Markdown + `allowed-tools`） | agent 工具作者熟悉，不用学新 schema |
 | 规则系统 | Loreweaver **规则包 YAML**（唯一没有外部标准的地方） | TTRPG 的骰子／技能系统没有对应的现成标准，所以下面完整写出来 |
 | LLM provider | OpenAI 兼容 + 一条 `PRESETS`（本来就是数据） | 标准 OpenAI API 面 |
 
@@ -169,7 +169,7 @@ provider 预设（`infra/providers.py:PRESETS`）和本地化包（`locales/{lan
 
 ---
 
-## B 层——KP 技能（Claude Code `SKILL.md`）
+## B 层——守秘人技能（Claude Code `SKILL.md`）
 
 一个**技能**把一种*玩法*——战斗裁判、谜案线索追踪、恋爱／关系动态、恐怖基调——打包成管理员按房间启用的声明式包。我们**在形状上原样采用 Claude Code 技能格式**，让技能作者复用已有经验：
 
@@ -343,7 +343,7 @@ audio:                       # 导演可以调用的音频提示
 
 - **发现目录**：仓库内（`rulepacks/`、`skills/`）和用户数据目录（`data_dir/skills`、`data_dir/rulepacks`），所以一个插件不必住在检出目录里。内置 id 永远赢过同名的用户目录文件。
 - **一个可发布单元**：一整个作品——技能 + 规则包 + 卡 + 世界书 + 媒体素材——作为**一个自包含的 `.lwpack`** 一起走：一个带根 `pack.yaml` 清单的 zip（`core/pack.py`）。作者跑 `python -m app --pack <源目录>`，用户跑 `python -m app --install <ref> [--yes]`。没有“先装 X 插件”的说明，也没有素材要挂图床。
-- **也能从牌桌上装**：手上没有那台机器 shell 的管理员，在房间里发 `.pack install <ref>`。引用形式相同，安装函数也是同一个（`gateway/pack_install.py` 同时供两道门）。在远程桌上，装上就等于启用，而且启用意味着**能直接开打**：这条命令会把包带来的开关全推上去——面板与演出包、KP 技能，以及包里恰好只有一张世界卡时的那张卡（顺带把包的建卡系统钉上）。终端里那套逐项确认在线上没有诚实的等价物，而管理员既然把引用打了出来，信任决定就已经做过了——所以回执给的是信任卡加一行明白的风险提示，而不是一张待办清单。唯一不替人做的决定是**哪个模组**：一个包带好几张世界卡时，那是岔路不是确认，回执会把每一张写成能载入它的 `.import <ref> world`。当然是管理员限定：它要往服务器数据目录里写。
+- **也能从牌桌上装**：手上没有那台机器 shell 的管理员，在房间里发 `.pack install <ref>`。引用形式相同，安装函数也是同一个（`gateway/pack_install.py` 同时供两道门）。在远程桌上，装上就等于启用，而且启用意味着**能直接开打**：这条命令会把包带来的开关全推上去——面板与演出包、守秘人技能，以及包里恰好只有一张世界卡时的那张卡（顺带把包的建卡系统钉上）。终端里那套逐项确认在线上没有诚实的等价物，而管理员既然把引用打了出来，信任决定就已经做过了——所以回执给的是信任卡加一行明白的风险提示，而不是一张待办清单。唯一不替人做的决定是**哪个模组**：一个包带好几张世界卡时，那是岔路不是确认，回执会把每一张写成能载入它的 `.import <ref> world`。当然是管理员限定：它要往服务器数据目录里写。
 - **Git 就是仓库**：一个安装引用可以是本地路径、`https://` 直链，或者 `gh:owner/repo[@tag]`——由 `infra/pack_source.py` 通过 GitHub API 解析到那个 release 的 `*.lwpack` asset（`@tag` 钉住一个 release，不写就是最新）。API 调用默认匿名，设了 `GITHUB_TOKEN` / `GH_TOKEN` 才带凭据，用来解掉共享机器上按 IP 的匿名限流（撞上是 403）。凭据的限域靠两条规则而不是一次主机名比对：它只跟着引擎自己拼出来的那个 release 元数据请求走（调用方自己写的 `https://api.github.com/...` 引用一律匿名取，所以管理员的 `.pack install` 花不掉服务器的 PAT），并且跨主机重定向时会被摘掉（`urllib` 默认会把请求头原样带过去，而下载 asset 本来就要跳到别的主机）。这里刻意没有中心化包仓库。
 - **装上不等于启用**（CLI 那一层）：从 shell 跑 `--install` 只落内容、不打开任何开关——技能落进用户技能目录、规则包落进用户规则包目录，立刻可发现，但房间仍然要自己点头（`.skill enable <id>`）。规则包可被发现，但不会自动成为本房间的规则系统：要在该系统上建卡（包需声明 `make_char` 命令），或在导入时指定系统。房间内的 `.pack install` 是上面那条刻意的例外：管理员是往**某个房间**里装的，这一下同时说清了包和房间，所以就地启用。卡、世界书和素材落到 `data_dir/packs/<id>@<version>/`，供已有的房间内导入流程（`.import`、`.module`）消费；重装同一个 `id@version` 会整个替换那个包目录，绝不合并。运行中的服务器能认到别的进程装下的包（桌面客户端就是外挂 CLI 装的），不用重启：技能与规则包的发现会复核目录签名（`core.skills` / `core.rulepacks`），所以新 id 与就地升级的同名 id 都解析得到，`.skill list` 也看得见。
 - **信任卡，不是关卡**：安装前 CLI 打印这个包自动生成的 `trust` 摘要——技能／规则包／卡／世界书数量、是否带沙箱 hooks JS 或 EJS 模板、素材有多少 MB——然后请求确认（`--yes` 跳过；非交互运行必须显式给）。和完整 EJS 同一个立场：运营者的机器，运营者的知情决定。

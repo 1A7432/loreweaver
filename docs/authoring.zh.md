@@ -488,7 +488,7 @@ C 断锚 = 信物满 3。玩家硬闯缺门结局时，在 fiction 内让门本�
 
 ```console
 $ .skill enable yingchao-zhuchi
-Enabled KP skill: yingchao-zhuchi
+Enabled Keeper skill: yingchao-zhuchi
 ```
 
 **写程序，别写散文。** 上面那份里最好的一句是“切换时给一句环境暗示，不解释规则”——它告诉守秘人在某个具体时刻做什么。气氛属于设定条目，这份文件是操作手册。

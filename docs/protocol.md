@@ -614,7 +614,7 @@ Client → server:
   everything (characters, module, lore, media). Keeper-gated and confined to the
   caller's own room:
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
-- `admin_list_skills` — list every discoverable KP skill (Layer B.1), marked
+- `admin_list_skills` — list every discoverable Keeper skill (Layer B.1), marked
   `enabled` per the CALLER's own room. The optional `locale` (`"en"`/`"zh"`,
   additive) asks for skill display names/descriptions localized to the CLIENT's
   own UI language (for skills shipping `name-zh`/`description-zh` frontmatter),

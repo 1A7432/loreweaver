@@ -602,7 +602,7 @@ Optional frontmatter: `allowed-tools` (gates the room's toolset to a list), `nam
 
 ```console
 $ .skill enable yingchao-zhuchi
-Enabled KP skill: yingchao-zhuchi
+Enabled Keeper skill: yingchao-zhuchi
 ```
 
 **Write procedure, not prose.** The best line in the example above is *"切换时给一句环境暗示，不解释

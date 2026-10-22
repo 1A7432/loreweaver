@@ -248,7 +248,7 @@ role = "player"  # 或 "keeper"；默认为 "player"
   `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
 - `admin_update_server` — 管理员请求服务端原地自更新。不带参数：服务端跑的是运维自己配好的那条命令（`TRPG_TUI__UPDATE_COMMAND`，比如 `git pull && uv sync`），绝不执行客户端递过来的东西，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
   `{type:"admin_update_server"}`
-- `admin_list_skills` — 列出所有可发现的 KP 技能（Layer B.1），并按调用者自己的房间标记 `enabled`。可选 `locale`（`"en"`/`"zh"`，增量字段）请求按客户端自身界面语言返回技能显示名/描述（技能需带 `name-zh`/`description-zh` frontmatter），与服务端语言无关；缺省时按服务端语言返回：
+- `admin_list_skills` — 列出所有可发现的守秘人技能（Layer B.1），并按调用者自己的房间标记 `enabled`。可选 `locale`（`"en"`/`"zh"`，增量字段）请求按客户端自身界面语言返回技能显示名/描述（技能需带 `name-zh`/`description-zh` frontmatter），与服务端语言无关；缺省时按服务端语言返回：
   `{type:"admin_list_skills", locale?:string}`
 - `admin_enable_skill` — 为调用者房间启用/停用一个技能；回复一份新的 `admin_skills`（同样支持可选 `locale`）：
   `{type:"admin_enable_skill", id:string, on:boolean, locale?:string}`

@@ -149,8 +149,8 @@ is **[docs/play.md](docs/play.md)**; the complete command reference is the
   <img src="assets/tui-character-en.png" width="49%" alt="Character creation: four methods, manual mode validates the point budget live" />
 </p>
 <p align="center">
-  <img src="assets/tui-menu-en.png" width="49%" alt="Admin main menu: rooms & invites, import module, rule systems, KP skills, model config" />
-  <img src="assets/tui-skills-en.png" width="49%" alt="KP skills: toggle play-style packs, or describe one sentence and generate a new one" />
+  <img src="assets/tui-menu-en.png" width="49%" alt="Admin main menu: rooms & invites, import module, rule systems, Keeper skills, model config" />
+  <img src="assets/tui-skills-en.png" width="49%" alt="Keeper skills: toggle play-style packs, or describe one sentence and generate a new one" />
 </p>
 
 ---

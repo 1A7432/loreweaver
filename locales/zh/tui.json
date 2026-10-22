@@ -22,7 +22,7 @@
   "tui.doctor.rulepacks": "规则包：{rulepacks}",
   "tui.doctor.scribe_paid": "提示:书记官正在用旗舰价做记账工作({provider} / {model})。守秘人每跑完一个回合,它都要多调用一次模型。请把 TRPG_SCRIBE__* 指向一个便宜的小模型——见 .env.example。",
   "tui.doctor.scribe_subscription": "提示:书记官正在用你的 {provider} 订阅额度记账({model})。守秘人每跑完一个回合,它都要在这份额度上多调用一次,额度耗尽会让游戏在半场中断。请把 TRPG_SCRIBE__* 指向一个小模型——见 .env.example。",
-  "tui.doctor.skills": "KP 技能：{skills}（{count}）",
+  "tui.doctor.skills": "守秘人技能：{skills}（{count}）",
   "tui.doctor.version": "版本：{version}",
   "tui.error.avatar_no_character": "请先创建或选择角色，再设置头像。",
   "tui.error.bad_frame": "消息格式有误。",
