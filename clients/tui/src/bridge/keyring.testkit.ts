@@ -5,30 +5,14 @@
  * what it sees.
  */
 import type { ClientFrame, ServerFrame } from "loreweaver-protocol"
+import { ManualClock as BaseClock, waitFor } from "../testkit"
 import type { ControlLink } from "./keyring"
 
-/** Upper bound for one wait, below bun's 5 s test timeout so the failure names what was awaited. */
-const WAIT_BOUND_MS = 3000
-
-/** Yield to the event loop (I/O included) until `cond` holds; fail loudly instead of hanging. */
-export async function waitFor(what: string, cond: () => boolean, detail?: () => string): Promise<void> {
-  const deadline = Date.now() + WAIT_BOUND_MS
-  while (!cond()) {
-    if (Date.now() > deadline) {
-      throw new Error(`gave up waiting for ${what} after ${WAIT_BOUND_MS}ms${detail ? ` — ${detail()}` : ""}`)
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
-}
+export { settle, waitFor } from "../testkit"
 
 /** Wait until the keyring holds an entry for `userId` (a late-mint adoption, say). */
 export async function waitForEntry(ring: { get(userId: string): unknown }, userId: string): Promise<void> {
   await waitFor(`a keyring entry for ${userId}`, () => ring.get(userId) !== undefined)
-}
-
-/** A few event-loop turns: lets a frame that must NOT be sent show up if it were going to. */
-export async function settle(turns = 10): Promise<void> {
-  for (let i = 0; i < turns; i += 1) await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
 export class FakeControl implements ControlLink {
@@ -54,29 +38,7 @@ export class FakeControl implements ControlLink {
 }
 
 /** Manual timers + clock: a request timeout fires only when the test calls `fire()`. */
-export class ManualClock {
-  nowMs = 0
-  private seq = 0
-  private readonly timers = new Map<number, { at: number; fn: () => void }>()
-  now = (): number => this.nowMs
-  setTimeoutFn = ((fn: () => void, ms = 0): ReturnType<typeof setTimeout> => {
-    const id = ++this.seq
-    this.timers.set(id, { at: this.nowMs + ms, fn })
-    return id as unknown as ReturnType<typeof setTimeout>
-  }) as unknown as typeof setTimeout
-  clearTimeoutFn = ((id: ReturnType<typeof setTimeout>) => {
-    this.timers.delete(id as unknown as number)
-  }) as unknown as typeof clearTimeout
-
-  /** The Keyring options that route its timers and its late-mint clock through this clock. */
-  get options(): { setTimeoutFn: typeof setTimeout; clearTimeoutFn: typeof clearTimeout; now: () => number } {
-    return { setTimeoutFn: this.setTimeoutFn, clearTimeoutFn: this.clearTimeoutFn, now: this.now }
-  }
-
-  get armed(): number {
-    return this.timers.size
-  }
-
+export class ManualClock extends BaseClock {
   /** Fire the one armed timer (the outstanding request's timeout), advancing the clock to it. */
   fire(): void {
     if (this.timers.size !== 1) throw new Error(`expected exactly one armed timer, found ${this.timers.size}`)
