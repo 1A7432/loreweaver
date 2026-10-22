@@ -15,45 +15,59 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
+import threading
 
 import pytest
 
 from app import _STDIN_QUEUE_MAX, _stdin_lines
 
 
-class _SlowStdin:
-    """Stdin that takes a beat before its first line, like a human at a prompt."""
+class _GatedStdin:
+    """Stdin that blocks before its first line, like a human at a prompt, until released.
 
-    def __init__(self, lines: list[str], delay: float) -> None:
+    The release comes from a background task on the event loop, so the read can only
+    ever return if that task got to run while the read was still blocked. The wait is
+    bounded so a regression (a read that blocks the loop) fails instead of hanging.
+    """
+
+    def __init__(self, lines: list[str]) -> None:
         self._lines = lines
-        self._delay = delay
-        self.unblocked_at: float | None = None
+        self.blocked = threading.Event()
+        self.release = threading.Event()
+        self.released_by_task: bool | None = None
 
     def __iter__(self):
-        time.sleep(self._delay)
-        self.unblocked_at = time.monotonic()
+        self.blocked.set()
+        self.released_by_task = self.release.wait(timeout=5.0)
         return iter(self._lines)
 
 
 async def test_a_background_task_runs_while_stdin_is_quiet(monkeypatch) -> None:
-    stdin = _SlowStdin(["look around\n"], delay=0.3)
+    stdin = _GatedStdin(["look around\n"])
     monkeypatch.setattr(sys, "stdin", stdin)
 
-    ticked_at: dict[str, float] = {}
+    ticked: list[bool] = []
 
     async def _tick() -> None:
-        await asyncio.sleep(0.05)
-        ticked_at["at"] = time.monotonic()
+        # Run only while the read is actually blocked, then let it through.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while not stdin.blocked.is_set():
+            if loop.time() > deadline:
+                raise AssertionError("the stdin read never started")
+            await asyncio.sleep(0.001)
+        ticked.append(True)
+        stdin.release.set()
 
     task = asyncio.create_task(_tick())
     lines = [line async for line in _stdin_lines()]
     await task
 
     assert lines == ["look around\n"]
-    assert stdin.unblocked_at is not None
-    # The whole point: the poll ticked DURING the wait, not after it.
-    assert ticked_at["at"] < stdin.unblocked_at
+    assert ticked == [True]
+    # The whole point: the poll ticked DURING the wait, not after it — the read was
+    # released by the task, not by its own timeout.
+    assert stdin.released_by_task is True
 
 
 async def test_the_reader_ends_on_eof_and_yields_every_line_in_order(monkeypatch) -> None:
