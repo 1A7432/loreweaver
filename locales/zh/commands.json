@@ -135,7 +135,7 @@
   "commands.help.pack_word": "由本房间规则系统声明的骰子命令",
   "commands.help.panel": "以文本查看模组面板（`.panel` 列出可用面板）。",
   "commands.help.phase": "查看或固定本房间当前带哪半套守秘人工具。",
-  "commands.help.player_hint": "主持这一桌的命令在房间管理员手里。",
+  "commands.help.player_hint": "管理这一桌的命令在房间管理员手里。",
   "commands.help.recap": "查看无剧透的战役前情提要",
   "commands.help.rename": "重命名当前角色。",
   "commands.help.report": "导出团报以便保存和回顾；`.团报 网页` 把可打印的网页版发到你的客户端（`.团报 复盘`：只发给管理员的剧透复盘版）。",

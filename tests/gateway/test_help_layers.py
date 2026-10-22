@@ -33,7 +33,7 @@ async def test_player_help_lists_play_verbs_and_hides_operator_surfaces():
     for verb in _KEEPER_VERBS:
         assert verb not in reply
     assert "Admin:" not in reply
-    assert "The room admin has more commands for running the table." in reply
+    assert "The commands for managing the table are in the room admin's hands." in reply
 
 
 async def test_keeper_help_adds_operator_section():
@@ -47,7 +47,7 @@ async def test_keeper_help_adds_operator_section():
     assert "Admin:" in rest
     for verb in _KEEPER_VERBS:
         assert verb in rest
-    assert "The room admin has more commands for running the table." not in reply
+    assert "The commands for managing the table are in the room admin's hands." not in reply
 
 
 async def test_cli_help_is_the_keeper_list():

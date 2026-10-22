@@ -135,7 +135,7 @@
   "commands.help.pack_word": "A rule-system dice command declared by this room's system",
   "commands.help.panel": "Show a module panel as text (`.panel` lists them).",
   "commands.help.phase": "Show or pin which half of the Keeper's toolset this room carries.",
-  "commands.help.player_hint": "The room admin has more commands for running the table.",
+  "commands.help.player_hint": "The commands for managing the table are in the room admin's hands.",
   "commands.help.recap": "Show the spoiler-free campaign recap (previously on…)",
   "commands.help.rename": "Rename the active character.",
   "commands.help.report": "Export the session report to keep and review; `.report html` sends a printable page to your client (`.report html reveal`: the spoiler edition, for the room admin only).",
