@@ -11,5 +11,7 @@
   "dev.commands.not_mounted": "本房间没有开发挂载——用 .dev mount <路径> 开始。",
   "dev.commands.status": "开发挂载：{pack} ← {path}（监视中；保存即重载本房间）。",
   "dev.commands.reload_failed": "重载已跳过——源码无法解析，未做任何改动：{error}",
-  "dev.commands.reload_done": "开发重载：{cards} 张世界卡、{lorebooks} 本世界书 → {lore} 条在场 lore（清理了 {removed} 条过期）；技能/规则包已重扫，面板已推送。变量值按设计保留。"
+  "dev.commands.reload_done": "开发重载：{cards} 张世界卡、{lorebooks} 本世界书 → {lore} 条在场 lore（清理了 {removed} 条过期）；技能/规则包已重扫，面板已推送。变量值按设计保留。",
+  "dev.commands.lint_header": "包检查——{count} 条提示，仅供参考：",
+  "dev.commands.lint_more": "   ……另有 {count} 条（python -m app --lint <源目录> 可看全部）"
 }

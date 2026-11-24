@@ -821,7 +821,9 @@ assets:
 `--pack` validates everything with the real parsers (a bad skill/rulepack/card
 means no pack), rewrites the manifest with the computed integrity (`files`
 inventory) + detected card kinds + trust fields, and emits
-`<id>-<version>.lwpack`.
+`<id>-<version>.lwpack`. After a successful build it also prints the advisory pack
+check (`--lint <src-dir>` runs it alone): mistakes a valid pack can still carry, such as
+a panel bound to a variable no screen receives — see `docs/authoring.md` §8.
 
 **Stable content ids & cross-pack references.** A native bundle's worldbook
 entries may carry a stable `id`; together with the pack id it forms the
