@@ -604,12 +604,27 @@ def test_an_entry_the_import_would_choke_on_is_reported_not_raised(tmp_path):
 
 
 def test_hostile_nesting_is_bounded(tmp_path):
+    """Three shapes of "nested thousands deep", none of which may escape as a
+    RecursionError. How deep a JSON decoder follows before giving up differs by Python
+    version (3000 levels parse on 3.12 and do not on 3.11), so the assertions accept
+    either honest answer — skipped row, or unreadable file — and nothing else."""
     deep_json = "[" * 3000 + "]" * 3000
-    card = _lorecard()
-    raw = json.dumps(card, ensure_ascii=False).replace('"variables": [', '"variables": [' + deep_json + ", ", 1)
+    raw = json.dumps(_lorecard(), ensure_ascii=False).replace('"variables": [', '"variables": [' + deep_json + ", ", 1)
     src = _source(tmp_path)
     (src / "cards/harbour.lorecard.json").write_text(raw, encoding="utf-8")
-    assert _codes(lint_pack(src)) == ["card-note"]  # the junk row is skipped and said so
+    codes = _codes(lint_pack(src))
+    assert codes == ["card-note"] or codes[0] == "unreadable", codes
+
+    # Past every decoder's limit, on any version: the file is unreadable, said once.
+    abyss = "[" * 200_000 + "]" * 200_000
+    for name, text in (("cards/harbour.lorecard.json", abyss), ("lorebooks/deep.json", abyss)):
+        root = tmp_path / name.split("/")[0]
+        src = _source(root, manifest=MANIFEST + "  lorebooks: [lorebooks/deep.json]\n")
+        (src / "lorebooks").mkdir()
+        (src / "lorebooks/deep.json").write_text(json.dumps({"entries": [{"key": ["a"], "content": "b"}]}), encoding="utf-8")
+        (src / name).write_text(text, encoding="utf-8")
+        findings = lint_pack(src)
+        assert [finding.where for finding in findings if finding.code == "unreadable"] == [name]
 
     st = json.loads(json.dumps(ST_CARD))
     st["data"]["character_book"]["entries"][0]["content"] = '{"a":' * 3000 + "1" + "}" * 3000
