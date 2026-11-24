@@ -5,6 +5,8 @@
   "workspaces": [
     "protocol",
     "tui"
-  ]
+  ],
+  "overrides": {
+    "shell-quote": "^1.11.0"
+  }
 }
-
