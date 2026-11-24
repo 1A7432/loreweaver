@@ -211,7 +211,9 @@ class CharcardTools:
             full_card, _lorecard = _parse_any_card_file(host_path)
             card, world = split_card(full_card)
             module_context = await _module_summary(self._services, ctx.chat_key)
-            sheet = await build_sheet_from_persona(self._services, card, system, module_context=module_context)
+            sheet = await build_sheet_from_persona(
+                self._services, card, system, module_context=module_context, char_name=name.strip()
+            )
             final_name = name.strip() or card.name or sheet.name
             sheet.name = final_name
             sheet, violations = validate_sheet(sheet, system)

@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from core.character_manager import CharacterManager, CharacterSheet
 from core.charcard import CharacterCard
 from core.rulepacks import RulePack, load_rulepack
 from core.sheets import has_check_value, refresh_sheet, set_sheet_value, sheet_value
+from core.worldbook import bind_char_macro
 from infra.i18n import t
 from infra.model_call_trace import lane_scope
 from infra.store import Store
@@ -53,9 +55,16 @@ async def build_sheet_from_persona(
     system: str,
     *,
     module_context: str = "",
+    char_name: str = "",
 ) -> CharacterSheet:
+    """A rule-legal sheet biased toward the card's persona.
+
+    ``char_name`` is the name the sheet will finally carry when the importer chose one
+    other than the card's own; the card's ``{{char}}`` binds to it (else to ``card.name``).
+    """
     manager = _character_manager_from_services(services)
     pack = load_rulepack(system)  # unknown systems raise ValueError with a clear message
+    card = _bind_char(card, char_name)
     concept = await _ask_concept(services, card, pack.system, module_context)
     sheet = manager.generate_character(pack.system, card.name or None)
     sheet.name = card.name or sheet.name
@@ -80,6 +89,26 @@ async def build_sheet_from_description(
     text = description.strip()
     card = CharacterCard(name=name.strip(), description=text, personality=text)
     return await build_sheet_from_persona(services, card, system, module_context=module_context)
+
+
+def _bind_char(card: CharacterCard, char_name: str) -> CharacterCard:
+    """The card with ``{{char}}`` resolved in the prose this module reads.
+
+    The same rule the card's lorebook follows at import (`core.worldbook.bind_char_macro`):
+    a sheet's background and notes are STORED text with no render step behind them, so a
+    macro left in here is shown to the player, and sent to the model, as literal braces.
+    EJS never reaches this point — every import path strips it first (`core.card_split`).
+    ``{{user}}`` and the dice/random macros are deliberately left alone: on a sheet they
+    have no fixed referent to bind to."""
+    name = (char_name or card.name).strip()
+    if not name:
+        return card
+    return replace(
+        card,
+        description=bind_char_macro(card.description, name),
+        personality=bind_char_macro(card.personality, name),
+        scenario=bind_char_macro(card.scenario, name),
+    )
 
 
 def _character_manager_from_services(services: Any) -> CharacterManager:

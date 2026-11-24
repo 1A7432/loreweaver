@@ -110,6 +110,63 @@ async def test_build_sheet_from_persona_coc7_is_rule_legal_and_biased():
     assert sheet.attributes["IDEA"] == sheet.attributes["INT"]
 
 
+class _RecordingLLM:
+    """Answers with an empty concept and keeps what it was sent."""
+
+    def __init__(self) -> None:
+        self.messages: list[list[dict]] = []
+
+    async def chat(self, messages, **_kwargs):
+        self.messages.append(messages)
+        return SimpleNamespace(content="{}")
+
+
+@pytest.mark.asyncio
+async def test_persona_sheet_binds_the_char_macro_and_never_sees_ejs():
+    """A sheet's background and notes are stored text with no render step behind them:
+    `{{char}}` must be resolved at import (the rule the card's lorebook already follows),
+    and EJS must be gone before the persona reaches the model or the sheet (拆卡)."""
+    from core.card_split import split_card
+
+    seed_dice(7)
+    llm = _RecordingLLM()
+    services = SimpleNamespace(characters=CharacterManager(Store(":memory:")), llm=llm)
+    full = parse_card_bytes(
+        json.dumps(
+            {
+                "spec": "chara_card_v2",
+                "data": {
+                    "name": "Mira",
+                    "description": "{{char}} is a field medic. <%= getvar('mood') %>She calls {{user}} 'boss'.",
+                    "personality": "<char> stays calm. <%- stat_data.secret %>",
+                    "scenario": "{{ Char }} waits at the docks. {{roll:1d6}}",
+                },
+            }
+        ).encode(),
+        filename="mira.json",
+    )
+    card, world = split_card(full)
+    assert world.ejs_blocks == 2
+
+    sheet = await build_sheet_from_persona(services, card, "coc7")
+
+    stored = sheet.background + "\n" + sheet.notes
+    sent = "\n".join(message["content"] for message in llm.messages[0])
+    for text in (stored, sent):
+        assert "<%" not in text
+        assert "{{char}}" not in text.lower().replace(" ", "") and "<char>" not in text
+        assert "Mira is a field medic." in text
+        assert "Mira stays calm." in text
+        assert "Mira waits at the docks." in text
+        # Not ours to bind: on a sheet these have no fixed referent.
+        assert "{{user}}" in text and "{{roll:1d6}}" in text
+
+    # The importer chose another name: the sheet's own text must not keep the card's.
+    renamed = await build_sheet_from_persona(services, card, "coc7", char_name="Bo\\1b")
+    assert "Bo\\1b is a field medic." in renamed.background  # inserted literally, not as a group ref
+    assert "Mira" not in renamed.notes
+
+
 @pytest.mark.asyncio
 async def test_build_sheet_from_description_wraps_text_as_minimal_persona_card():
     seed_dice(2027)
