@@ -390,7 +390,9 @@ def _gather_cards(tree: _Tree, source: Path) -> None:
                     _note(tree, "card-note", card_entry.path, detail=warning)
             else:
                 card = parse_card_bytes(data, filename=name)
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
+            # RecursionError: JSON nested past what this interpreter's decoder will
+            # follow (the limit differs by Python version) — the ST parser lets it out.
             _unreadable(tree, card_entry.path, exc)
             continue
 
@@ -442,7 +444,7 @@ def _gather_lorebooks(tree: _Tree, source: Path) -> None:
             continue
         try:
             raw = json.loads(text)
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             _unreadable(tree, relative, exc)
             continue
         if isinstance(raw, dict) and "entries" not in raw:
