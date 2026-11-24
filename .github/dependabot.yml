@@ -17,6 +17,11 @@ updates:
     groups:
       client-deps:
         patterns: ["*"]
+    # OpenTUI is 0.x and breaks its rendering API between minors (0.4 -> 0.9 moved
+    # SyntaxStyle ownership and the test frame capture). Upgrading it is a migration
+    # with a visual check, done on purpose — not something a grouped PR can carry.
+    ignore:
+      - dependency-name: "@opentui/*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
