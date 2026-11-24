@@ -29,7 +29,12 @@ Three properties hold for every check here:
    and then the one real finding is lost with the rest.
 
 Callers: ``python -m app --lint <src-dir>``, ``--pack`` (printed with the build's own
-warnings), and the dev room (appended to every reload summary).
+warnings), and the dev room (sent to the mounting admin after every reload).
+
+**Findings are keeper-grade.** They name secret entry titles, keeper-visibility
+variables and unexposed variable paths — the module's internals, by design. A caller
+that can reach a room must deliver them to the admin who asked and to nobody else
+(`gateway.dev_room` does; iron rule #3). The two CLI callers print to the operator.
 
 A finding carries no prose of its own: it is a message KEY plus parameters, rendered
 through the locale catalogs (``pack.lint.msg.*``) by whoever shows it. These notes are
@@ -47,16 +52,24 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from core.card_split import card_hook_codes
-from core.charcard import CharacterCard, parse_card_bytes
+from core.charcard import MAX_CARD_FILE_BYTES, CharacterCard, parse_card_bytes
 from core.condexpr import CondExprError, referenced_paths
 from core.documents import KEEPER_VIEWER, MODVARS_ID, MVU_ID, PLAYER_VIEWER, Document, project
 from core.lore_overlay import Overlay, OverlayError, parse_overlay_file
 from core.lore_overlay import apply as apply_overlay
 from core.lorecard import looks_like_lorecard, parse_lorecard_bytes
 from core.modvars import MODVARS_DOC_TYPE
-from core.mvu_compat import MAX_FLAT_LEAVES, MVU_DOC_TYPE, is_value_with_desc
+from core.mvu_compat import (
+    MAX_FLAT_LEAVES,
+    MVU_DOC_TYPE,
+    _normalize_prefix,  # deliberate: the room normalizes an exposure prefix exactly this way
+    is_value_with_desc,
+    normalize_tree,
+)
 from core.pack import (
     MANIFEST_NAME,
+    MAX_LOREBOOK_BYTES,
+    MAX_MANIFEST_BYTES,
     PackError,
     PackManifest,
     _source_file,  # deliberate: the build's own symlink/escape-refusing source resolver
@@ -81,6 +94,17 @@ _MVU_ID_PREFIX = "mvu."
 # Text files whose contents can mention — or, for code, create — a variable.
 _TEXT_SUFFIXES = frozenset({".html", ".htm", ".js", ".mjs", ".css", ".json", ".md", ".txt", ".yaml", ".yml"})
 _MAX_CORPUS_FILE_BYTES = 2_000_000
+# All mention evidence together. Past this the lint stops READING, and every check that
+# needs "nothing mentions it" switches off — a partial corpus can only cry wolf.
+_MAX_CORPUS_CHARS = 8_000_000
+# A localized map sits a handful of levels down in any real document; a hostile one can
+# nest thousands deep.
+_MAX_WALK_DEPTH = 24
+# A hook that builds a variable name at runtime (`setvar('coalition_' + who, 0)`) can
+# create leaves no static read will ever see: any first argument that is not one plain
+# string literal counts.
+_DYNAMIC_WRITE_RE = re.compile(r"""\b(?:setvar|incvar)\s*\((?!\s*(?:'[^'$\\]*'|"[^"$\\]*")\s*[,)])""")
+_ASCII_WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
 # Every message this module can emit, as ``<code>`` or ``<code>.<variant>``. The catalogs
@@ -103,8 +127,7 @@ MESSAGE_KEYS: tuple[str, ...] = (
     "panel-repeat-empty",
     "var-unused",
     "lore-no-keys",
-    "lore-never-fires.probability",
-    "lore-never-fires.secondary",
+    "lore-never-fires",
     "lore-condition-unknown-var",
     "overlay-expose-unknown",
     "locale-gap",
@@ -145,6 +168,45 @@ def _note(tree: _Tree, key: str, where: str, **params: Any) -> None:
     tree.findings.append(LintFinding(code=key.split(".", 1)[0], where=where, key=key, params=params))
 
 
+class _Corpus:
+    """Text gathered for one question — "does anything here name X?" — answered in one
+    pass per text instead of one scan per name: ASCII names are looked up in a word set
+    built as the text arrives, and only non-ASCII names (CJK has no word boundary to
+    split on) fall back to a substring test."""
+
+    def __init__(self) -> None:
+        self._texts: list[str] = []
+        self._words: set[str] = set()
+        self.chars = 0
+        #: False once a text had to be turned away: absence is no longer evidence.
+        self.complete = True
+
+    def add(self, text: str) -> None:
+        if not text:
+            return
+        if self.chars + len(text) > _MAX_CORPUS_CHARS:
+            self.complete = False
+            return
+        self.chars += len(text)
+        self._texts.append(text)
+        self._words.update(_ASCII_WORD_RE.findall(text))
+
+    def mentions(self, needle: str) -> bool:
+        """Whether any text names ``needle``. An ASCII name must stand as a whole word
+        (``day`` is not mentioned by ``today``); anything else is matched as written."""
+        if not needle:
+            return False
+        if _ASCII_WORD_RE.fullmatch(needle):
+            return needle in self._words
+        return any(needle in text for text in self._texts)
+
+    def any_matches(self, pattern: re.Pattern[str]) -> bool:
+        return any(pattern.search(text) for text in self._texts)
+
+    def texts_containing(self, marker: str) -> list[str]:
+        return [text for text in self._texts if marker in text]
+
+
 @dataclass
 class _Tree:
     """Everything the checks read, gathered in one pass over the declared contents."""
@@ -164,12 +226,15 @@ class _Tree:
     #: card's own overlay already applied (effective state has one definition).
     lore: list[tuple[str, LoreEntry]] = field(default_factory=list)
     panels: list[tuple[str, PanelSpec]] = field(default_factory=list)
-    #: Prose and code that can MENTION a variable (skill bodies, lore text, hook
-    #: scripts, tier-2 panel code, prep scripts, rule files).
-    corpus: list[str] = field(default_factory=list)
-    #: The code-and-instructions subset: text that can bring a variable into existence at
-    #: the table (a hook's ``setvar``, a skill telling the Keeper to define a tracker).
-    runtime_corpus: list[str] = field(default_factory=list)
+    #: Everything that can MENTION a variable — the evidence behind "nothing else names
+    #: it": skill bodies, lore text and conditions, hook scripts, tier-2 panel code, prep
+    #: scripts, presets, rule and kit files.
+    corpus: _Corpus = field(default_factory=lambda: _Corpus())
+    #: The subset that reaches the Keeper's context or RUNS, and can therefore bring a
+    #: variable into existence at the table: a hook's or a lore template's ``setvar``, a
+    #: card telling the model to ``_.set`` a path, a skill telling the Keeper to define a
+    #: tracker. A condition or a panel binding only READS, so neither is in here.
+    runtime: _Corpus = field(default_factory=lambda: _Corpus())
     #: ``(file, raw document)`` pairs the locale-gap walk reads.
     documents: list[tuple[str, Any]] = field(default_factory=list)
     findings: list[LintFinding] = field(default_factory=list)
@@ -188,6 +253,8 @@ def lint_pack(source_dir: Path | str) -> list[LintFinding]:
     if not manifest_path.is_file():
         raise PackError(f"no {MANIFEST_NAME} in {source}")
     try:
+        if manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+            raise PackError(f"{MANIFEST_NAME} exceeds the {MAX_MANIFEST_BYTES}-byte cap")
         manifest_text = manifest_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise PackError(f"{MANIFEST_NAME}: {exc}") from exc
@@ -202,6 +269,11 @@ def lint_pack(source_dir: Path | str) -> list[LintFinding]:
     _gather_lorebooks(tree, source)
     _gather_panels(tree, source)
     _gather_text(tree, source)
+    # The room stores the tree through `normalize_tree` (depth, node budget, string
+    # keys); judge the tree the room would actually hold, which also bounds every walk.
+    tree.mvu = normalize_tree(tree.mvu)
+    if tree.runtime.any_matches(_DYNAMIC_WRITE_RE):
+        tree.mvu_complete = False
 
     _check_panels(tree)
     _check_unused_variables(tree)
@@ -216,16 +288,19 @@ def lint_pack(source_dir: Path | str) -> list[LintFinding]:
 # ---------------------------------------------------------------------------
 
 
-def _read_bytes(tree: _Tree, source: Path, relative: str) -> bytes | None:
+def _read_bytes(tree: _Tree, source: Path, relative: str, cap: int) -> bytes | None:
     try:
-        return _source_file(source, relative).read_bytes()
+        path = _source_file(source, relative)
+        if path.stat().st_size > cap:
+            raise PackError(f"exceeds the {cap}-byte cap")
+        return path.read_bytes()
     except (PackError, OSError) as exc:
         _unreadable(tree, relative, exc)
         return None
 
 
-def _read_text(tree: _Tree, source: Path, relative: str) -> str | None:
-    data = _read_bytes(tree, source, relative)
+def _read_text(tree: _Tree, source: Path, relative: str, cap: int = MAX_LOREBOOK_BYTES) -> str | None:
+    data = _read_bytes(tree, source, relative, cap)
     if data is None:
         return None
     try:
@@ -251,20 +326,32 @@ def _gather_entries(tree: _Tree, relative: str, raw_entries: list[dict[str, Any]
     """Split one file's entries the way a KEEPER import does: declaration entries seed
     the variable tree, everything else becomes lore (with the overlay applied)."""
     for index, raw in enumerate(raw_entries, start=1):
-        declared = _consume_initvar(raw)
+        try:
+            declared = _consume_initvar(raw)
+            entry = None if declared is not None else _normalize_import_entry(
+                raw, source="", index=index, is_keeper=True
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            # A row the import itself chokes on (`keys: 5`, `secondary_keys: null`): the
+            # build does not parse entries, so this is the first place anyone hears of it.
+            _note(tree, "unreadable", f"{relative}: entries[{index}]", error=f"{type(exc).__name__}: {exc}")
+            continue
         if declared is not None:
             if declared:
-                _merge_tree(tree.mvu, declared)
+                _merge_tree(tree.mvu, normalize_tree(declared))
             else:
                 tree.mvu_complete = False
             continue
-        entry = _normalize_import_entry(raw, source="", index=index, is_keeper=True)
         # Same two exits as the import: an empty entry stores nothing, and an oversized
         # one is skipped whole — neither ever exists in a room to be judged.
         if entry is None or not entry.content or len(entry.content) > MAX_IMPORT_CONTENT_CHARS:
             continue
-        tree.lore.append((relative, apply_overlay(entry, overlay)))
-        tree.corpus.append(entry.content)
+        entry = apply_overlay(entry, overlay)
+        tree.lore.append((relative, entry))
+        tree.corpus.add(entry.content)
+        tree.runtime.add(entry.content)
+        # The decorator peeled the condition off the content; it still names what it reads.
+        tree.corpus.add(entry.condition)
 
 
 def _merge_tree(target: dict[str, Any], incoming: Mapping[str, Any]) -> None:
@@ -279,7 +366,7 @@ def _merge_tree(target: dict[str, Any], incoming: Mapping[str, Any]) -> None:
 
 def _gather_cards(tree: _Tree, source: Path) -> None:
     for card_entry in tree.manifest.card_entries:
-        data = _read_bytes(tree, source, card_entry.path)
+        data = _read_bytes(tree, source, card_entry.path, MAX_CARD_FILE_BYTES)
         if data is None:
             continue
         name = PurePosixPath(card_entry.path).name
@@ -290,7 +377,12 @@ def _gather_cards(tree: _Tree, source: Path) -> None:
                 bundle = parse_lorecard_bytes(data, filename=name)
                 card = bundle.card
                 for spec in bundle.variable_specs:
-                    tree.native.setdefault(spec["id"], spec)
+                    # Two cards may declare one id differently, and which the room ends
+                    # up with depends on what the admin imports last. Keep the reading
+                    # that produces no finding: player-visible wins.
+                    known = tree.native.get(spec["id"])
+                    if known is None or known.get("visibility") == "keeper":
+                        tree.native[spec["id"]] = spec
                     tree.native_where.setdefault(spec["id"], card_entry.path)
                 # The native parser SKIPS a malformed row and says so; the build never
                 # printed those notes, so an author only met them at import time.
@@ -311,7 +403,11 @@ def _gather_cards(tree: _Tree, source: Path) -> None:
                 except OverlayError as exc:
                     _unreadable(tree, card_entry.overlay, exc)
                 else:
-                    tree.exposes.extend((prefix, card_entry.overlay) for prefix in overlay.expose)
+                    tree.exposes.extend(
+                        (cleaned, card_entry.overlay)
+                        for cleaned in (_normalize_prefix(prefix) for prefix in overlay.expose)
+                        if cleaned
+                    )
                     try:
                         tree.documents.append((card_entry.overlay, safe_load_no_aliases(overlay_text)))
                     except Exception:  # noqa: BLE001 — parse_overlay_file already accepted it
@@ -323,14 +419,20 @@ def _gather_cards(tree: _Tree, source: Path) -> None:
             # is NOT walked: its extension blobs are someone else's data, and an
             # `{"en": …}` object in there says nothing about this pack's translations.
             tree.documents.append((card_entry.path, {"variables": card.raw.get("variables")}))
-        hooks = card_hook_codes(card)
-        tree.corpus.extend(hooks)
-        tree.runtime_corpus.extend(hooks)
-        tree.corpus.extend(
-            text
-            for text in (card.description, card.personality, card.scenario, card.first_mes, card.creator_notes)
-            if text
-        )
+        # Everything of the card that reaches the Keeper's context or runs.
+        for text in (
+            *card_hook_codes(card),
+            card.description,
+            card.personality,
+            card.scenario,
+            card.first_mes,
+            card.mes_example,
+            card.creator_notes,
+            card.system_prompt,
+            card.post_history_instructions,
+        ):
+            tree.corpus.add(text)
+            tree.runtime.add(text)
 
 
 def _gather_lorebooks(tree: _Tree, source: Path) -> None:
@@ -373,17 +475,25 @@ def _gather_text(tree: _Tree, source: Path) -> None:
     for skill_dir in tree.manifest.contents["skills"]:
         _add_text_file(tree, source, f"{skill_dir}/SKILL.md", runtime=True)
         _add_text_file(tree, source, f"{skill_dir}/hooks.js", runtime=True)  # optional file
-    for relative in tree.manifest.contents["prep"]:
-        _add_text_file(tree, source, relative, runtime=True)
+    for kind in ("prep", "presets"):
+        # A prep script runs; a preset is prompt text folded into the Keeper's context.
+        for relative in tree.manifest.contents[kind]:
+            _add_text_file(tree, source, relative, runtime=True)
     for relative in tree.manifest.contents["rulepacks"]:
         _add_text_file(tree, source, relative)
     for relative in tree.manifest.contents["presentation"]:
         text = _add_text_file(tree, source, relative)
-        if text is not None:
-            try:
-                tree.documents.append((relative, safe_load_no_aliases(text)))
-            except Exception:  # noqa: BLE001 — the build reports a kit that does not parse
-                pass
+        if text is None:
+            continue
+        try:
+            document = safe_load_no_aliases(text)
+        except Exception:  # noqa: BLE001 — the build reports a kit that does not parse
+            continue
+        if isinstance(document, dict):
+            # `style` is the image-generation prompt (`PresentationKit.style_for`): no
+            # viewer ever reads it, so a one-language `style.keywords` is not a gap.
+            document = {key: value for key, value in document.items() if key != "style"}
+        tree.documents.append((relative, document))
 
 
 def _add_text_file(tree: _Tree, source: Path, relative: str, *, runtime: bool = False) -> str | None:
@@ -393,14 +503,20 @@ def _add_text_file(tree: _Tree, source: Path, relative: str, *, runtime: bool = 
         return None
     try:
         path = _source_file(source, relative)
-        if not path.is_file() or path.stat().st_size > _MAX_CORPUS_FILE_BYTES:
+        if not path.is_file():
+            return None
+        if path.stat().st_size > _MAX_CORPUS_FILE_BYTES:
+            # Unread evidence: "nothing mentions it" can no longer be claimed.
+            tree.corpus.complete = False
+            if runtime:
+                tree.runtime.complete = False
             return None
         text = path.read_text(encoding="utf-8-sig")
     except (PackError, OSError, UnicodeDecodeError):
         return None
-    tree.corpus.append(text)
+    tree.corpus.add(text)
     if runtime:
-        tree.runtime_corpus.append(text)
+        tree.runtime.add(text)
     return text
 
 
@@ -414,18 +530,6 @@ def _strip_root(path: str) -> str:
         if path.startswith(prefix):
             return path[len(prefix) :]
     return path
-
-
-def _mentions(texts: list[str], needle: str) -> bool:
-    """Whether any text names ``needle``. An ASCII name must stand as a whole word
-    (``day`` is not mentioned by ``today``); a name with non-ASCII characters is matched
-    as written, since CJK has no word boundary to test."""
-    if not needle:
-        return False
-    if needle.isascii():
-        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(needle)}(?![A-Za-z0-9_])")
-        return any(pattern.search(text) for text in texts)
-    return any(needle in text for text in texts)
 
 
 def _tree_node(tree: Any, path: str) -> tuple[bool, Any]:
@@ -495,9 +599,13 @@ def _exposed_leaf_ids(tree: _Tree) -> list[str] | None:
 
 
 def _could_appear_at_runtime(tree: _Tree, name: str) -> bool:
-    """A name some hook script, prep script, tier-2 panel or skill body mentions may be
-    brought into existence at the table — never call it undeclared."""
-    return _mentions(tree.runtime_corpus, name) or _mentions(tree.runtime_corpus, name.rsplit(".", 1)[-1])
+    """A name that anything reaching the Keeper's context or running at the table
+    mentions (a hook, a lore template's ``setvar``, a skill body, a preset, tier-2 panel
+    code) may be brought into existence there — never call it undeclared. An incomplete
+    corpus answers yes: unread text may be the text that creates it."""
+    if not tree.runtime.complete:
+        return True
+    return tree.runtime.mentions(name) or tree.runtime.mentions(name.rsplit(".", 1)[-1])
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +713,7 @@ def _judge_repeat(tree: _Tree, prefix: str, where: str) -> None:
 
 
 def _check_unused_variables(tree: _Tree) -> None:
-    if not tree.native:
+    if not tree.native or not tree.corpus.complete:
         return
     referenced: set[str] = set()
     prefixes: list[str] = []
@@ -626,7 +734,7 @@ def _check_unused_variables(tree: _Tree) -> None:
         if any(prefix and var_id.startswith(prefix) for prefix in prefixes):
             continue
         labels = [text for text in (spec.get("labels") or {}).values() if isinstance(text, str)]
-        if _mentions(tree.corpus, var_id) or any(_mentions(tree.corpus, label) for label in labels):
+        if tree.corpus.mentions(var_id) or any(tree.corpus.mentions(label) for label in labels):
             continue
         _note(tree, "var-unused", f"{tree.native_where.get(var_id, MANIFEST_NAME)}: variables[{var_id}]")
 
@@ -649,24 +757,23 @@ def _condition_paths(condition: str) -> tuple[str, ...]:
 
 
 def _check_lore(tree: _Tree) -> None:
+    # Templates that pull another entry in by title (`getwi('Ledger')`) are a second
+    # way into a prompt that keyword matching knows nothing about.
+    pulled_by_title = tree.runtime.texts_containing("getwi")
     for file, entry in tree.lore:
         # A switched-off entry is parked on purpose (the admin, a hook or an overlay
         # turns it on); judge only what is live as shipped.
         if not entry.enabled:
             continue
-        where = f"{file}: entry {entry.title!r}"
-        keys = [key for key in entry.keys if str(key).strip()]
+        where = f"{file}: entries[{entry.title}]"
         if entry.probability <= 0:
-            _note(tree, "lore-never-fires.probability", where)
-        elif not entry.constant and not keys:
-            _note(tree, "lore-no-keys", where)
+            _note(tree, "lore-never-fires", where)
         elif (
             not entry.constant
-            and entry.secondary_keys
-            and entry.selective_logic in {"and_any", "and_all"}
-            and not any(str(key).strip() for key in entry.secondary_keys)
+            and not any(str(key).strip() for key in entry.keys)
+            and not any(entry.title in text for text in pulled_by_title)
         ):
-            _note(tree, "lore-never-fires.secondary", where, logic=entry.selective_logic)
+            _note(tree, "lore-no-keys", where)
         for path in _condition_paths(entry.condition):
             if path in tree.native or _tree_has(tree, path):
                 continue
@@ -713,12 +820,14 @@ def _check_locale_gaps(tree: _Tree) -> None:
                 )
 
 
-def _locale_maps(node: Any, path: str) -> Iterator[tuple[str, set[str]]]:
+def _locale_maps(node: Any, path: str, depth: int = 0) -> Iterator[tuple[str, set[str]]]:
     """Every ``{en, zh}``-shaped map under ``node`` as ``(path, locales with text)``.
 
     Two shapes count: a map of locale → text, and ``option_labels``' map of locale →
     {option: text}. Anything else that merely happens to have an ``en`` key is not a
     localized field and is walked through."""
+    if depth > _MAX_WALK_DEPTH:
+        return
     if isinstance(node, dict):
         keys = set(node)
         if keys and keys <= set(_LOCALES):
@@ -739,8 +848,8 @@ def _locale_maps(node: Any, path: str) -> Iterator[tuple[str, set[str]]]:
                     yield path, keys
                 return
         for key, value in node.items():
-            yield from _locale_maps(value, f"{path}.{key}" if path else str(key))
+            yield from _locale_maps(value, f"{path}.{key}" if path else str(key), depth + 1)
     elif isinstance(node, list):
         for index, value in enumerate(node):
             name = value.get("id") if isinstance(value, dict) and isinstance(value.get("id"), str) else index
-            yield from _locale_maps(value, f"{path}[{name}]")
+            yield from _locale_maps(value, f"{path}[{name}]", depth + 1)

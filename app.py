@@ -522,12 +522,14 @@ def _run_lint(i18n: I18n, args: argparse.Namespace) -> int:
     """`--lint SRC_DIR [--json]`: the advisory pack check, without building anything.
 
     Exit status says whether the lint RAN, never what it found: 0 with any number of
-    findings, 1 only when there is no readable `pack.yaml` to lint. With `--json`, stdout
+    findings, 1 only when the lint could not run (no readable `pack.yaml`). With `--json`, stdout
     carries exactly one object — ``{"ok": true, "findings": [{code, where, message}]}`` or
     ``{"ok": false, "error"}`` — and the human lines stay on stderr, like `--pack`."""
     try:
         findings = lint_pack(Path(args.lint))
-    except core_pack.PackError as exc:
+    except Exception as exc:  # noqa: BLE001 — `--json` promises exactly one object on stdout
+        # PackError is the expected one (no readable manifest). Anything else is a bug in
+        # the lint, and still must not reach a tool as a traceback and an empty stdout.
         if args.json:
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         print(i18n.t("pack.lint.failed", error=str(exc)), file=sys.stderr)

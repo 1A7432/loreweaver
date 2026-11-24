@@ -152,34 +152,110 @@ async def test_mount_reload_edit_cycle_syncs_the_room(tmp_path):
     assert "Lighthouse" in titles
 
 
-async def test_reload_summary_carries_the_advisory_pack_check(tmp_path):
-    """The lint rides every reload — the moment the author is looking at the room — and
-    stays advisory: the mount lands either way, and a fixed file clears the note."""
+class _Recorder:
+    """A room member that keeps what it was sent."""
+
+    transport = "test"
+
+    def __init__(self, user_key: str) -> None:
+        self.id = f"conn-{user_key}"
+        self.user_key = user_key
+        self.texts: list[str] = []
+
+    async def deliver(self, event) -> None:
+        self.texts.append(event.text)
+
+
+async def test_pack_check_follows_a_reload_and_stays_advisory(tmp_path):
+    """The check is run on the tree that was just reloaded, cut to a chat-sized head, and
+    never part of the reload itself: the mount lands either way, a fixed file clears it."""
     src = _write_source(tmp_path)
     services = _services(tmp_path)
 
     reply = await dev_room.mount(services, None, CHAT, str(src), "en")
+    assert "var-unused" not in reply  # the reload summary is counts, as it always was
+    assert "suspicion" in (await _modvar_specs(services))
     # The fixture declares `suspicion` and nothing in the pack ever mentions it.
-    assert "[var-unused]" in reply
-    assert "variables[suspicion]" in reply
-    assert "suspicion" in (await _modvar_specs(services))  # ...and the mount still landed
+    check = await dev_room.lint_summary(services, CHAT, "en")
+    assert "[var-unused]" in check and "variables[suspicion]" in check
 
     (src / "skills/dev-omen/SKILL.md").write_text(
         SKILL_MD + "Raise `suspicion` by one whenever the tenant lies.\n", encoding="utf-8"
     )
-    summary = await dev_room.reload(services, None, CHAT, "en")
-    assert "var-unused" not in summary
+    await dev_room.reload(services, None, CHAT, "en")
+    assert await dev_room.lint_summary(services, CHAT, "en") == ""
 
-    # A long list is cut to a chat-sized head plus a count.
     card = dict(WORLD_CARD)
     card["variables"] = [
         {"id": f"orphan_{index}", "kind": "number", "default": 0, "minimum": 0, "maximum": 10}
         for index in range(dev_room.MAX_LINT_LINES + 3)
     ]
     (src / "cards/corridor.lorecard.json").write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
-    summary = await dev_room.reload(services, None, CHAT, "en")
-    assert summary.count("[var-unused]") == dev_room.MAX_LINT_LINES
-    assert services.i18n.with_locale("en").t("dev.commands.lint_more", count=3) in summary
+    await dev_room.reload(services, None, CHAT, "en")
+    check = await dev_room.lint_summary(services, CHAT, "en")
+    assert check.count("[var-unused]") == dev_room.MAX_LINT_LINES
+    assert services.i18n.with_locale("en").t("dev.commands.lint_more", count=3) in check
+
+
+async def test_pack_check_reaches_the_mounting_admin_and_no_one_else(tmp_path):
+    """Iron rule #3. A finding names what it is about — here a SECRET entry's title and a
+    keeper-visibility variable — so it may only ever reach the admin who mounted the
+    source: not the room, on either the command path or the file watcher's."""
+    from gateway.commands import CommandRouter
+    from gateway.hub import RoomHub
+
+    src = _write_source(tmp_path)
+    card = dict(WORLD_CARD)
+    card["variables"] = [
+        {"id": "mastermind_is_wen", "kind": "bool", "default": False, "visibility": "keeper"}
+    ]
+    card["worldbook"] = [
+        {"title": "SECRET: Wen poisoned the well", "secret": True, "keys": [], "content": "He did."}
+    ]
+    (src / "cards/corridor.lorecard.json").write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
+
+    services = _services(tmp_path)
+    hub = RoomHub()
+    admin, player = _Recorder("admin-1"), _Recorder("player-1")
+    await hub.subscribe(CHAT, admin)
+    await hub.subscribe(CHAT, player)
+    router = CommandRouter(services, hub=hub)
+    keeper = AgentCtx(
+        chat_key=CHAT, user_id="admin-1", platform="tui", locale="en",
+        extra={"role": "keeper", "member_user_key": "admin-1"},
+    )
+
+    def leaked(member: _Recorder) -> bool:
+        blob = "\n".join(member.texts)
+        return "Wen poisoned" in blob or "mastermind_is_wen" in blob
+
+    # Command path: the reply is an ordinary (broadcastable) command reply and carries
+    # nothing; the check arrives as a separate event addressed to the issuer alone.
+    reply = await router.dispatch(keeper, ".dev mount " + str(src))
+    assert "Wen poisoned" not in reply and "mastermind_is_wen" not in reply
+    assert leaked(admin) and not leaked(player)
+    assert dev_room._MOUNTS[CHAT].owner == "admin-1"
+
+    # Watcher path: one cycle after a save, driven by hand.
+    admin.texts.clear()
+    reply = await router.dispatch(keeper, ".dev reload")
+    assert "Wen poisoned" not in reply
+    assert leaked(admin) and not leaked(player)
+
+    admin.texts.clear()
+    await dev_room.send_lint(services, hub, CHAT, dev_room._MOUNTS[CHAT].owner)
+    assert leaked(admin) and not leaked(player)
+
+    # No recipient is never widened to "everyone": a mount record from before the owner
+    # field existed simply gets no check until an admin asks again.
+    admin.texts.clear()
+    await dev_room.send_lint(services, hub, CHAT, "")
+    await dev_room.send_lint(services, None, CHAT, "admin-1")
+    assert admin.texts == [] and not leaked(player)
+
+    # ...and the owner survives a restart with the rest of the record.
+    dev_room._MOUNTS.clear()
+    assert (await dev_room.rearm(services, hub, CHAT)).owner == "admin-1"
 
 
 async def _modvar_specs(services):

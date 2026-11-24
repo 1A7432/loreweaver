@@ -355,7 +355,7 @@ def test_live_entry_with_no_keyword_and_not_always_on(tmp_path):
     card = _lorecard()
     card["worldbook"].append({"title": "The cellar", "keys": ["  "], "content": "Damp."})
     finding = _only(lint_pack(_source(tmp_path, card=card)), "lore-no-keys")
-    assert finding.where == "cards/harbour.lorecard.json: entry 'The cellar'"
+    assert finding.where == "cards/harbour.lorecard.json: entries[The cellar]"
 
 
 def test_a_parked_entry_is_not_judged(tmp_path):
@@ -476,10 +476,159 @@ def test_messages_fill_every_placeholder_in_both_languages(tmp_path):
     findings += lint_pack(_st_source(tmp_path, overlay=_OVERLAY_HEAD + "expose: [klock]\n", panels=st_panels))
     findings += lint_pack(_source(tmp_path / "broken", panels="panels: [nope]\n"))
     seen = {finding.key for finding in findings}
-    # Everything but the one shape no fixture above builds.
-    assert seen == set(MESSAGE_KEYS) - {"lore-never-fires.secondary"}, sorted(set(MESSAGE_KEYS) - seen)
+    assert seen == set(MESSAGE_KEYS), sorted(set(MESSAGE_KEYS) - seen)
     for finding in findings:
         for i18n in (EN, ZH):
             text = finding.message(i18n)
             assert "{" not in text.replace("{{", "") or finding.key in {"unreadable", "card-note"}, (finding.key, text)
             assert not text.startswith(MESSAGE_KEY_PREFIX)
+
+
+# --- where runtime can change the answer, the lint steps aside ----------------
+# Each case below is a pack the engine runs correctly; an independent review built
+# every one of them as a false positive against the first version of this module.
+
+
+def test_a_lore_template_that_writes_a_leaf_declares_it_as_far_as_the_lint_knows(tmp_path):
+    # Real MVU cards create leaves from lore text: an EJS `setvar`, or prose telling the
+    # model to `_.set` a path. Lore is Keeper context, so it counts like a hook does.
+    card = json.loads(json.dumps(ST_CARD))
+    card["data"]["character_book"]["entries"].append(
+        {"comment": "Clockwork", "constant": True, "content": "<% setvar('clock.hour', 3) %>Advance with _.set('clock.hour', old, new)."}
+    )
+    panels = ST_PANELS.replace("mvu.clock.day", "mvu.clock.hour")
+    src = _st_source(tmp_path, overlay=_OVERLAY_HEAD + "expose: [clock]\n", panels=panels, card=card)
+    assert lint_pack(src) == []
+
+
+def test_a_hook_that_builds_variable_names_makes_the_tree_unknowable(tmp_path):
+    card = json.loads(json.dumps(ST_CARD))
+    card["data"]["extensions"] = {"loreweaver_hooks": ["on('turn_end', () => setvar('coalition_' + who, 0));"]}
+    panels = ST_PANELS.replace("mvu.clock.day", "mvu.coalition_wen")
+    src = _st_source(tmp_path, overlay=_OVERLAY_HEAD + "expose: [coalition_wen]\n", panels=panels, card=card)
+    assert lint_pack(src) == []
+
+
+def test_a_path_through_a_list_index_is_one_path(tmp_path):
+    card = json.loads(json.dumps(ST_CARD))
+    entries = card["data"]["character_book"]["entries"]
+    entries[0]["content"] = '{"party": [{"hp": 5}], "clock": {"day": 1}}'
+    entries.append({"comment": "Low", "keys": ["hp"], "content": "@@if party.0.hp < 3\nSomeone is hurt."})
+    panels = ST_PANELS + (
+        "      - {kind: text, text: {en: Hurt., zh: 受伤了。}, visible_when: \"mvu.party.0.hp < 3\"}\n"
+    )
+    src = _st_source(tmp_path, overlay=_OVERLAY_HEAD + "expose: [clock, party]\n", panels=panels, card=card)
+    assert lint_pack(src) == []
+
+
+def test_an_expose_prefix_is_normalized_the_way_the_room_normalizes_it(tmp_path):
+    assert lint_pack(_st_source(tmp_path, overlay=_OVERLAY_HEAD + "expose: ['clock.']\n")) == []
+
+
+def test_a_variable_read_only_through_getvar_in_a_condition_is_used(tmp_path):
+    card = _lorecard()
+    card["variables"].append({"id": "alarm", "kind": "number", "labels": {"en": "Alarm", "zh": "警报"}})
+    card["worldbook"][0]["condition"] = "getvar('alarm') >= 3"
+    assert lint_pack(_source(tmp_path, card=card)) == []
+
+
+def test_a_variable_a_bundled_preset_talks_about_is_used(tmp_path):
+    card = _lorecard()
+    card["variables"].append({"id": "weather", "kind": "number", "labels": {"en": "Weather", "zh": "天气"}})
+    src = _source(tmp_path, card=card, manifest=MANIFEST + "  presets: [presets/noir.json]\n")
+    (src / "presets").mkdir()
+    (src / "presets/noir.json").write_text(
+        json.dumps({"prompts": [{"identifier": "main", "name": "Main", "role": "system", "enabled": True,
+                                 "content": "Raise weather by one each dawn."}],
+                    "prompt_order": [{"character_id": 100001, "order": [{"identifier": "main", "enabled": True}]}]}),
+        encoding="utf-8",
+    )
+    assert lint_pack(src) == []
+    assert build_pack(src, tmp_path / "out.lwpack").warnings == ()
+
+
+def test_an_entry_another_template_pulls_in_by_title_has_a_way_in(tmp_path):
+    card = _lorecard()
+    card["worldbook"].append({"title": "Ledger", "keys": [], "content": "Seven names."})
+    card["worldbook"][2]["content"] = "Roll in the open. <%- getwi('Ledger') %>"
+    assert lint_pack(_source(tmp_path, card=card)) == []
+
+
+def test_the_image_prompt_of_a_presentation_kit_is_not_viewer_text(tmp_path):
+    src = _source(tmp_path, manifest=MANIFEST + "  presentation: [ui/presentation.yaml]\n")
+    (src / "ui/presentation.yaml").write_text(
+        "style:\n  keywords: {en: \"ink wash, muted indigo\"}\n", encoding="utf-8"
+    )
+    assert lint_pack(src) == []
+
+
+def test_one_id_declared_two_ways_is_read_the_way_that_reports_nothing(tmp_path):
+    # Which declaration the room ends up with depends on what the admin imports last.
+    second = _lorecard()
+    second["name"] = "Harbour II"
+    second["variables"] = [{"id": "suspicion", "kind": "number", "labels": {"en": "Suspicion", "zh": "嫌疑"}}]
+    second["worldbook"], second["hooks"] = [], []
+    manifest = MANIFEST.replace(
+        "cards: [cards/harbour.lorecard.json]", "cards: [cards/harbour.lorecard.json, cards/two.lorecard.json]"
+    )
+    panels = PANELS + "      - {kind: stat, label: {en: Heat, zh: 嫌疑}, value: {$var: suspicion}}\n"
+    src = _source(tmp_path, manifest=manifest, panels=panels)
+    (src / "cards/two.lorecard.json").write_text(json.dumps(second, ensure_ascii=False), encoding="utf-8")
+    assert lint_pack(src) == []
+
+
+def test_a_file_too_large_to_read_switches_off_the_mention_checks(tmp_path, monkeypatch):
+    # Unread text may be the text that mentions it: absence is no longer evidence.
+    import core.pack_lint as pack_lint
+
+    card = _lorecard()
+    card["variables"].append({"id": "weather", "kind": "number", "labels": {"en": "Weather", "zh": "天气"}})
+    panels = PANELS.replace("{$var: tide}", "{$var: tyde}")
+    src = _source(tmp_path, card=card, panels=panels)
+    assert sorted(_codes(lint_pack(src))) == ["panel-var-unknown", "var-unused"]
+    monkeypatch.setattr(pack_lint, "_MAX_CORPUS_FILE_BYTES", 10)
+    assert lint_pack(src) == []
+
+
+# --- malformed input never becomes a traceback ---------------------------------
+
+
+def test_an_entry_the_import_would_choke_on_is_reported_not_raised(tmp_path):
+    # The build does not parse entries, so `keys: 5` builds — and then breaks `.import`.
+    card = json.loads(json.dumps(ST_CARD))
+    card["data"]["character_book"]["entries"].append({"comment": "Bad", "content": "x", "keys": 5})
+    src = _st_source(tmp_path, overlay=_OVERLAY_HEAD + "expose: [clock]\n", card=card)
+    finding = _only(lint_pack(src), "unreadable")
+    assert finding.where == "cards/estate.json: entries[3]"
+    assert "TypeError" in finding.message(EN)
+
+
+def test_hostile_nesting_is_bounded(tmp_path):
+    deep_json = "[" * 3000 + "]" * 3000
+    card = _lorecard()
+    raw = json.dumps(card, ensure_ascii=False).replace('"variables": [', '"variables": [' + deep_json + ", ", 1)
+    src = _source(tmp_path)
+    (src / "cards/harbour.lorecard.json").write_text(raw, encoding="utf-8")
+    assert _codes(lint_pack(src)) == ["card-note"]  # the junk row is skipped and said so
+
+    st = json.loads(json.dumps(ST_CARD))
+    st["data"]["character_book"]["entries"][0]["content"] = '{"a":' * 3000 + "1" + "}" * 3000
+    panels = ST_PANELS + (
+        "      - repeat:\n"
+        "          prefix: mvu.a\n"
+        "          block: {kind: stat, label: {$leaf: label}, value: {$leaf: value}}\n"
+    )
+    findings = lint_pack(_st_source(tmp_path / "deep", overlay=_OVERLAY_HEAD + "expose: [clock]\n", panels=panels, card=st))
+    # The room would drop that tree at its depth cap, so `clock` is simply gone — what
+    # matters here is that 3000 levels are an ordinary answer, not a RecursionError.
+    assert set(_codes(findings)) <= {"panel-var-unknown", "panel-var-unexposed", "overlay-expose-unknown"}
+
+
+def test_an_index_keyed_lorebook_is_read_like_the_import_reads_it(tmp_path):
+    src = _source(tmp_path, manifest=MANIFEST + "  lorebooks: [lorebooks/wi.json]\n")
+    (src / "lorebooks").mkdir()
+    (src / "lorebooks/wi.json").write_text(
+        json.dumps({"entries": {"0": {"comment": "Dock", "key": [], "content": "Wet."}}}), encoding="utf-8"
+    )
+    finding = _only(lint_pack(src), "lore-no-keys")
+    assert finding.where == "lorebooks/wi.json: entries[Dock]"

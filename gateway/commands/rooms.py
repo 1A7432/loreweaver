@@ -578,17 +578,30 @@ class RoomsCommands:
         sub = tokens[0].casefold() if tokens else "status"
         rest = tokens[1].strip() if len(tokens) > 1 else ""
         hub = self.hub
+        # The hub addresses a person by `user_key`; a transport that knows it says so.
+        extra = getattr(ctx.raw_ctx, "extra", None)
+        issuer = (
+            str(extra.get("member_user_key"))
+            if isinstance(extra, dict) and extra.get("member_user_key")
+            else ctx.user_id
+        )
         if sub in {"mount", "挂载", "掛載"}:
             if not rest:
                 return ctx.i18n.t("dev.commands.usage")
-            return await dev_room.mount(ctx.services, hub, ctx.chat_key, rest, ctx.locale)
+            reply = await dev_room.mount(ctx.services, hub, ctx.chat_key, rest, ctx.locale, owner=issuer)
+            await dev_room.send_lint(ctx.services, hub, ctx.chat_key, issuer, ctx.locale)
+            return reply
         if sub in {"unmount", "卸载", "卸載"}:
             had = await dev_room.unmount(ctx.services, ctx.chat_key)
             return ctx.i18n.t("dev.commands.unmounted" if had else "dev.commands.not_mounted")
         if sub in {"reload", "重载", "重載"}:
             if await dev_room.rearm(ctx.services, hub, ctx.chat_key) is None:
                 return ctx.i18n.t("dev.commands.not_mounted")
-            return await dev_room.reload(ctx.services, hub, ctx.chat_key, ctx.locale)
+            reply = await dev_room.reload(ctx.services, hub, ctx.chat_key, ctx.locale)
+            # This reply is broadcast like any command reply; the pack check is
+            # keeper-grade, so it goes to the issuing admin alone.
+            await dev_room.send_lint(ctx.services, hub, ctx.chat_key, issuer, ctx.locale)
+            return reply
         if sub in {"status", "状态", "狀態"}:
             state = await dev_room.rearm(ctx.services, hub, ctx.chat_key)
             if state is None:
