@@ -10,6 +10,13 @@ updates:
     groups:
       python-deps:
         patterns: ["*"]
+  - package-ecosystem: "bun"
+    directory: "/clients"
+    schedule:
+      interval: "monthly"
+    groups:
+      client-deps:
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
