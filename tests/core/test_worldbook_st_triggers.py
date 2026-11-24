@@ -245,3 +245,14 @@ async def test_browse_match_lets_keyword_hits_through_a_wall_of_constants():
     await manager.add("room1", matching)
     browsed = await manager.match("room1", "we go to the well", role="keeper", include_constant=False)
     assert {entry.id for entry in browsed} == {"scene", "const-hit"}
+
+
+async def test_import_accepts_sillytavern_index_keyed_entries():
+    """SillyTavern's own world-info export keys entries by index. The pack build always
+    accepted that shape; the import returned 0 for it, so such a lorebook built,
+    installed, and then imported nothing."""
+    manager = Worldbook(Store())
+    book = {"entries": {"0": {"comment": "Dock", "key": ["dock"], "content": "Wet planks."},
+                        "1": {"comment": "Bell", "key": ["bell"], "content": "It rings."}}}
+    assert await manager.import_entries("room", book, source="wi.json", is_keeper=True) == 2
+    assert [entry.title for entry in await manager.list("room")] == ["Dock", "Bell"]

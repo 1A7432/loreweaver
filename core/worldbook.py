@@ -325,6 +325,12 @@ class Worldbook:
         entries are consumed before this point, so they never appear here.
         """
         raw_entries: Any = entries.get("entries", []) if isinstance(entries, dict) else entries
+        if isinstance(raw_entries, dict):
+            # SillyTavern's own world-info export keys its entries by index
+            # (`{"entries": {"0": {...}, "1": {...}}}`); a card's embedded book uses a
+            # list. The pack build has always accepted both, so the import must too —
+            # otherwise a lorebook that builds and installs cleanly imports nothing.
+            raw_entries = list(raw_entries.values())
         if not isinstance(raw_entries, list):
             return 0
         if len(raw_entries) > MAX_IMPORT_ENTRIES:
