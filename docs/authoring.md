@@ -790,16 +790,17 @@ is a perfectly valid pack. The check does:
 ```console
 $ uv run python -m app --lint my-module/
 Pack check: 3 note(s) — advisory, the pack still builds:
-   note: ui/panels.yaml: panels[gauges].blocks[1].value: binds 'suspicion', a keeper-visibility variable: it is never sent to any screen (the admin's included), so this block is never drawn [panel-var-keeper-only]
-   note: cards/harbour.lorecard.json: entry 'The cellar': has no keyword and is not always-on: keyword matching can never select it, which leaves semantic recall as its only way into a prompt [lore-no-keys]
+   note: ui/panels.yaml: panels[gauges].blocks[1].value: binds 'suspicion', a keeper-visibility variable: it is never sent to any screen (the admin's included), so the binding never resolves — the block is left out, or just this field where the field is optional [panel-var-keeper-only]
+   note: cards/harbour.lorecard.json: entries[The cellar]: has no keyword and is not always-on: keyword matching can never select it, which leaves semantic recall as its only way into a prompt [lore-no-keys]
    note: ui/panels.yaml: panels[status].blocks[0].label: written in en only — a zh viewer is shown the other language [locale-gap]
 ```
 
 It reads the source tree with the engine's own parsers — no model, no network, nothing
 imported — and it is advisory: a note never fails a build, and `--lint` exits 0 whatever
 it finds (1 only when there is no readable `pack.yaml`). The same notes are printed by
-`--pack` after a successful build, and a dev room appends them to every reload summary,
-so you meet them while the file is still open. `--json` gives tools the list as
+`--pack` after a successful build, and a dev room sends them after every reload — to the
+admin who mounted it and nobody else, because a note names what it is about (a secret
+entry's title, a keeper-side variable) — so you meet them while the file is still open. `--json` gives tools the list as
 `{code, where, message}` objects. What it looks for:
 
 | Code | What it means |
@@ -809,8 +810,8 @@ so you meet them while the file is still open. `--json` gives tools the list as
 | `panel-var-unknown` | A panel reads a variable nothing in the pack declares (usually a typo, or an imported leaf written without its `mvu.` prefix). |
 | `panel-repeat-empty` | A `repeat` prefix that no player-visible variable starts with. |
 | `var-unused` | A variable is declared and nothing else mentions it — no panel, condition, hook, skill or lore text. |
-| `lore-no-keys` | A live entry with no keyword that is not always-on: only semantic recall can bring it in. |
-| `lore-never-fires` | `probability: 0`, or secondary keys that are all blank under an `and_*` logic. |
+| `lore-no-keys` | A live entry with no keyword that is not always-on, and that no template pulls in by title (`getwi`): only semantic recall can bring it in. |
+| `lore-never-fires` | `probability: 0`: the entry is selected and then always dropped. |
 | `lore-condition-unknown-var` | An entry's condition reads a variable nothing declares, so its answer can never change. |
 | `overlay-expose-unknown` | An overlay's `expose:` names a prefix the card's `[InitVar]` tree does not have. |
 | `locale-gap` | The pack is bilingual (its `name` has both `en` and `zh`) and a label is written in one language only. A single-language pack gets none of these, and a bare string (`HP`) is never a gap. |
@@ -818,9 +819,9 @@ so you meet them while the file is still open. `--json` gives tools the list as
 | `unreadable` | A file that does not parse; the build will refuse it with the full reason. |
 
 It reports only what the engine's own rules make certain. A variable your skill tells the
-Keeper to create at the table, or one a hook writes, is never called undeclared; and an
-`[InitVar]` block it cannot read statically switches the tree-shape checks off instead of
-guessing. Silence is not a certificate — it is the absence of these particular mistakes.
+Keeper to create at the table, or one a hook or a lore template writes, is never called
+undeclared; an `[InitVar]` block it cannot read statically, or a hook that builds
+variable names at runtime, switches the tree-shape checks off instead of guessing. Silence is not a certificate — it is the absence of these particular mistakes.
 
 **When a live run goes wrong, trace the tools.** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`
 (relative paths land under `data_dir`) appends one JSON line per AI-KP tool call —

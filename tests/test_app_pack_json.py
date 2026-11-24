@@ -123,3 +123,21 @@ def test_pack_reports_lint_findings_without_failing_the_build(tmp_path, capsys):
     assert payload["warnings"] == []  # build warnings and lint notes stay separate lists
     assert [finding["code"] for finding in payload["lint"]] == ["lore-no-keys"]
     assert "lore-no-keys" in captured.err
+
+
+def test_lint_json_answers_even_when_the_lint_itself_fails(tmp_path, capsys, monkeypatch):
+    # `--json` promises exactly one object on stdout; a traceback and an empty stdout
+    # would break every tool that parses it.
+    def boom(_source):
+        raise RuntimeError("lint bug")
+
+    monkeypatch.setattr(app, "lint_pack", boom)
+    code = app.main(["--lint", str(_write_minimal_pack(tmp_path)), "--json"])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert json.loads(captured.out) == {"ok": False, "error": "lint bug"}
+
+    # ...and the same failure after a successful build costs the build nothing.
+    code = app.main(["--pack", str(tmp_path / "src"), "--out", str(tmp_path / "ok.lwpack"), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["ok"] is True and payload["lint"] == []

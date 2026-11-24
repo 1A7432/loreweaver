@@ -105,6 +105,7 @@ def _bind_char(card: CharacterCard, char_name: str) -> CharacterCard:
         return card
     return replace(
         card,
+        name=name,
         description=bind_char_macro(card.description, name),
         personality=bind_char_macro(card.personality, name),
         scenario=bind_char_macro(card.scenario, name),

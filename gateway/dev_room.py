@@ -69,6 +69,11 @@ class Mount:
     # The lore sources this mount's last reload wrote (card names + lorebook file
     # names) — the removal set that makes the next reload replace instead of stack.
     sources: tuple[str, ...] = ()
+    # The admin who mounted it — the ONLY recipient of the advisory pack check a reload
+    # produces (it names secret entry titles and keeper-side variables). "" for a record
+    # written before this field existed: such a mount reloads without a check until an
+    # admin issues any `.dev mount` / `.dev reload` again.
+    owner: str = ""
 
 
 _MOUNTS: dict[str, Mount] = {}
@@ -102,7 +107,14 @@ async def _persist(services: Services, mount: Mount) -> None:
     await services.store.state_set(
         mount.chat_key,
         DEV_MOUNT_KEY,
-        json.dumps({"path": str(mount.path), "pack_id": mount.pack_id, "sources": list(mount.sources)}),
+        json.dumps(
+            {
+                "path": str(mount.path),
+                "pack_id": mount.pack_id,
+                "sources": list(mount.sources),
+                "owner": mount.owner,
+            }
+        ),
     )
 
 
@@ -129,9 +141,16 @@ def _read_manifest(path: Path) -> PackManifest:
 
 
 async def mount(
-    services: Services, hub: RoomHub | None, chat_key: str, raw_path: str, locale: str | None = None
+    services: Services,
+    hub: RoomHub | None,
+    chat_key: str,
+    raw_path: str,
+    locale: str | None = None,
+    *,
+    owner: str = "",
 ) -> str:
-    """Mount + initial reload; returns the localized reply for the issuing keeper."""
+    """Mount + initial reload; returns the localized reply for the issuing keeper.
+    ``owner`` is that keeper's user key — where later reloads send the pack check."""
     i18n = services.i18n.with_locale(locale or services.settings.locale)
     resolved = resolve_source(services, raw_path)
     if isinstance(resolved, str):
@@ -141,7 +160,7 @@ async def mount(
     except (PackError, OSError, UnicodeDecodeError) as exc:
         return i18n.t("dev.commands.bad_source", error=str(exc))
 
-    _MOUNTS[chat_key] = Mount(chat_key=chat_key, path=resolved, pack_id=manifest.id)
+    _MOUNTS[chat_key] = Mount(chat_key=chat_key, path=resolved, pack_id=manifest.id, owner=owner)
     await _persist(services, _MOUNTS[chat_key])
     _sync_registries()
     ensure_watcher(services, hub, chat_key)
@@ -179,6 +198,7 @@ async def rearm(services: Services, hub: RoomHub | None, chat_key: str) -> Mount
             path=path,
             pack_id=str(record.get("pack_id", "")) or "dev",
             sources=tuple(str(entry) for entry in record.get("sources", [])),
+            owner=str(record.get("owner", "")),
         )
     except (ValueError, KeyError, TypeError):
         return None
@@ -240,7 +260,7 @@ async def reload(services: Services, hub: RoomHub | None, chat_key: str, locale:
     reload_rulepacks()
 
     _MOUNTS[chat_key] = Mount(
-        chat_key=chat_key, path=current.path, pack_id=current.pack_id, sources=tuple(sources)
+        chat_key=chat_key, path=current.path, pack_id=current.pack_id, sources=tuple(sources), owner=current.owner
     )
     await _persist(services, _MOUNTS[chat_key])
 
@@ -248,34 +268,57 @@ async def reload(services: Services, hub: RoomHub | None, chat_key: str, locale:
     if hub is not None:
         await publish_ui_manifests(hub, services, chat_key)
         await publish_state(hub, services, ctx)
-    summary = i18n.t(
+    return i18n.t(
         "dev.commands.reload_done",
         cards=len(world_cards),
         lorebooks=len(manifest.contents.get("lorebooks", ())),
         lore=live,
         removed=removed,
     )
-    return "\n".join([summary, *_lint_lines(i18n, current.path)])
 
 
-def _lint_lines(i18n, source: Path) -> list[str]:
-    """The advisory pack check (`core.pack_lint`), run on the SAME tree that was just
-    reloaded — the moment an author is looking at the room and can still fix the file.
+async def lint_summary(services: Services, chat_key: str, locale: str | None = None) -> str:
+    """The advisory pack check (`core.pack_lint`) for this room's mounted source, as
+    display lines; "" when there is no mount or nothing to report.
 
-    Advisory in both directions: it never blocks or alters a reload, and a lint that
-    cannot run (it reads the tree again, and a save may land between the two reads)
-    simply says nothing this cycle."""
+    KEEPER-GRADE TEXT (iron rule #3). A finding names what it is about — a secret
+    entry's title, a keeper-visibility variable, an unexposed variable path — so this
+    string must reach the admin who asked and nobody else. It is deliberately NOT part of
+    `reload`'s summary, which the watcher publishes to the whole room: use
+    `send_lint` for a room, and append it to a reply only where the reply has exactly
+    one reader.
+
+    Advisory in both directions: it never blocks or alters a reload, and a check that
+    cannot run (it reads the tree again, and a save may land between the two reads) says
+    nothing this cycle. It runs off the event loop — the callers hold the room's turn
+    lock, and a large source tree must not stall every other room while it is read."""
+    current = _MOUNTS.get(chat_key)
+    if current is None:
+        return ""
     try:
-        findings = lint_pack(source)
+        findings = await asyncio.to_thread(lint_pack, current.path)
     except Exception:  # noqa: BLE001 — advisory by contract
-        return []
+        return ""
     if not findings:
-        return []
+        return ""
+    i18n = services.i18n.with_locale(locale or services.settings.locale)
     lines = [i18n.t("dev.commands.lint_header", count=len(findings))]
     lines.extend(f"   {finding.render(i18n)}" for finding in findings[:MAX_LINT_LINES])
     if len(findings) > MAX_LINT_LINES:
         lines.append(i18n.t("dev.commands.lint_more", count=len(findings) - MAX_LINT_LINES))
-    return lines
+    return "\n".join(lines)
+
+
+async def send_lint(
+    services: Services, hub: RoomHub | None, chat_key: str, user_key: str, locale: str | None = None
+) -> None:
+    """Deliver the pack check to ONE user's connections. No hub, no recipient, or a
+    recipient who is not connected: nothing is sent — never widened to the room."""
+    if hub is None or not user_key:
+        return
+    text = await lint_summary(services, chat_key, locale)
+    if text:
+        await hub.publish(chat_key, Event.system("info", text), only_user=user_key)
 
 
 def ensure_watcher(services: Services, hub: RoomHub | None, chat_key: str) -> None:
@@ -342,6 +385,9 @@ async def _watch(services: Services, hub: RoomHub | None, chat_key: str) -> None
                 async with hub.turn_lock(chat_key):
                     summary = await reload(services, hub, chat_key)
                 await hub.publish(chat_key, Event.system("info", summary))
+                # The room hears THAT it reloaded; only the mounting admin hears what
+                # the pack check found.
+                await send_lint(services, hub, chat_key, mount_state.owner)
             else:
                 await reload(services, hub, chat_key)
         except asyncio.CancelledError:
