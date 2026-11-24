@@ -1,10 +1,23 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { FrameType, PROTOCOL_VERSION, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import App, { type AppClient, type AppPrefill } from "./App"
 import type { SavedServer } from "./connectMemory"
 import type { ClipboardRenderer } from "./copy"
+
+// The shell falls back to the machine's locale when nothing is prefilled, and the
+// assertions below read English labels. Pin the explicit override so the suite does
+// not depend on the LANG of whoever runs it.
+let savedLocale: string | undefined
+beforeAll(() => {
+  savedLocale = Bun.env.TRPG_LOCALE
+  Bun.env.TRPG_LOCALE = "en"
+})
+afterAll(() => {
+  if (savedLocale === undefined) delete Bun.env.TRPG_LOCALE
+  else Bun.env.TRPG_LOCALE = savedLocale
+})
 
 // A mock implementing the full AppClient surface: connect/join are recorded so
 // the connect flow can be asserted; push() delivers server frames like the wire.
