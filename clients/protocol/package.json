@@ -58,6 +58,6 @@
     "prepublishOnly": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "devDependencies": {
-    "typescript": "^5.5.0"
+    "typescript": "^7.0.2"
   }
 }
