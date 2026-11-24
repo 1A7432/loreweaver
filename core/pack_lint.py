@@ -64,6 +64,7 @@ from core.pack import (
 )
 from core.panels import PanelSpec, parse_panels_text
 from core.worldbook import (
+    MAX_IMPORT_CONTENT_CHARS,
     LoreEntry,
     _consume_initvar,  # deliberate: the import's own definition of a declaration entry
     _normalize_import_entry,  # deliberate: the entry a keeper import would actually store
@@ -258,7 +259,9 @@ def _gather_entries(tree: _Tree, relative: str, raw_entries: list[dict[str, Any]
                 tree.mvu_complete = False
             continue
         entry = _normalize_import_entry(raw, source="", index=index, is_keeper=True)
-        if entry is None or not entry.content:
+        # Same two exits as the import: an empty entry stores nothing, and an oversized
+        # one is skipped whole — neither ever exists in a room to be judged.
+        if entry is None or not entry.content or len(entry.content) > MAX_IMPORT_CONTENT_CHARS:
             continue
         tree.lore.append((relative, apply_overlay(entry, overlay)))
         tree.corpus.append(entry.content)
@@ -362,14 +365,14 @@ def _gather_panels(tree: _Tree, source: Path) -> None:
             tree.panels.append((relative, panel))
             # Tier-2 panel code reads variables through the client's own API; it cannot be
             # analysed statically, but its text still counts as a mention.
-            for asset in panel.assets:
+            for asset in dict.fromkeys(filter(None, (panel.entry, *panel.assets))):
                 _add_text_file(tree, source, asset, runtime=True)
 
 
 def _gather_text(tree: _Tree, source: Path) -> None:
     for skill_dir in tree.manifest.contents["skills"]:
         _add_text_file(tree, source, f"{skill_dir}/SKILL.md", runtime=True)
-        _add_text_file(tree, source, f"{skill_dir}/hooks.js", runtime=True, optional=True)
+        _add_text_file(tree, source, f"{skill_dir}/hooks.js", runtime=True)  # optional file
     for relative in tree.manifest.contents["prep"]:
         _add_text_file(tree, source, relative, runtime=True)
     for relative in tree.manifest.contents["rulepacks"]:
@@ -383,9 +386,7 @@ def _gather_text(tree: _Tree, source: Path) -> None:
                 pass
 
 
-def _add_text_file(
-    tree: _Tree, source: Path, relative: str, *, runtime: bool = False, optional: bool = False
-) -> str | None:
+def _add_text_file(tree: _Tree, source: Path, relative: str, *, runtime: bool = False) -> str | None:
     """Add one pack file to the mention corpus. Best-effort and silent: this is evidence
     gathering, not validation — a missing or binary file simply contributes nothing."""
     if PurePosixPath(relative).suffix.lower() not in _TEXT_SUFFIXES:
@@ -396,7 +397,6 @@ def _add_text_file(
             return None
         text = path.read_text(encoding="utf-8-sig")
     except (PackError, OSError, UnicodeDecodeError):
-        del optional  # an absent hooks.js and an unreadable one read the same way here
         return None
     tree.corpus.append(text)
     if runtime:
