@@ -916,12 +916,22 @@ _CHAR_MACRO_RE = re.compile(r"\{\{\s*char\s*\}\}|<char>|<BOT>", re.IGNORECASE)
 _SELECTIVE_LOGIC_INTS = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
 
 
+def bind_char_macro(text: str, char_name: str) -> str:
+    """Replace a card's ``{{char}}`` (and ST's older ``<char>`` / ``<BOT>``) with the
+    character's name, STATICALLY. For imported card text that binding never changes, so
+    it is resolved once at import; ``{{user}}`` is the one that stays dynamic. The name
+    is inserted literally — a backslash or ``\1`` in it is data, never a group reference."""
+    if not text or not char_name:
+        return text
+    return _CHAR_MACRO_RE.sub(lambda _match: char_name, text)
+
+
 def _bind_char_name(entry: LoreEntry, char_name: str) -> LoreEntry:
     data = entry.to_dict()
     for field_name in ("title", "content"):
-        data[field_name] = _CHAR_MACRO_RE.sub(char_name, data[field_name])
+        data[field_name] = bind_char_macro(data[field_name], char_name)
     for field_name in ("keys", "secondary_keys"):
-        data[field_name] = [_CHAR_MACRO_RE.sub(char_name, key) for key in data[field_name]]
+        data[field_name] = [bind_char_macro(key, char_name) for key in data[field_name]]
     return LoreEntry.from_dict(data)
 
 
