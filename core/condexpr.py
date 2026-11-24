@@ -499,14 +499,26 @@ def referenced_paths(
             continue
         if head.lower() in skip:
             continue
+        # The same segment grammar `_Evaluator._reference` walks: `.name`, `.0` and
+        # `['key']` / `[0]` all continue ONE path. Stopping at a numeric segment split
+        # `队伍.0.血量` into `队伍` and a free-standing `血量` that names nothing.
         segments = [head]
-        while (
-            index + 1 < len(tokens)
-            and tokens[index] == ("op", ".")
-            and tokens[index + 1][0] == "ident"
-        ):
-            segments.append(str(tokens[index + 1][1]))
-            index += 2
+        while index + 1 < len(tokens):
+            if tokens[index] == ("op", ".") and tokens[index + 1][0] in ("ident", "num"):
+                kind, part = tokens[index + 1]
+                segments.append(str(part if kind == "ident" else _int_segment(part)))
+                index += 2
+            elif (
+                tokens[index] == ("op", "[")
+                and tokens[index + 1][0] in ("str", "num")
+                and index + 2 < len(tokens)
+                and tokens[index + 2] == ("op", "]")
+            ):
+                kind, part = tokens[index + 1]
+                segments.append(str(part if kind == "str" else _int_segment(part)))
+                index += 3
+            else:
+                break
         path = ".".join(segments)
         if path not in paths:
             paths.append(path)

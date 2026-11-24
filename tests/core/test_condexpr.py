@@ -167,3 +167,15 @@ def test_evaluate_safe_degrades_to_default():
         raise RuntimeError("boom")
 
     assert evaluate_safe("x > 1", hostile) is False
+
+
+def test_referenced_paths_follow_numeric_and_bracket_segments():
+    """One reference is one path, through every segment form the evaluator accepts —
+    `队伍.0.血量` used to come back as `队伍` plus a free-standing `血量` that names nothing."""
+    from core.condexpr import referenced_paths
+
+    assert referenced_paths("mvu.队伍.0.血量 < 3") == ("mvu.队伍.0.血量",)
+    assert referenced_paths("a[0].b == 'x' && c['k'].d") == ("a.0.b", "c.k.d")
+    assert referenced_paths('配置.难度 == "轻松" && tide >= 3') == ("配置.难度", "tide")
+    # A bracket that is not a segment ends the path instead of swallowing tokens.
+    assert referenced_paths("a[b].c") == ("a", "b", "c")
