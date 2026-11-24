@@ -74,8 +74,8 @@ function connColor(theme: Palette, status: ConnectionStatus): string {
 
 // Replaces GameView's old plain `height={4}` header box: same overall footprint (a
 // height=4 bordered row -- exactly the two inner rows the `tiny` ascii-font needs),
-// now split into three zones -- room identity (left), scene + in-game clock
-// (center), and a ticking wall clock + optional token/cache statusline (right).
+// now carrying room identity, scene + in-game clock and a ticking wall clock on the top
+// row, and liveness + the optional token/cache statusline on the bottom row.
 export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale, connectionStatus }: HeaderBarProps) {
   const { width } = useTerminalDimensions()
   const visible = headerVisibility(width)
@@ -89,41 +89,12 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
   const cacheDenom = usage ? usage.cache_hit_tokens + usage.cache_miss_tokens : 0
   const cacheRate = usage && cacheDenom > 0 ? Math.round((usage.cache_hit_tokens / cacheDenom) * 100) : null
 
-  return (
-    <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
-      <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
-      <box flexDirection="column" flexShrink={1} minWidth={0} marginLeft={2} justifyContent="center">
-        <text fg={theme.accent} wrapMode="none" truncate>
-          {tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}
-        </text>
-        {/* ONE line for liveness: the status glyph + the online count share it — the header has
-            exactly two inner rows, and stacking these separately overflowed the box and collided
-            with the row below (caught by the screenshot harness at 118 cols). With no count the
-            status label rides alone; with no status the count renders as before. */}
-        {connectionStatus || online > 0 ? (
-          <box flexDirection="row">
-            {connectionStatus ? (
-              <text fg={connColor(theme, connectionStatus)}>{CONN_GLYPH} </text>
-            ) : null}
-            {online > 0 ? (
-              <text fg={theme.dim} wrapMode="none" truncate>
-                {online} {tt(locale, "status.online")}
-              </text>
-            ) : connectionStatus ? (
-              <text fg={connColor(theme, connectionStatus)} wrapMode="none" truncate>
-                {tt(locale, connKey(connectionStatus))}
-              </text>
-            ) : null}
-          </box>
-        ) : null}
-      </box>
-
-      {visible.scene || visible.clock ? (
-      <box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="column" marginLeft={2} justifyContent="center">
-        {/* Scene + in-game clock + round share ONE line: the header's top row was sparse while
-            the bottom row (liveness + statusline) was cramped, so the whole center rides the top
-            row. wrapMode none + truncate: when the usage statusline squeezes this column it must
-            TRUNCATE, never wrap into a phantom row (the collision class the reshoot caught). */}
+  const sceneLine =
+    visible.scene || visible.clock ? (
+      // Scene + in-game clock + round share the top row, between the room name and the wall
+      // clock. wrapMode none + truncate: when the row is squeezed this must TRUNCATE, never
+      // wrap into a phantom row (the collision class the reshoot caught).
+      <box flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
         <text wrapMode="none" truncate>
           {visible.scene ? <span fg={theme.kp}>{stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}</span> : null}
           {visible.clock ? (
@@ -134,30 +105,68 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
           ) : null}
         </text>
       </box>
-      ) : <box flexGrow={1} minWidth={0} />}
+    ) : (
+      <box flexGrow={1} minWidth={0} />
+    )
+  const showStatus = Boolean(usage && (visible.usage || visible.cache))
 
-      {usage && (visible.usage || visible.cache) ? (
-      <box flexShrink={0} flexDirection="column" alignItems="flex-end" justifyContent="center">
-        {visible.usage ? <text fg={theme.dim}>{wallClock(now)}</text> : null}
+  // Two ROWS, not three columns. As columns, the scene line could only be as wide as what
+  // the statusline (bottom row, far wider than the wall clock above it) left over, so it was
+  // cut short while the top row sat half empty — and a one-line column centred in two rows
+  // lands on whichever row the layout engine rounds to. As rows, each line competes only
+  // with what actually shares it.
+  return (
+    <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
+      <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
+      <box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
         <box flexDirection="row">
-            {visible.usage && pct !== null ? (
-              <>
-                <text fg={theme.dim}>{tt(locale, "hud.ctx")} </text>
-                <text fg={ctxColor(theme, pct)}>{pct}%</text>
-                {visible.cache ? <text fg={theme.dim}> · </text> : null}
-              </>
-            ) : null}
-            {visible.usage ? <text fg={theme.dim}>↑{fmtTokens(usage.input_tokens)} ↓{fmtTokens(usage.output_tokens)}</text> : null}
-            {visible.usage && visible.cache ? <text fg={theme.dim}> · </text> : null}
-            {visible.cache ? (
-              <>
-                <text fg={theme.dim}>{tt(locale, "hud.cache")}{" "}</text>
-                <text fg={cacheColor(theme, cacheRate)}>{cacheRate !== null ? `${cacheRate}%` : "—"}</text>
-              </>
-            ) : null}
-          </box>
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}
+          </text>
+          {sceneLine}
+          {showStatus && visible.usage ? (
+            <box flexShrink={0}>
+              <text fg={theme.dim}>{wallClock(now)}</text>
+            </box>
+          ) : null}
+        </box>
+        {/* ONE line for liveness: the status glyph + the online count share it — the header has
+            exactly two inner rows, and stacking these separately overflowed the box and collided
+            with the row below (caught by the screenshot harness at 118 cols). With no count the
+            status label rides alone; with no status the count renders as before. */}
+        <box flexDirection="row">
+          {connectionStatus ? <text fg={connColor(theme, connectionStatus)}>{CONN_GLYPH} </text> : null}
+          {online > 0 ? (
+            <text fg={theme.dim} wrapMode="none" truncate>
+              {online} {tt(locale, "status.online")}
+            </text>
+          ) : connectionStatus ? (
+            <text fg={connColor(theme, connectionStatus)} wrapMode="none" truncate>
+              {tt(locale, connKey(connectionStatus))}
+            </text>
+          ) : null}
+          <box flexGrow={1} minWidth={0} />
+          {usage && showStatus ? (
+            <box flexShrink={0} flexDirection="row">
+              {visible.usage && pct !== null ? (
+                <>
+                  <text fg={theme.dim}>{tt(locale, "hud.ctx")} </text>
+                  <text fg={ctxColor(theme, pct)}>{pct}%</text>
+                  {visible.cache ? <text fg={theme.dim}> · </text> : null}
+                </>
+              ) : null}
+              {visible.usage ? <text fg={theme.dim}>↑{fmtTokens(usage.input_tokens)} ↓{fmtTokens(usage.output_tokens)}</text> : null}
+              {visible.usage && visible.cache ? <text fg={theme.dim}> · </text> : null}
+              {visible.cache ? (
+                <>
+                  <text fg={theme.dim}>{tt(locale, "hud.cache")}{" "}</text>
+                  <text fg={cacheColor(theme, cacheRate)}>{cacheRate !== null ? `${cacheRate}%` : "—"}</text>
+                </>
+              ) : null}
+            </box>
+          ) : null}
+        </box>
       </box>
-      ) : null}
     </box>
   )
 }

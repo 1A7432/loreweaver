@@ -338,7 +338,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
           ) : null}
 
           {error ? (
-            <box marginBottom={1} border borderColor={theme.fumble} paddingX={1}>
+            <box marginBottom={1} border borderColor={theme.fumble} paddingX={1} flexShrink={0}>
               <text fg={theme.fumble}>{stripControlChars(error)}</text>
             </box>
           ) : null}
@@ -361,7 +361,7 @@ export function KeeperKeys({ client, theme, themeName, welcome, stateFrame, onBa
           ) : null}
 
           {roomOp ? (
-            <box marginBottom={1} border borderColor={theme.success} paddingX={1}>
+            <box marginBottom={1} border borderColor={theme.success} paddingX={1} flexShrink={0}>
               <text fg={theme.success}>{stripControlChars(roomOp)}</text>
             </box>
           ) : null}

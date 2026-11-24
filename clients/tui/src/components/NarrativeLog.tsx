@@ -1,4 +1,6 @@
 import { SyntaxStyle } from "@opentui/core"
+import { useRenderer } from "@opentui/react"
+import { useEffect, useMemo } from "react"
 import {
   stripControlChars,
   type AudioControlFrame,
@@ -35,13 +37,13 @@ export function lastChoicesFrameIndex(frames: LogFrame[]): number {
   )
 }
 
-// Markdown rendering requires a SyntaxStyle instance; one shared instance is enough
-// since KP narrative markdown only needs basic emphasis styling.
-const narrativeSyntaxStyle = SyntaxStyle.fromStyles({
+// KP narrative markdown only needs basic emphasis styling. The SyntaxStyle itself is a
+// native resource owned by a renderer, so the log builds one per renderer (see below).
+const NARRATIVE_STYLES = {
   "markup.strong": { bold: true },
   "markup.italic": { italic: true },
   "markup.strikethrough": { dim: true },
-})
+}
 
 export interface NarrativeLogProps {
   frames: LogFrame[]
@@ -134,6 +136,12 @@ export function NarrativeLog({
   choicesFocused = false,
   onChoicePick,
 }: NarrativeLogProps) {
+  const renderer = useRenderer()
+  const narrativeSyntaxStyle = useMemo(
+    () => SyntaxStyle.fromStyles(NARRATIVE_STYLES, renderer.nativeScene),
+    [renderer],
+  )
+  useEffect(() => () => narrativeSyntaxStyle.destroy(), [narrativeSyntaxStyle])
   const activeChoicesIndex = lastChoicesFrameIndex(frames)
   return (
     <box flexDirection="column" width="100%" paddingX={1}>

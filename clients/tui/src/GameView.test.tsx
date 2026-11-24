@@ -9,6 +9,7 @@ import { act } from "react"
 import { FrameType, PROTOCOL_VERSION, type MediaFrame, type MediaPayload, type MediaUpload, type ServerFrame, type WelcomeFrame } from "loreweaver-protocol"
 import { appendFrame, GameView, type GameClient, type GameViewProps } from "./GameView"
 import { SPINNER_FRAMES } from "./components/Spinner"
+import { waitForScreen } from "./testkit"
 import { themes } from "./themes"
 
 class MockClient implements GameClient {
@@ -1135,11 +1136,37 @@ describe("GameView", () => {
 
 // Ctrl+S saves the whole log to a file: the counterpart to the Ctrl+C selection copy,
 // and the only route to lines that already scrolled out of the viewport.
+describe("dice reveal", () => {
+  test("a roll's line finishes its reveal instead of staying on the rolling prefix", async () => {
+    const client = new MockClient()
+    const harness = await renderGame(client)
+    await harness.flush()
+
+    act(() => {
+      client.push({
+        type: FrameType.Dice,
+        actor: "Ada",
+        kind: "check",
+        expr: "1d100",
+        rolls: [12],
+        total: 12,
+        target: 65,
+        outcome: { id: "hard", label: "HARD SUCCESS", success: true, critical: false, fumble: false, tier: 3 },
+      })
+    })
+    const frame = await waitForScreen(harness, "the finished dice line", (text) => text.includes("⚄ Ada 1d100"))
+    expect(frame).not.toContain("⚄ ...")
+
+    act(() => harness.renderer.destroy())
+  })
+})
+
 describe("Ctrl+S transcript export", () => {
   test("writes the log to a file and reports the path in the log", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-export-"))
     const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await renderGame(client, 110, 34, { transcriptDir: dir })
+    const harness = await renderGame(client, 110, 34, { transcriptDir: dir })
+    const { renderer, flush, mockInput } = harness
     await flush()
 
     act(() => {
@@ -1158,7 +1185,7 @@ describe("Ctrl+S transcript export", () => {
     await flush()
 
     await act(async () => mockInput.pressKey("s", { ctrl: true }))
-    const frame = await waitForFrame((text) => text.includes("Session log saved to"))
+    const frame = await waitForScreen(harness, "the saved-log line", (text) => text.includes("Session log saved to"))
     expect(frame).toContain("Session log saved to")
 
     const files = await readdir(dir)
@@ -1195,13 +1222,14 @@ describe("session report frames", () => {
     const hash = createHash("sha256").update(html).digest("hex")
     const client = new MockClient()
     client.getMedia = (requested: string) => Promise.resolve({ hash: requested, mime: "text/html", name: "r.html", bytes: html })
-    const { renderer, flush, waitForFrame } = await renderGame(client, 140, 34, { reportDir: dir })
+    const harness = await renderGame(client, 140, 34, { reportDir: dir })
+    const { renderer, flush } = harness
     await flush()
 
     act(() => {
       client.push({ type: FrameType.Report, hash, name: "r.html", size: html.length, mime: "text/html", variant: "player" })
     })
-    const screen = await waitForFrame((text) => text.includes("Session report saved"))
+    const screen = await waitForScreen(harness, "the saved-report line", (text) => text.includes("Session report saved"))
     expect(screen).toContain("Session report saved")
     expect(await readdir(dir)).toEqual(["r.html"])
     expect(new Uint8Array(await readFile(join(dir, "r.html")))).toEqual(html)
@@ -1213,13 +1241,16 @@ describe("session report frames", () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-report-view-fail-"))
     const client = new MockClient()
     client.getMedia = () => Promise.reject(new Error("media_not_found"))
-    const { renderer, flush, waitForFrame } = await renderGame(client, 140, 34, { reportDir: dir })
+    const harness = await renderGame(client, 140, 34, { reportDir: dir })
+    const { renderer, flush } = harness
     await flush()
 
     act(() => {
       client.push({ type: FrameType.Report, hash: "ab".repeat(32), name: "r.html", size: 3, mime: "text/html", variant: "reveal" })
     })
-    const screen = await waitForFrame((text) => text.includes("Could not save the session report"))
+    const screen = await waitForScreen(harness, "the report-failed line", (text) =>
+      text.includes("Could not save the session report"),
+    )
     expect(screen).toContain("media_not_found")
     expect(await readdir(dir)).toEqual([])
 

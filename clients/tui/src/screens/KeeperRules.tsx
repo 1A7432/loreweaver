@@ -144,7 +144,7 @@ export function KeeperRules({ client, theme, themeName, welcome, stateFrame, onB
           ) : null}
 
           {error ? (
-            <box marginBottom={1} border borderColor={theme.fumble} paddingX={1}>
+            <box marginBottom={1} border borderColor={theme.fumble} paddingX={1} flexShrink={0}>
               <text fg={theme.fumble}>{stripControlChars(error)}</text>
             </box>
           ) : null}

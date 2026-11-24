@@ -333,6 +333,10 @@ export function GameView({
         if (completesSubmission(frame)) setKpWorking(false)
         if (frame.type === FrameType.Dice) {
           setRevealTicks(0)
+          // One reveal per roll: drop the previous roll's finished animation, queue this
+          // one, and start the timeline — it is created with autoplay off, so nothing
+          // plays until it is told to.
+          diceTimeline.items.length = 0
           diceTimeline.add(
             { tick: 0 },
             {
@@ -343,6 +347,7 @@ export function GameView({
               },
             },
           )
+          diceTimeline.restart()
           if ((frame as DiceFrame).outcome?.critical) {
             setCritFlash(true)
             setTimeout(() => setCritFlash(false), 220)

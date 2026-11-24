@@ -12,8 +12,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@opentui/core": "0.4.2",
-    "@opentui/react": "0.4.2",
+    "@opentui/core": "0.9.7",
+    "@opentui/react": "0.9.7",
     "loreweaver-protocol": "file:../protocol",
     "@number0/iroh": "1.2.0",
     "jpeg-js": "0.4.4",

@@ -8,14 +8,44 @@
 const WAIT_BOUND_MS = 3000
 
 /** Yield to the event loop (I/O included) until `cond` holds; fail loudly instead of hanging. */
-export async function waitFor(what: string, cond: () => boolean, detail?: () => string): Promise<void> {
+export async function waitFor(
+  what: string,
+  cond: () => boolean,
+  detail?: () => string,
+  beforeEachLook?: () => Promise<void>,
+): Promise<void> {
   const deadline = Date.now() + WAIT_BOUND_MS
-  while (!cond()) {
+  for (;;) {
+    if (beforeEachLook) await beforeEachLook()
+    if (cond()) return
     if (Date.now() > deadline) {
       throw new Error(`gave up waiting for ${what} after ${WAIT_BOUND_MS}ms${detail ? ` — ${detail()}` : ""}`)
     }
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
+}
+
+/**
+ * Wait for a screen that only appears after real I/O (a file write, a fetch that settles on a
+ * later turn). The renderer's own `waitForFrame` stops as soon as the renderer is idle, which
+ * is before such work has finished; this yields to the event loop between looks instead.
+ */
+export async function waitForScreen(
+  harness: { flush: () => Promise<void>; captureCharFrame: () => string },
+  what: string,
+  has: (frame: string) => boolean,
+): Promise<string> {
+  let frame = ""
+  await waitFor(
+    what,
+    () => has(frame),
+    () => `last frame:\n${frame}`,
+    async () => {
+      await harness.flush()
+      frame = harness.captureCharFrame()
+    },
+  )
+  return frame
 }
 
 /** A few event-loop turns: lets something that must NOT happen show up if it were going to. */

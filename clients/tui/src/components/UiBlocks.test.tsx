@@ -200,7 +200,7 @@ describe("image blocks (M19 item 6)", () => {
       <UiBlocksView frame={frame} theme={theme} locale="zh" />,
     )
     await act(async () => {
-      renderOnce()
+      await renderOnce()
     })
     expect(captureCharFrame()).toContain("温府画像组")
   })
@@ -239,7 +239,7 @@ describe("performance templates (M19)", () => {
       <UiBlocksView frame={frame} theme={theme} locale="zh" />,
     )
     await act(async () => {
-      renderOnce()
+      await renderOnce()
     })
     const output = captureCharFrame()
     expect(output).toContain("第二幕 · 曝灯")

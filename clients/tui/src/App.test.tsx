@@ -483,9 +483,11 @@ describe("App shell", () => {
     await flush()
 
     expect(client.sent).toEqual(["开始内置示例冒险"])
-    const game = await waitForFrame((text) => text.includes("黑沼灯塔") && text.includes("搜查港口地图"))
+    // The loading line is longer than the log is wide, so assert on a phrase from its first
+    // row: where the rest wraps is the renderer's business, not this test's.
+    const game = await waitForFrame((text) => text.includes("黑沼灯塔") && text.includes("诺拉·万斯已经就绪"))
     expect(game).toContain("输入行动或命令")
-    expect(game).toContain("搜查港口地图")
+    expect(game).toContain("开场后可试试")
 
     // The empty-room capability is consumed immediately; returning to the menu must not offer
     // another destructive sample start while the first setup is in flight/already installed.
