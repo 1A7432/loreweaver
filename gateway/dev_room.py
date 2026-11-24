@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING
 
 from agent.context import AgentCtx, LocalFs
 from core.pack import MANIFEST_NAME, PackError, PackManifest, parse_manifest_text
+from core.pack_lint import lint_pack
 from core.rulepacks import reload_rulepacks, set_extra_rulepack_dirs
 from core.skills import reload_skills, set_extra_skill_dirs
 from core.worldbook import LORE_DOC_TYPE
@@ -56,6 +57,8 @@ logger = logging.getLogger(__name__)
 DEV_MOUNT_KEY = "dev_mount"
 POLL_SECONDS = 1.5
 MAX_SCAN_FILES = 4000
+# A reload summary is a chat line: show the first few advisory notes, count the rest.
+MAX_LINT_LINES = 8
 
 
 @dataclass(frozen=True)
@@ -245,13 +248,34 @@ async def reload(services: Services, hub: RoomHub | None, chat_key: str, locale:
     if hub is not None:
         await publish_ui_manifests(hub, services, chat_key)
         await publish_state(hub, services, ctx)
-    return i18n.t(
+    summary = i18n.t(
         "dev.commands.reload_done",
         cards=len(world_cards),
         lorebooks=len(manifest.contents.get("lorebooks", ())),
         lore=live,
         removed=removed,
     )
+    return "\n".join([summary, *_lint_lines(i18n, current.path)])
+
+
+def _lint_lines(i18n, source: Path) -> list[str]:
+    """The advisory pack check (`core.pack_lint`), run on the SAME tree that was just
+    reloaded — the moment an author is looking at the room and can still fix the file.
+
+    Advisory in both directions: it never blocks or alters a reload, and a lint that
+    cannot run (it reads the tree again, and a save may land between the two reads)
+    simply says nothing this cycle."""
+    try:
+        findings = lint_pack(source)
+    except Exception:  # noqa: BLE001 — advisory by contract
+        return []
+    if not findings:
+        return []
+    lines = [i18n.t("dev.commands.lint_header", count=len(findings))]
+    lines.extend(f"   {finding.render(i18n)}" for finding in findings[:MAX_LINT_LINES])
+    if len(findings) > MAX_LINT_LINES:
+        lines.append(i18n.t("dev.commands.lint_more", count=len(findings) - MAX_LINT_LINES))
+    return lines
 
 
 def ensure_watcher(services: Services, hub: RoomHub | None, chat_key: str) -> None:

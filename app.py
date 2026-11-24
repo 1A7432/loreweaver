@@ -23,6 +23,7 @@ from core import pack as core_pack
 from core import rulepacks as core_rulepacks
 from core import skills as core_skills
 from core.dice_engine import seed_dice
+from core.pack_lint import LintFinding, lint_pack
 from gateway.commands import CommandRouter
 from gateway.panels import installed_pack_homes
 from gateway.runner import GatewayRunner
@@ -109,8 +110,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--doctor", action="store_true")
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--pack", metavar="SRC_DIR")
+    # Advisory check of a pack SOURCE tree (`core.pack_lint`): never fails on a finding.
+    parser.add_argument("--lint", metavar="SRC_DIR")
     parser.add_argument("--out", metavar="PACK_FILE")
-    # Machine-readable `--pack` result on stdout (the studio pack wizard's interface);
+    # Machine-readable `--pack` / `--lint` result on stdout (the studio pack wizard's interface);
     # every human-facing line already goes to stderr, so stdout stays exactly one object.
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--install", metavar="REF")
@@ -141,6 +144,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.pack:
         return _run_pack(i18n, args)
+
+    if args.lint:
+        return _run_lint(i18n, args)
 
     if args.install:
         return _run_install(settings, i18n, args)
@@ -446,7 +452,7 @@ def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
     engine parsers and emit a byte-deterministic `.lwpack` (see `core.pack.build_pack`).
 
     With `--json`, stdout carries exactly ONE machine-readable result object — success:
-    ``{"ok": true, "path", "id", "version", "sha256", "trust"}``; failure:
+    ``{"ok": true, "path", "id", "version", "sha256", "trust", "warnings", "lint"}``; failure:
     ``{"ok": false, "error"}`` — while the localized human lines (including the trust
     card) stay on stderr. JSON keys/values are data, not UI text (i18n-exempt)."""
     try:
@@ -456,6 +462,9 @@ def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         print(i18n.t("pack.build.failed", error=str(exc)), file=sys.stderr)
         return 1
+    # The build proved the pack VALID; the lint says where a valid pack will still not do
+    # what its author meant. Advisory, and never allowed to cost a successful build.
+    findings = _lint_findings(Path(args.pack))
     if args.json:
         trust = asdict(built.manifest.trust) if built.manifest.trust is not None else None
         print(
@@ -468,6 +477,7 @@ def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
                     "sha256": built.sha256,
                     "trust": trust,
                     "warnings": list(built.warnings),
+                    "lint": [finding.to_dict(i18n) for finding in findings],
                 },
                 ensure_ascii=False,
             )
@@ -476,6 +486,7 @@ def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
         # Author-actionable, but not a build failure (M26 §5.5): an overlay naming an entry
         # title the card no longer carries usually means the card was revised.
         print(i18n.t("pack.build.warning", detail=warning), file=sys.stderr)
+    _print_lint(i18n, findings)
     print(
         i18n.t(
             "pack.build.done",
@@ -487,6 +498,46 @@ def _run_pack(i18n: I18n, args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     _print_trust_card(i18n, built.manifest, i18n.locale)
+    return 0
+
+
+def _lint_findings(source_dir: Path) -> list[LintFinding]:
+    """The advisory findings for a source tree that already BUILT. A lint that raises
+    here would turn an advisory into a build failure, so anything it throws is dropped."""
+    try:
+        return lint_pack(source_dir)
+    except Exception:  # noqa: BLE001 — advisory by contract
+        return []
+
+
+def _print_lint(i18n: I18n, findings: list[LintFinding]) -> None:
+    if not findings:
+        return
+    print(i18n.t("pack.lint.header", count=len(findings)), file=sys.stderr)
+    for finding in findings:
+        print(i18n.t("pack.lint.finding", detail=finding.render(i18n)), file=sys.stderr)
+
+
+def _run_lint(i18n: I18n, args: argparse.Namespace) -> int:
+    """`--lint SRC_DIR [--json]`: the advisory pack check, without building anything.
+
+    Exit status says whether the lint RAN, never what it found: 0 with any number of
+    findings, 1 only when there is no readable `pack.yaml` to lint. With `--json`, stdout
+    carries exactly one object — ``{"ok": true, "findings": [{code, where, message}]}`` or
+    ``{"ok": false, "error"}`` — and the human lines stay on stderr, like `--pack`."""
+    try:
+        findings = lint_pack(Path(args.lint))
+    except core_pack.PackError as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        print(i18n.t("pack.lint.failed", error=str(exc)), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"ok": True, "findings": [finding.to_dict(i18n) for finding in findings]}, ensure_ascii=False))
+    if findings:
+        _print_lint(i18n, findings)
+    else:
+        print(i18n.t("pack.lint.clean"), file=sys.stderr)
     return 0
 
 

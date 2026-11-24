@@ -152,6 +152,42 @@ async def test_mount_reload_edit_cycle_syncs_the_room(tmp_path):
     assert "Lighthouse" in titles
 
 
+async def test_reload_summary_carries_the_advisory_pack_check(tmp_path):
+    """The lint rides every reload — the moment the author is looking at the room — and
+    stays advisory: the mount lands either way, and a fixed file clears the note."""
+    src = _write_source(tmp_path)
+    services = _services(tmp_path)
+
+    reply = await dev_room.mount(services, None, CHAT, str(src), "en")
+    # The fixture declares `suspicion` and nothing in the pack ever mentions it.
+    assert "[var-unused]" in reply
+    assert "variables[suspicion]" in reply
+    assert "suspicion" in (await _modvar_specs(services))  # ...and the mount still landed
+
+    (src / "skills/dev-omen/SKILL.md").write_text(
+        SKILL_MD + "Raise `suspicion` by one whenever the tenant lies.\n", encoding="utf-8"
+    )
+    summary = await dev_room.reload(services, None, CHAT, "en")
+    assert "var-unused" not in summary
+
+    # A long list is cut to a chat-sized head plus a count.
+    card = dict(WORLD_CARD)
+    card["variables"] = [
+        {"id": f"orphan_{index}", "kind": "number", "default": 0, "minimum": 0, "maximum": 10}
+        for index in range(dev_room.MAX_LINT_LINES + 3)
+    ]
+    (src / "cards/corridor.lorecard.json").write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
+    summary = await dev_room.reload(services, None, CHAT, "en")
+    assert summary.count("[var-unused]") == dev_room.MAX_LINT_LINES
+    assert services.i18n.with_locale("en").t("dev.commands.lint_more", count=3) in summary
+
+
+async def _modvar_specs(services):
+    from core.modvars import load_modvars
+
+    return (await load_modvars(services.documents, CHAT))["specs"]
+
+
 async def test_dev_command_surface_and_watcher_lifecycle(tmp_path):
     from gateway.commands import CommandRouter
 

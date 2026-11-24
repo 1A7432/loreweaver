@@ -582,11 +582,41 @@ TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-key
 
 挂载被限制在 `TRPG_DEV__SOURCE_ROOT` 之下，不设置它整个功能就是关的——只在你自己的开发机上开。开发挂载直接从源码提供面板和演出资料包（跳过构建期的上限检查），所以 `--pack` 仍然是发布前必须过的那道门。
 
+**包检查——一个合法的包还会错在哪。** `--pack` 证明的是你的模组是一个*合法*的包。它没法告诉你某个面板格子永远画不出来，因为那照样是一个合法的包。这件事归包检查管：
+
+```console
+$ uv run python -m app --lint my-module/
+包检查：3 条提示——仅供参考，不影响打包：
+   提示：ui/panels.yaml: panels[gauges].blocks[1].value: 绑定了「suspicion」，这是守秘人专属变量：它不会发到任何屏幕上（管理员的也不会），所以这一格永远画不出来 [panel-var-keeper-only]
+   提示：cards/harbour.lorecard.json: entry 'The cellar': 没有关键词，也不是常驻条目：关键词匹配永远选不中它，只剩语义召回这一条路能把它带进提示词 [lore-no-keys]
+   提示：ui/panels.yaml: panels[status].blocks[0].label: 只写了 en——用 zh 的玩家看到的是另一种语言 [locale-gap]
+```
+
+它用引擎自己的解析器读源码目录——不调模型、不联网、什么都不导入——而且只是提示：一条提示永远不会让打包失败，`--lint` 不管查出什么都以 0 退出（只有找不到能读的 `pack.yaml` 时才是 1）。同样的提示，`--pack` 在打包成功之后也会打印，开发房间每次重载的回执后面也会附上，所以你是在文件还开着的时候看到它们的。`--json` 把这份清单以 `{code, where, message}` 的形式交给工具。它查这些：
+
+| 代号 | 意思 |
+|---|---|
+| `panel-var-keeper-only` | 面板读了 `visibility: keeper` 的变量。这种变量**不会**发到任何屏幕上——`audience: keeper` 决定的是谁拿到这块面板，不是哪些变量到得了面板——所以这一格永远画不出来。 |
+| `panel-var-unexposed` | 面板读了导入卡的变量（`mvu.<路径>`），而包里没有任何设定覆盖文件公开它。管理员执行 `.var expose` 之前玩家什么都收不到。 |
+| `panel-var-unknown` | 面板读了一个包里没人声明的变量（通常是手误，或者导入卡变量漏写了 `mvu.` 前缀）。 |
+| `panel-repeat-empty` | `repeat` 的前缀下没有任何玩家可见的变量。 |
+| `var-unused` | 变量声明了，但别处从没提到它——面板、条件、钩子、技能、设定正文里都没有。 |
+| `lore-no-keys` | 一个在场的条目没有关键词，也不是常驻：只有语义召回能把它带进来。 |
+| `lore-never-fires` | `probability: 0`，或者次级关键词全空而逻辑是 `and_*`。 |
+| `lore-condition-unknown-var` | 条目的条件读了一个没人声明的变量，结果永远不会变。 |
+| `overlay-expose-unknown` | 设定覆盖文件的 `expose:` 写了一个卡片 `[InitVar]` 树里没有的前缀。 |
+| `locale-gap` | 这个包是双语的（`name` 里 `en`、`zh` 都有），却有一处文案只写了一种语言。单语的包不会有这类提示，一个不带语言标记的裸字符串（`HP`）也不算缺。 |
+| `card-note` | 原生卡解析器跳过或裁掉的行（否则你要到导入时才会知道）。 |
+| `unreadable` | 解析不了的文件；打包会连同完整原因一起拒掉它。 |
+
+它只报引擎自己的规则能确定的事。技能里让守秘人在桌上现建的变量、钩子会写进去的变量，都不会被说成“没声明”；一段它静态读不懂的 `[InitVar]`，会让和变量树形状有关的检查整个关掉，而不是去猜。没有提示不等于合格证——只说明没犯这几种错。
+
 **真跑出了问题，把工具调用记下来。** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`（相对路径落在数据目录下）会把模型发出的每一次工具调用追加成一行 JSON——`{ts, ms, room, tool, phase, args, result}`，被拒绝的和被 hook 否决的也在内。它回答的是对话记录回答不了的问题：守秘人到底传了哪个参数、哪个工具每次都失败、一个回合的时间花在哪。默认关，值得一句提醒：文件里逐字记着工具的参数和结果，也就是你模组的秘密——它是调试用的，不是该贴进 bug 报告的东西。
 
 **脚本化链路**——不用 key、不联网、真骰子：
 
 ```bash
+uv run python -m app --lint my-module/                 # 合法的包还会错在哪？
 uv run python -m app --pack my-module/                 # 它至少能构建吗？
 TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes
 TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
