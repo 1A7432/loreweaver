@@ -26,8 +26,9 @@ structurally cannot render, so clients speak the open protocol instead. QQ reach
 **mode of the terminal client** (`loreweaver bridge`): an ordinary protocol client, not an
 engine adapter — official Bot API first, OneBot 11 (personal account) second.
 
-**v1.0.0 shipped as the first stable release**, and development has continued past it on a
-`2.3.dev*` line (the version follows the wire-protocol version). Since then, seven structural milestones landed:
+**v1.0.0 was the first stable release; v2.5.0 is the current one** (the version follows the
+wire-protocol version, which is why the number jumped), and development continues on `2.5.1.dev*`
+builds. Between the two, seven structural milestones landed:
 
 - **Rules became data (M16).** A rule system is one file, and it owns everything about itself: the
   tiers a check can land on, what a sheet looks like, which subsystems exist, which dot-commands it
