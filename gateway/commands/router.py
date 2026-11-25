@@ -221,6 +221,8 @@ class CommandRouter(
             error=command_ctx.failed,
             markdown=command_ctx.markdown,
             private=command_ctx.private,
+            ui_frames=tuple(command_ctx.ui_frames),
+            panel_events=tuple(command_ctx.panel_events),
         )
 
     def slash_definitions(self, locale: str = "en") -> list[dict]:
@@ -392,6 +394,7 @@ class CommandRouter(
                 keeper_help=True,
             ),
             CommandSpec("panels", self.cmd_panels, ["panels"], ["panels", "模组面板"], None, "commands.help.panels"),
+            CommandSpec("act", self.cmd_act, ["act"], ["act", "动作", "動作"], {"name": "act"}, "commands.help.act"),
             CommandSpec(
                 "pack",
                 self.cmd_pack,

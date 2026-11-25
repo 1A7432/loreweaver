@@ -23,7 +23,7 @@ from agent.hook_runtime import (  # noqa: E402
 from agent.loop import run_kp_turn  # noqa: E402
 from agent.services import build_services  # noqa: E402
 from agent.tools import Toolset, tool  # noqa: E402
-from agent.undo import restore  # noqa: E402
+from agent.undo import capture, restore  # noqa: E402
 from core.hooks import MAX_STATE_VALUE_BYTES, HookOutcome  # noqa: E402
 from infra.config import Settings  # noqa: E402
 from infra.embeddings import FakeEmbeddings  # noqa: E402
@@ -372,3 +372,37 @@ async def test_export_and_import_carry_the_state(tmp_path):
     await import_room(services, keystore, exported["path"], expected_room="hook-export")
 
     assert await _stored(services, chat_key) == {"ledger": '{"n":1}'}
+
+
+async def test_a_full_store_round_trips_export_import_and_undo(tmp_path):
+    """The raised caps (1 MiB per value, 4 MiB per room) still fit the room export's
+    room_state budget and the undo snapshot path."""
+    from core.hooks import MAX_STATE_TOTAL_BYTES, MAX_STATE_VALUE_BYTES
+    from net.room_backup import MAX_BACKUP_STORE_BYTES
+
+    assert MAX_STATE_TOTAL_BYTES < MAX_BACKUP_STORE_BYTES
+    services = _services(data_dir=str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="hook-full", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("hook-full")
+    count = MAX_STATE_TOTAL_BYTES // MAX_STATE_VALUE_BYTES
+    full = {f"chunk{index}": chr(ord("a") + index) * (MAX_STATE_VALUE_BYTES - 2) for index in range(count)}
+    applied = await apply_hook_state_writes(services, chat_key, None, HookOutcome(state_writes=list(full.items())))
+    assert applied == list(full)
+    stored = await load_hook_state(services, chat_key)
+    assert stored == full
+    # One byte more anywhere is refused: the store is exactly full.
+    assert await apply_hook_state_writes(services, chat_key, None, HookOutcome(state_writes=[("one_more", 1)])) == []
+
+    await capture(services, chat_key, 1)
+    exported = await export_room(services, keystore, "hook-full", "full.json")
+    await apply_hook_state_writes(
+        services, chat_key, None, HookOutcome(state_writes=[(key, None) for key in full])
+    )
+    assert await load_hook_state(services, chat_key) == {}
+
+    assert await restore(services, chat_key, 1)
+    assert await load_hook_state(services, chat_key) == full
+    await apply_hook_state_writes(services, chat_key, None, HookOutcome(state_writes=[("chunk0", None)]))
+    await import_room(services, keystore, exported["path"], expected_room="hook-full")
+    assert await load_hook_state(services, chat_key) == full

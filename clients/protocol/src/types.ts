@@ -7,9 +7,10 @@
 // can send the right import verb. 2.4 adds the `report` frame: a server-generated HTML
 // session report announced to the issuing connection only. 2.5 adds display labels
 // beside raw ids: `value_label` on enum variables, `attribute_labels` on the character,
-// `subsystem_label` on dice, and `blurb`/`claimed_by_name` on pregens. A 2.0/2.1 client
-// ignores all of it.
-export const PROTOCOL_VERSION = "2.5" as const
+// `subsystem_label` on dice, and `blurb`/`claimed_by_name` on pregens. 2.6 adds
+// `state.actions`: the room's player-invokable module actions, run by sending
+// `.act <id> <json>` as ordinary input. A 2.0/2.1 client ignores all of it.
+export const PROTOCOL_VERSION = "2.6" as const
 
 export const FrameType = {
   Join: "join",
@@ -812,6 +813,18 @@ export interface RuleSystemEntry {
   make_char?: string
 }
 
+/** v2.6: one player-invokable module action (`defineAction(name, {player: true, …})`).
+ * Run it by sending `.act <id> <args>` as ordinary input — `args` a JSON object, or
+ * free text the server wraps as `{"text": …}`. Its result is table content. */
+export interface ModuleActionEntry {
+  id: string
+  /** Already resolved in the server's language; falls back to `id`. */
+  label: string
+  description: string
+  /** A free-text hint of the args shape, written by the module author. */
+  params?: string
+}
+
 export interface StateFrame {
   type: typeof FrameType.State
   character?: CharacterState
@@ -832,6 +845,11 @@ export interface StateFrame {
   // offer character creation without knowing any rule system — so a pack that ships
   // its own system reaches every client's picker with no client release.
   systems?: RuleSystemEntry[]
+  // v2.6 additive: the room's player-invokable module actions, in registration order.
+  // Absent — never an empty array — when the room has none. Served from a cache the
+  // server refreshes whenever it builds the room's hook engine (every Keeper turn,
+  // every `.act`, a hook install, a skill toggle), so it can briefly lag a change.
+  actions?: ModuleActionEntry[]
   // Set once, on the state frame the server pushes right after a campaign reset
   // (`.reset` / `admin_reset_room`): besides the already-fresh (empty) panel data,
   // the client should also clear its locally-accumulated chat scrollback.

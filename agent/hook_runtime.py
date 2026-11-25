@@ -50,9 +50,22 @@ ROOM_HOOKS_CAP = 16
 # reset facet below carry it like every other room_state row with no code of their own.
 HOOK_STATE_PREFIX = "hook_state:"
 
+# The room's PLAYER-invokable module actions as the last engine built for the room saw them
+# (protocol 2.6 `state.actions`): a state frame must not have to build a QuickJS engine to
+# list them. A JSON list of `core.hooks.ActionSpec.manifest_entry()`; absent/"" = none.
+ACTION_MANIFEST_KEY = "hook_action_manifest"
+# Lanes whose engine build refreshes the manifest. The Scribe's veto engine runs outside the
+# turn lock and sees the same scripts, so it never writes room state of its own.
+_MANIFEST_LANES = frozenset({"hooks", "command"})
+
 
 async def load_room_hook_engine(
-    services: Services, ctx: AgentCtx, *, turn: int | None = None, lane: str = "hooks"
+    services: Services,
+    ctx: AgentCtx,
+    *,
+    turn: int | None = None,
+    lane: str = "hooks",
+    ordinal_offset: int = 0,
 ) -> HookEngine | None:
     """Build this turn's hook engine, or `None` (hooks inert) when nothing is registered,
     the `ejs` extra is missing, or `enable_full_ejs` is off (that switch governs hooks and
@@ -62,7 +75,20 @@ async def load_room_hook_engine(
     `turn` is the turn in flight for `event.seed` — by default the same counter
     `agent.prompt_builder.turn_rng`'s caller uses (completed turns + 1); a lane that runs
     after the turn completed (the Scribe) passes the turn it is about. `lane` keeps two
-    engines of one turn from drawing the same seeds."""
+    engines of one turn from drawing the same seeds; `ordinal_offset` starts its seed
+    ordinals elsewhere than 0 (the `.act` lane's persisted counter).
+
+    Every build on the turn and command lanes also refreshes the room's cached player-action
+    manifest (`ACTION_MANIFEST_KEY`) — cleared when hooks are off or nothing registered."""
+    engine = await _build_room_hook_engine(services, ctx, turn=turn, lane=lane, ordinal_offset=ordinal_offset)
+    if lane in _MANIFEST_LANES:
+        await store_action_manifest(services, ctx.chat_key, engine)
+    return engine
+
+
+async def _build_room_hook_engine(
+    services: Services, ctx: AgentCtx, *, turn: int | None, lane: str, ordinal_offset: int
+) -> HookEngine | None:
     if not services.settings.enable_full_ejs:
         return None
     try:
@@ -98,6 +124,7 @@ async def load_room_hook_engine(
             room=ctx.chat_key,
             turn=turn,
             lane=lane,
+            ordinal_offset=ordinal_offset,
         )
         if engine is not None and engine.load_warnings:
             logger.warning("hook script load warnings for %s: %s", ctx.chat_key, engine.load_warnings)
@@ -105,6 +132,34 @@ async def load_room_hook_engine(
     except Exception:
         logger.warning("hook engine load failed, hooks inert this turn", exc_info=True)
         return None
+
+
+async def store_action_manifest(services: Services, chat_key: str, engine: HookEngine | None) -> None:
+    """Cache the room's player-invokable actions for `state` frames. Writes only on change;
+    never raises (a stale list is a cosmetic fault, a raise would cost the turn)."""
+    try:
+        entries = [spec.manifest_entry() for spec in (engine.actions if engine is not None else ()) if spec.player]
+        text = json.dumps(entries, ensure_ascii=False, separators=(",", ":")) if entries else ""
+        if (await services.store.state_get(chat_key, ACTION_MANIFEST_KEY) or "") != text:
+            await services.store.state_set(chat_key, ACTION_MANIFEST_KEY, text)
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.warning("player-action manifest refresh failed for %s", chat_key, exc_info=True)
+
+
+async def load_action_manifest(services: Services, chat_key: str) -> list[dict[str, Any]]:
+    """The cached player-action manifest (see `store_action_manifest`); [] when none/corrupt."""
+    try:
+        raw = await services.store.state_get(chat_key, ACTION_MANIFEST_KEY)
+        entries = json.loads(raw) if raw else []
+    except Exception:  # noqa: BLE001 — a corrupt cache reads as "no actions"
+        return []
+    return [entry for entry in entries if isinstance(entry, dict) and isinstance(entry.get("id"), str)] if isinstance(entries, list) else []
+
+
+async def refresh_action_manifest(services: Services, chat_key: str) -> None:
+    """Rebuild the room's engine once just to refresh the manifest — after a hook install or a
+    skill toggle, so a client's action list follows without waiting for the next turn."""
+    await load_room_hook_engine(services, AgentCtx(chat_key=chat_key), lane="command")
 
 
 async def _room_scripts(services: Services, chat_key: str) -> list[HookScript]:
@@ -134,6 +189,7 @@ async def install_room_hooks(services: Services, chat_key: str, source_id: str, 
             kept.append(HookScript(source_id=f"{source_id}#{index}", code=code))
     payload = [{"id": script.source_id, "code": script.code} for script in kept[:ROOM_HOOKS_CAP]]
     await services.store.state_set(chat_key, "room_hooks", json.dumps(payload, ensure_ascii=False))
+    await refresh_action_manifest(services, chat_key)
     return len(payload)
 
 
@@ -325,6 +381,17 @@ ROOM_FACETS = (
         # them. It is ordinary room_state, so undo snapshots and export/import carry it with
         # no code here.
         state_prefixes=frozenset({HOOK_STATE_PREFIX}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+    RoomStateFacet(
+        name="hook_action_manifest",
+        owner="agent.hook_runtime",
+        reset_scope="all",
+        # A derived cache of what the room's scripts register — mostly the card-installed
+        # `room_hooks`, which die at `all`, so the cache dies with them. It is rebuilt by the
+        # next engine build (every Keeper turn, every `.act`, a hook install, a skill toggle);
+        # until then a client lists fewer actions, never actions that cannot run.
+        state_keys=frozenset({ACTION_MANIFEST_KEY}),
         storages=frozenset({STORAGE_ROOM_STATE}),
     ),
 )

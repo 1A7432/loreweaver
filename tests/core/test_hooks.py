@@ -688,3 +688,79 @@ def test_an_unknown_action_is_refused_by_the_engine_too():
     engine = _action_engine("defineAction('known', {description: 'x'}, () => 1);")
     outcome = engine.run_action("nope", {})
     assert not outcome.ok and outcome.error
+
+
+# ---------------------------------------------------------------------------
+# Player-invokable actions (protocol 2.6) and the raised capacity caps
+# ---------------------------------------------------------------------------
+
+
+def test_player_and_label_are_parsed_and_resolved_per_locale():
+    engine = _action_engine(
+        "defineAction('march', {description: 'm', player: true, label: {en: 'March', zh: '行军'}}, () => 1);"
+        "defineAction('plain', {description: 'p', player: true, label: 'Look around'}, () => 1);"
+        "defineAction('secret', {description: 's'}, () => 1);"
+    )
+    march, plain, secret = engine.actions
+    assert march.player and plain.player and not secret.player
+    assert march.label_for("zh") == "行军" and march.label_for("en") == "March" and march.label_for("fr") == "March"
+    assert plain.label_for("zh") == "Look around" and secret.label_for("en") == "secret"
+    assert march.manifest_entry() == {"id": "march", "description": "m", "labels": {"en": "March", "zh": "行军"}}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "{description: 'x', player: 'yes'}",
+        "{description: 'x', label: 'L'.repeat(61)}",
+        "{description: 'x', label: {fr: 'Marche'}}",
+        "{description: 'x', label: {en: ''}}",
+        "{description: 'x', label: 5}",
+    ],
+)
+def test_a_bad_player_or_label_drops_the_action(spec):
+    engine = _action_engine(f"defineAction('bad', {spec}, () => 1); defineAction('good', {{description: 'ok'}}, () => 1);")
+    assert [action.name for action in engine.actions] == ["good"]
+
+
+def test_event_source_tells_the_handler_who_called():
+    engine = _action_engine("defineAction('who', {description: 'w', player: true}, (a, ev) => ev.source);")
+    assert engine.run_action("who", {}).text == "keeper"
+    assert engine.run_action("who", {}, source="player").text == "player"
+
+
+def test_ordinal_offset_moves_every_stream():
+    from core.hooks import hook_seed
+
+    engine = create_hook_engine(
+        [HookScript("t", "defineAction('s', {description: 's'}, (a, ev) => String(ev.seed));")],
+        flat_variables={}, tree={}, room="r", turn=2, lane="command", ordinal_offset=7,
+    )
+    assert engine.run_action("s", {}).text == str(hook_seed("r", 2, "command:action:7"))
+
+
+def test_scripts_past_the_room_total_are_skipped_in_order():
+    from core.hooks import MAX_HOOK_SOURCE_CHARS, MAX_HOOK_TOTAL_SOURCE_CHARS
+
+    padding = "//" + "x" * (MAX_HOOK_SOURCE_CHARS - 200) + "\n"
+    per_script = len(padding) + 60
+    fits = MAX_HOOK_TOTAL_SOURCE_CHARS // per_script
+    scripts = [
+        HookScript(f"s{index}", padding + f"on('turn_start', () => narrate('s{index}'));")
+        for index in range(fits + 2)
+    ]
+    engine = create_hook_engine(scripts, flat_variables={}, tree={})
+    assert engine.fire("turn_start", {}).narrations == [f"s{index}" for index in range(fits)]
+    assert sum("in total" in warning for warning in engine.load_warnings) == 2
+
+
+def test_a_script_at_the_raised_per_script_cap_loads():
+    from core.hooks import MAX_HOOK_SOURCE_CHARS
+
+    body = "on('turn_start', () => narrate('big'));\n"
+    code = body + "//" + "y" * (MAX_HOOK_SOURCE_CHARS - len(body) - 2)
+    assert len(code) == MAX_HOOK_SOURCE_CHARS
+    engine = create_hook_engine([HookScript("big", code)], flat_variables={}, tree={})
+    assert engine.fire("turn_start", {}).narrations == ["big"]
+    too_big = create_hook_engine([HookScript("big", code + "z"), HookScript("ok", body)], flat_variables={}, tree={})
+    assert too_big.fire("turn_start", {}).narrations == ["big"]  # only the second script ran

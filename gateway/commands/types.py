@@ -61,6 +61,10 @@ class CommandCtx:
     # form of `CommandSpec.private_reply` (`.report html` answers "sent to your client"
     # while the rest of `.report` stays table content). Unicast like a failed reply.
     private: bool = False
+    # Hook-emitted table effects of the command (`.act`): protocol `ui` frame payloads and
+    # `panel_event` payloads, delivered by `gateway.turn.run_turn` like a Keeper turn's.
+    ui_frames: list[dict] = field(default_factory=list)
+    panel_events: list[dict] = field(default_factory=list)
 
     @property
     def chat_key(self) -> str:
@@ -101,3 +105,5 @@ class CommandReply:
     markdown: bool = False
     # A successful reply meant for the invoking connection only (`CommandCtx.private`).
     private: bool = False
+    ui_frames: tuple[dict, ...] = ()
+    panel_events: tuple[dict, ...] = ()

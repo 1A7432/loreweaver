@@ -160,6 +160,10 @@ class RulesCommands:
             return ctx.i18n.t("commands.skill.unknown", id=skill_id)
 
         await toggle_enabled_skill(ctx.services.store, ctx.chat_key, skill_id, on=enable)
+        # A skill's hooks.js may register player actions: the client's list follows now.
+        from agent.hook_runtime import refresh_action_manifest
+
+        await refresh_action_manifest(ctx.services, ctx.chat_key)
         if enable:
             return ctx.i18n.t("commands.skill.enable_done", id=skill_id)
         return ctx.i18n.t("commands.skill.disable_done", id=skill_id)

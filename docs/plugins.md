@@ -468,8 +468,8 @@ operator's content, the operator's box):
   prompt, never on a player or admin wire frame, never a `variables_changed` write or a
   `KPTurnResult.hook_writes` entry, invisible to the Scribe, conditions and panels. Same
   iron-rule-#1 shape as `setvar`: buffered in the sandbox, validated against the caps
-  (`core.hooks.MAX_STATE_*`: key `[A-Za-z0-9_.:-]{1,64}`, value ≤ 256 KiB, ≤ 32 keys and
-  ≤ 1 MiB per room, ≤ 32 writes per dispatch) and persisted by
+  (`core.hooks.MAX_STATE_*`: key `[A-Za-z0-9_.:-]{1,64}`, value ≤ 1 MiB, ≤ 64 keys and
+  ≤ 4 MiB per room, ≤ 32 writes per dispatch) and persisted by
   `agent.hook_runtime.apply_hook_state_writes` after every non-`tool_use` dispatch; a
   refused write is skipped and logged, a corrupt row reads as absent; the reserved keys
   `__proto__`/`constructor`/`prototype` are refused, and the sandbox view is built with
@@ -498,7 +498,16 @@ operator's content, the operator's box):
   (`core.hooks`): name `[a-z][a-z0-9_]{0,31}`, 24 actions per room (first valid duplicate
   wins), description ≤ 200, params hint ≤ 400, ≤ 8 roll slots, args ≤ 8 KiB, ≤ 16 calls per
   KP turn; calls are always a concurrency barrier. A rulepack subsystem may not be named
-  `module_action`.
+  `module_action`. An action with `spec.player: true` (and an optional `spec.label`,
+  string or `{en, zh}`, ≤ 60 chars) may also be run by any member with **`.act <name>
+  [args]`** (`gateway/commands/world.py` → `agent.hook_actions.run_player_action`): no
+  Keeper round, no per-turn cap, no `tool_use` check; `event.source` is `"player"`. Its
+  result is PLAYER-VISIBLE authorial output, broadcast like a `.ra` result (failures to the
+  caller only); `variables_changed` fires once after it when it wrote variables; its seed
+  stream is `command:action:<n>` off a per-room counter (`hook_command_seq`, story scope);
+  its result reaches the Keeper's next prompt through a read-and-clear section
+  (`player_action_log`, 8 × 400 chars). Protocol 2.6 lists the player actions on `state`
+  (`state.actions`) from a manifest cached at every engine build (`hook_action_manifest`).
 - **`event.seed`**: every dispatch (the six events and every action) carries a 53-bit seed
   derived like `agent.prompt_builder.turn_rng` — sha256 over (room, turn in flight,
   `<lane>:<event>:<ordinal>`) — from persisted inputs only, so the same room state replays

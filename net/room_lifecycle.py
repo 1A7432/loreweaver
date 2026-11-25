@@ -25,6 +25,7 @@ FACET_MODULES: tuple[str, ...] = (
     "agent.chronicle",
     "agent.forge",
     "agent.history",
+    "agent.hook_actions",
     "agent.hook_runtime",
     "agent.kp_tools_charcard",
     "agent.kp_tools_companion",

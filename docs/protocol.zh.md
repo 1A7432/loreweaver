@@ -1,15 +1,17 @@
 *[English](protocol.md) · 中文*
 
-# Loreweaver 联网 TUI —— 协议 2.5
+# Loreweaver 联网 TUI —— 协议 2.6
 
 这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性内核加 AI 守秘人）和用什么传输无关；与传输无关的会话逻辑在 `net.session.SessionCore` 里，这份文档描述的是接口，不绑定任何编程语言。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.5"`。同一套帧和 `join` 握手可以跑在两种传输上：
+控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.6"`。同一套帧和 `join` 握手可以跑在两种传输上：
 
 - **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
 - **WebSocket**（`net.tui_server`）只留作离线测试和本机回环，不是 `--serve` 的一个选项。控制帧是文本消息，媒体字节是二进制消息。
 
 两种传输驱动的是同一个 `SessionCore` / `RoomHub`。
+
+**2.6（增量）**新增 `state.actions`：房间里**玩家可以直接调用**的模组动作——由钩子注册的机制（`defineAction(name, {player: true, …})`，见 `docs/hooks.zh.md`），任何成员都能运行，不需要守秘人跑一轮。每个条目是 `{id, label, description, params?}`；`label` 和其他服务端显示名一样解析，`params` 是作者写的参数形状自由文本提示。想提供这些动作的客户端，通过普通的 `input` 帧发送 `.act <id> <参数>`（参数是一个 JSON 对象，或一段纯文本——服务端会包成 `{"text": …}`），所以没有新的客户端帧；结果以来自 `system` 的普通 `narrative` 返回，像 `.ra` 的结果一样广播，动作声明了掷骰时还会有 `dice` 帧。这份列表来自服务端的缓存，服务端每次为房间构建钩子引擎时刷新它（每个守秘人回合、每次 `.act`、安装钩子、开关技能），所以可能短暂落后于变化；房间没有时整个省略。2.5 客户端会忽略这个字段，照样可以输入 `.act`。
 
 **2.5（增量）**在原始 id **旁边**加显示名，全部可有可无：`state.variables` 里 `enum` 条目的 `value_label`（包给当前选项起的名字）、`state.character.attribute_labels`（每个属性键的显示名）、`dice` 帧的 `subsystem_label`，以及 `state.pregens` 条目的 `blurb` / `claimed_by_name`。原来是 id 的一个都不变——`value`、属性键、`subsystem` 照旧，`visible_when`、钩子和命令继续用它们。2.4 客户端忽略新字段、照旧显示原始 id；2.5 客户端拿不到显示名时（旧服务端、包没起名）回退到原始 id。面板模板多一条规则（`docs/lwf/formats/panels.md` §5.1 第 7 条）：**显示**变量值的绑定，若该条目带 `value_label`，就显示它。
 
@@ -47,7 +49,7 @@
 ## 服务端 → 客户端
 
 - `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"2.5", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.6", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` 是服务端自己的发布版本（和客户端一比就能看出两边不一致）。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，有它才允许发 `admin_update_server`。
   `demo` 表示服务端正在用离线示例守秘人、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
 - `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
@@ -96,7 +98,7 @@
 - `panel_event`— 房间钩子经 `emitPanel(panelId, payload)` 发射的不透明 JSON 载荷（见 `docs/plugins.md`），供目标面板自己的代码（Tier 2）消费。在本回合 `ui` 帧之后送达，且**只**送达清单中含该面板的成员；每回合 ≤ 20 条（超额丢弃并记日志）、单条序列化 ≤ 32 KB。不运行面板代码的客户端（TUI）直接忽略：
   `{type:"panel_event", panel:string, payload:any}`
 - `state` — 一个面板快照，在 `join` 时和每回合后发送：
-  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], reset?:boolean}`
+  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], actions?:[{id:string,label:string,description:string,params?:string}], reset?:boolean}`
   `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已解析好，用的是服务端的语言（见「显示名与语言」）：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个包在 `en` 服务端和 `zh` 服务端上都读得对。
   `character.attributes`（v2.3）只含卡的**特征值**——规则系统 `sheet.attributes` 声明的那些键，按包自己的顺序（CoC 7e 的 `STR CON SIZ …`、D&D 5e 的 `STR DEX CON …`、社区包自己系统的自己那套）；生命体征**不**在这里重复（它们是 `resources`），派生值从不发送——客户端照线上顺序原样渲染，每个键都是 `.st <key>=<n>` 接受的名字。没有声明卡表规格的系统按存储原样发送。
   `character.attribute_labels`（v2.5，可有可无）把 `attributes` 的每个键映射到它的显示名，数据来自规则系统自己（键对应的规范名，再经规则包的 `display` 表）：`zh` 服务端上的 CoC 7e 发 `{"APP":"外貌", …}`。显示 `attribute_labels[key]`，没有就显示键本身；`attributes` 的**键**不变，仍是 `.st` 接受的名字。找不到名字的键不进这张表，表为空时（没有卡表规格的系统）整个省略。

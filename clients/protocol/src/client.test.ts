@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ModuleVariable, type NarrativeFrame, type StateFrame, type UiBlock, type UiFrame } from "./types"
+import { FrameType, type ModuleActionEntry, type ModuleVariable, type NarrativeFrame, type StateFrame, type UiBlock, type UiFrame } from "./types"
 import { packMediaMessage, unpackMediaMessage, WsClient, type WebSocketLike } from "./client"
 
 type Listener = (event: any) => void
@@ -290,6 +290,25 @@ describe("WsClient", () => {
     expect(seen).toHaveLength(2)
     expect(seen[0].variables).toEqual(variables) // definition order preserved, not sorted
     expect(seen[1].variables).toBeUndefined()
+  })
+
+  test("a state frame carries the additive v2.6 player-actions list through unchanged", async () => {
+    const { client, sockets } = createClient()
+    const seen: StateFrame[] = []
+    client.on(FrameType.State, (frame) => seen.push(frame))
+
+    await client.connect("ws://example.test")
+    const actions: ModuleActionEntry[] = [
+      { id: "forage", label: "Forage", description: "Search the hedgerow for food", params: "{where?: string}" },
+      { id: "rest", label: "Rest", description: "Sit by the fire" },
+    ]
+    sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [], online: 1, actions } satisfies StateFrame)
+    // A room with no player actions omits the field (never an empty array).
+    sockets[0].serverSend({ type: FrameType.State, party: [], initiative: [], online: 1 } satisfies StateFrame)
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0].actions).toEqual(actions) // registration order preserved
+    expect(seen[1].actions).toBeUndefined()
   })
 
   test("a v1.7 ui frame validates, dispatches, and passes its blocks through unchanged", async () => {

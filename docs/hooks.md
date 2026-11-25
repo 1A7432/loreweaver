@@ -36,7 +36,8 @@ scripts are not affected by it.
   [cards.md](cards.md)); **re-importing the card replaces its scripts** rather
   than stacking duplicates.
 
-A room runs at most **16 scripts**, each at most **40,000 characters**; anything
+A room runs at most **16 scripts**, each at most **400,000 characters** and together at
+most **2,000,000** (scripts past the total are skipped in order); anything
 beyond is skipped with a logged warning.
 
 ## Events
@@ -167,8 +168,8 @@ on("dice_rolled", (event) => {
   sandbox view rolls back, consistent with variable writes there, which are not applied
   either.
 - **Caps:** key 1–64 characters of `A–Z a–z 0–9 _ . : -`, and not `__proto__`,
-  `constructor` or `prototype`; each value ≤ 256 KiB (UTF-8
-  bytes of its compact JSON); ≤ 32 keys and ≤ 1 MiB in total per room; ≤ 32 `setstate`
+  `constructor` or `prototype`; each value ≤ 1 MiB (UTF-8
+  bytes of its compact JSON); ≤ 64 keys and ≤ 4 MiB in total per room; ≤ 32 `setstate`
   writes per event dispatch. A write that breaks a cap is skipped and logged as a hook
   warning — never fatal, and the other writes still land. A stored value that has been
   corrupted reads as absent.
@@ -218,7 +219,7 @@ rolling faces `[10, 8, 6, 4, 6, 2, 4, 10]` returns
   registration is dropped with a load warning; for a duplicate name the first valid
   registration wins; at most **24** actions per room.
 - **The handler** receives `args` (the model's JSON object, ≤ 8 KiB) and `event` —
-  `{actor, seed, rolls}`, where `rolls` is `{slot: {expr, total, dice}}` rolled by the real
+  `{actor, seed, rolls, source}`, where `source` is `"keeper"` or `"player"` (below) and `rolls` is `{slot: {expr, total, dice}}` rolled by the real
   dice engine (the table sees a dice frame; an action without `rolls` emits none). It may
   be `async`. Return a string (used as is), anything else JSON (compact-stringified), or
   nothing (the Keeper gets a short "done" line). Results are cut at 4,000 characters with a
@@ -241,6 +242,57 @@ rolling faces `[10, 8, 6, 4, 6, 2, 4, 10]` returns
 - **When the tool exists:** only in a turn whose hooks registered at least one action;
   hooks off (`TRPG_ENABLE_FULL_EJS=false`) means no tool. Offered in both prep and play.
   Action dice do not fire `dice_rolled` — the action already handled them.
+
+### Player actions — `player: true`
+
+> **A player action's result is PLAYER-VISIBLE.** When a member runs it, whatever the
+> handler returns is broadcast to the whole table — the same trust stance as `narrate` and
+> `emitUI`. Never return keeper-only material from a `player: true` action on the player
+> path; branch on `event.source` if one action serves both audiences.
+
+Two more optional spec fields make an action something any room member can run directly,
+with no Keeper round — MUD-paced micro-actions for a simulation-heavy module:
+
+```js
+defineAction("forage", {
+  description: "Search the hedgerow for food",
+  params: "{where?: string}",
+  player: true,                                  // members may run it with `.act`
+  label: { en: "Forage", zh: "采集" },           // ≤ 60 chars each; a plain string works too
+  rolls: { find: "1d6" },
+}, (args, event) => {
+  const pantry = (getstate("pantry") ?? 0) + event.rolls.find.total;
+  setstate("pantry", pantry);
+  setvar("food", pantry);
+  return event.source === "player"
+    ? `You find ${event.rolls.find.total} handfuls. The pantry holds ${pantry}.`
+    : `Forage booked: +${event.rolls.find.total}, pantry ${pantry}.`;
+});
+```
+
+- **`.act`** lists the room's player actions (`label (id) — description [params]`, sent to
+  the caller only); **`.act <name> [args]`** runs one. `args` that parse as a JSON object
+  are the args; anything else arrives as `{"text": "<what they typed>"}`; nothing is `{}`.
+  An unknown name and an action without `player: true` get the same reply, so Keeper-only
+  actions are never named to players.
+- The handler gets `event.source: "player"` (the Keeper's `module_action` tool passes
+  `"keeper"`); `event.actor` is the invoking member either way.
+- It runs like `.ra`: inside the room's turn lock and input rate limit, its result is a
+  room-wide `system` message (dice frame included when it declares `rolls`, replayed on
+  join), and a failure goes to the caller alone. Effects apply through the same paths as
+  the tool's; `emitUI`/`emitPanel` frames are delivered, and the room's `state` refreshes.
+  When it wrote variables, `variables_changed` fires once afterwards (its `narrate()` lines
+  join the reply), so module logic behaves the same on both paths.
+- **No per-turn cap** (ordinary input rate limiting covers it) and **no `tool_use` check**:
+  it is not a tool call, so a `denyTool` guard does not see it.
+- **The Keeper hears about it:** each result (last 8, 400 characters each) joins a short
+  "since your last turn, players ran…" section of the Keeper's next prompt, then clears.
+- **Seeds:** a `.act` runs outside a Keeper turn, so its seed stream is
+  `command:action:<n>`, where `n` is a per-room counter of `.act` calls (undo rewinds it).
+- **Clients:** protocol 2.6 lists the player actions on every `state` frame
+  (`state.actions`) so a client can offer them as buttons; the list is cached whenever the
+  room's hook engine is built (each Keeper turn, each `.act`, a hook install, a skill
+  toggle) and can briefly lag a change.
 
 ## Seeds — `event.seed`
 

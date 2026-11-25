@@ -98,7 +98,11 @@ logger = logging.getLogger(__name__)
 
 EVENTS = ("turn_start", "reply_ready", "dice_rolled", "variables_changed", "clock_advanced", "tool_use")
 
-MAX_HOOK_SOURCE_CHARS = 40_000
+# A large simulation kernel must fit (owner 2026-11-25): one script up to 400k characters,
+# and a room's scripts together up to 2M — scripts past the total are skipped, in order,
+# with a load warning. Rules scripts (`core.rules_script`) keep their own, smaller cap.
+MAX_HOOK_SOURCE_CHARS = 400_000
+MAX_HOOK_TOTAL_SOURCE_CHARS = 2_000_000
 MAX_SCRIPTS = 16
 MAX_INJECTIONS = 8
 MAX_INJECT_CHARS = 4_000
@@ -156,9 +160,9 @@ MAX_PANEL_WIRE_ID_CHARS = 129
 # it is never fatal and never shortens the rest of the dispatch's writes.
 MAX_STATE_KEY_CHARS = 64
 STATE_KEY_RE = re.compile(rf"[A-Za-z0-9_.:-]{{1,{MAX_STATE_KEY_CHARS}}}")
-MAX_STATE_VALUE_BYTES = 256 * 1024
-MAX_STATE_KEYS = 32
-MAX_STATE_TOTAL_BYTES = 1024 * 1024
+MAX_STATE_VALUE_BYTES = 1024 * 1024
+MAX_STATE_KEYS = 64
+MAX_STATE_TOTAL_BYTES = 4 * 1024 * 1024
 MAX_STATE_WRITES = 32
 # Own-property names a plain JS object treats specially: a top-level state key named one of
 # these would set a prototype or shadow a builtin instead of storing a value.
@@ -176,6 +180,9 @@ MAX_ACTION_ROLL_EXPR_CHARS = 64
 MAX_ACTION_ARGS_BYTES = 8 * 1024
 MAX_ACTION_RESULT_CHARS = 4_000
 MAX_ACTION_CALLS_PER_TURN = 16
+# `spec.label` (a player-invokable action's button text): a string, or an {en, zh} map.
+MAX_ACTION_LABEL_CHARS = 60
+ACTION_LABEL_LOCALES = ("en", "zh")
 # Registrations read back from the sandbox at most; anything past this is a runaway loop.
 _MAX_ACTION_REGISTRATIONS_READ = 256
 # Hook warnings (handler errors, `log(text)`) written to the server log per dispatch.
@@ -586,6 +593,30 @@ class ActionSpec:
     params: str = ""
     # slot -> dice expression, pre-rolled by the real dice engine before the handler runs.
     rolls: tuple[tuple[str, str], ...] = ()
+    # `spec.player`: any room member may invoke it directly (`.act`), and then its result is
+    # PLAYER-VISIBLE authorial output. Every action stays callable by the Keeper's tool.
+    player: bool = False
+    # `spec.label`, as (locale, text) pairs; ("", text) for a plain-string label.
+    labels: tuple[tuple[str, str], ...] = ()
+
+    def label_for(self, locale: str) -> str:
+        """The label in `locale` (zh* → zh, else en), falling back to any label, then the name."""
+        by_locale = dict(self.labels)
+        wanted = "zh" if str(locale or "").casefold().startswith("zh") else "en"
+        for key in (wanted, "", "en", "zh"):
+            if by_locale.get(key):
+                return by_locale[key]
+        return self.name
+
+    def manifest_entry(self) -> dict[str, Any]:
+        """This action as the room's cached player-action manifest stores it (labels
+        unresolved — each viewer's state frame resolves its own)."""
+        entry: dict[str, Any] = {"id": self.name, "description": self.description}
+        if self.labels:
+            entry["labels"] = {key or "*": text for key, text in self.labels}
+        if self.params:
+            entry["params"] = self.params
+        return entry
 
 
 @dataclass
@@ -630,12 +661,16 @@ class HookEngine:
         room: str = "",
         turn: int = 0,
         lane: str = "hooks",
+        ordinal_offset: int = 0,
     ) -> None:
         import quickjs
 
         self._room = room
         self._turn = int(turn)
         self._lane = lane
+        # Where every stream's ordinal starts: a lane whose engine is rebuilt per dispatch
+        # (`.act`) passes a persisted counter so its seeds do not repeat within a turn.
+        self._ordinal_offset = max(0, int(ordinal_offset))
         # Per-stream dispatch ordinals for `event.seed` (`<lane>:<event>:<ordinal>`).
         self._ordinals: dict[str, int] = {}
         self._context = quickjs.Context()
@@ -656,10 +691,17 @@ class HookEngine:
         # top-level infinite loop in a hooks.js times out instead of hanging the server.
         self._context.set_time_limit(TIME_LIMIT_SECONDS)
         self.load_warnings: list[str] = []
+        loaded_chars = 0
         for script in scripts[:MAX_SCRIPTS]:
             if len(script.code) > MAX_HOOK_SOURCE_CHARS:
                 self.load_warnings.append(f"{script.source_id}: script too large, skipped")
                 continue
+            if loaded_chars + len(script.code) > MAX_HOOK_TOTAL_SOURCE_CHARS:
+                self.load_warnings.append(
+                    f"{script.source_id}: the room's scripts would pass {MAX_HOOK_TOTAL_SOURCE_CHARS} characters in total, skipped"  # i18n-exempt: operator log text
+                )
+                continue
+            loaded_chars += len(script.code)
             try:
                 self._context.eval(script.code)
             except Exception as exc:
@@ -717,7 +759,13 @@ class HookEngine:
         return tuple(accepted)
 
     def run_action(
-        self, name: str, args: dict[str, Any], *, actor: str = "", rolls: dict[str, Any] | None = None
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        actor: str = "",
+        rolls: dict[str, Any] | None = None,
+        source: str = "keeper",
     ) -> ActionOutcome:
         """Run one module action's handler against the current sandbox views.
 
@@ -731,7 +779,12 @@ class HookEngine:
             outcome.error = "unknown action"  # i18n-exempt: operator log text
             return outcome
         try:
-            event = {"actor": actor, "seed": self._next_seed("action"), "rolls": dict(rolls or {})}
+            event = {
+                "actor": actor,
+                "seed": self._next_seed("action"),
+                "rolls": dict(rolls or {}),
+                "source": "player" if source == "player" else "keeper",
+            }
             self._reset_buffers()
             self._context.eval(
                 f"__runAction({json.dumps(name)}, JSON.parse({json.dumps(_compact_json(args))}),"
@@ -795,7 +848,7 @@ class HookEngine:
     # -- events ----------------------------------------------------------------------------
 
     def _next_seed(self, stream: str) -> int:
-        ordinal = self._ordinals.get(stream, 0)
+        ordinal = self._ordinals.get(stream, getattr(self, "_ordinal_offset", 0))
         self._ordinals[stream] = ordinal + 1
         return hook_seed(self._room, self._turn, f"{self._lane}:{stream}:{ordinal}")
 
@@ -971,7 +1024,44 @@ def _parse_action_registration(entry: Any) -> tuple[ActionSpec | None, str]:
         if not isinstance(expression, str) or not expression.strip() or len(expression) > MAX_ACTION_ROLL_EXPR_CHARS:
             return None, f"spec.rolls.{slot} must be a dice expression"  # i18n-exempt: operator log text
         rolls.append((slot, expression.strip()))
-    return ActionSpec(name=name, description=description.strip(), params=params.strip(), rolls=tuple(rolls)), ""
+    player = spec.get("player", False)
+    if not isinstance(player, bool):
+        return None, "spec.player must be true or false"  # i18n-exempt: operator log text
+    labels, problem = _parse_action_label(spec.get("label"))
+    if problem:
+        return None, problem
+    return (
+        ActionSpec(
+            name=name,
+            description=description.strip(),
+            params=params.strip(),
+            rolls=tuple(rolls),
+            player=player,
+            labels=labels,
+        ),
+        "",
+    )
+
+
+def _parse_action_label(raw: Any) -> tuple[tuple[tuple[str, str], ...], str]:
+    """`spec.label`: absent, a string, or an `{en, zh}` map — each text 1–60 characters."""
+    if raw is None:
+        return (), ""
+    problem = f"spec.label must be a string or an {{en, zh}} map of 1-{MAX_ACTION_LABEL_CHARS}-character strings"  # i18n-exempt: operator log text
+    if isinstance(raw, str):
+        text = raw.strip()
+        return ((("", text),), "") if 0 < len(text) <= MAX_ACTION_LABEL_CHARS else ((), problem)
+    if not isinstance(raw, dict) or not raw or set(raw) - set(ACTION_LABEL_LOCALES):
+        return (), problem
+    labels: list[tuple[str, str]] = []
+    for locale in ACTION_LABEL_LOCALES:
+        if locale not in raw:
+            continue
+        text = raw[locale].strip() if isinstance(raw[locale], str) else ""
+        if not 0 < len(text) <= MAX_ACTION_LABEL_CHARS:
+            return (), problem
+        labels.append((locale, text))
+    return tuple(labels), ""
 
 
 def _state_view_expression(state: dict[str, Any]) -> str:
@@ -1109,6 +1199,7 @@ def create_hook_engine(
     room: str = "",
     turn: int = 0,
     lane: str = "hooks",
+    ordinal_offset: int = 0,
 ) -> HookEngine | None:
     """Build a `HookEngine`, or `None` when quickjs is missing, nothing is registered, or init
     fails — callers treat `None` as "hooks inert this turn". `state` is the room's hook-private
@@ -1118,7 +1209,14 @@ def create_hook_engine(
         return None
     try:
         return HookEngine(
-            scripts, flat_variables=flat_variables, tree=tree, state=state, room=room, turn=turn, lane=lane
+            scripts,
+            flat_variables=flat_variables,
+            tree=tree,
+            state=state,
+            room=room,
+            turn=turn,
+            lane=lane,
+            ordinal_offset=ordinal_offset,
         )
     except Exception:
         logger.warning("hook engine unavailable, hooks inert this turn", exc_info=True)

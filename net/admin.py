@@ -1037,6 +1037,10 @@ async def _enable_skill(
 
     chat_key = chat_key_for_room(caller_room)
     await toggle_enabled_skill(services.store, chat_key, skill_id, on=bool(frame.get("on")))
+    # A skill's hooks.js may register player actions (`state.actions`): refresh the cache.
+    from agent.hook_runtime import refresh_action_manifest
+
+    await refresh_action_manifest(services, chat_key)
     return await _skills_frame(services, caller_room, i18n, frame)
 
 

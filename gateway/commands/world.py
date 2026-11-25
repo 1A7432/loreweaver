@@ -1,5 +1,5 @@
 """World knowledge and memory: `.lore`, `.import`, `.var`, `.module`, `.report`, `.recap`,
-`.chronicle`."""
+`.chronicle` — and `.act`, the players' door to the module's own player actions."""
 
 from __future__ import annotations
 
@@ -193,6 +193,30 @@ def _installed_card_refs(ctx: CommandCtx) -> str:
 
 class WorldCommands:
     """`CommandRouter` mixin — see the module docstring."""
+
+    async def cmd_act(self, ctx: CommandCtx) -> str:
+        """`.act` lists the room's player-invokable module actions; `.act <name> [args]` runs
+        one for the caller (`agent.hook_actions.run_player_action`). `args` is a JSON object,
+        or free text that arrives as `{"text": ...}`.
+
+        Mirrors `.ra`: it runs inside the transport choke point's turn lock and rate limit
+        like every command, a successful result is TABLE content (broadcast, dice frame
+        included, replayed on join) and a "did not happen" reply goes to the caller alone.
+        An unknown name and a Keeper-only action get the same reply, so no keeper-only
+        action is ever named to a player."""
+        from agent.hook_actions import run_player_action
+        from gateway.turn import _display_name
+
+        actor = await _display_name(None, ctx.raw_ctx, ctx.services)
+        reply = await run_player_action(ctx.services, ctx.raw_ctx, ctx.args, actor_name=actor)
+        if reply.failed:
+            return ctx.fail(reply.text)
+        ctx.private = reply.private
+        if reply.dice is not None:
+            ctx.dice(**reply.dice)
+        ctx.ui_frames.extend(reply.ui_frames)
+        ctx.panel_events.extend(reply.panel_events)
+        return reply.text
 
     async def cmd_lore(self, ctx: CommandCtx) -> str:
         """`.lore [add | list | query | import | enable | disable | bind | unbind | restore |

@@ -7,7 +7,10 @@ performance block kinds for `emitUI`, and `emitPanel` as stable. It also correct
 cap and kill-switch statements of 1.0 to what the reference enforces. The hook-private
 state store (`getstate`/`setstate`, §4), module actions (`defineAction`, §4) and
 `event.seed` (§3) are **additive** extensions within 2.0: a script that uses none of them
-behaves exactly as before. Reference
+behaves exactly as before. The later rise of the script cap (40,000 → 400,000
+characters, plus a 2,000,000-character room total) and of the private-state limits is a
+relaxation: every script that was valid stays valid. Player-invokable actions
+(`spec.player`, `spec.label`, `event.source`) are likewise additive. Reference
 implementation: `core/skills.py`, `core/hooks.py`, `agent/hook_runtime.py`,
 `core/ejs_full.py`, `core/ejs_lite.py` and the hook phases in `agent/loop.py` in the
 Loreweaver engine.
@@ -57,7 +60,9 @@ Reference: `core/skills.py::parse_skill_text`, `gateway/ops.py::room_content_unf
   card's scripts and never stacks them.
 
 A room runs at most **16 scripts** in total, skills and cards together, and each script
-is at most **40,000 characters**. A script beyond the cap, a script that is too long,
+is at most **400,000 characters**; together a room's scripts are at most **2,000,000
+characters**, and scripts past that total are skipped in order. A script beyond the cap,
+a script that is too long,
 and a script that throws while loading are each skipped with a logged warning. The other
 scripts still load.
 
@@ -132,9 +137,9 @@ applied. Limits, which a runtime MUST enforce per write:
 | Limit | Value |
 |---|---|
 | Key | 1–64 characters of `A–Z a–z 0–9 _ . : -`; not `__proto__`, `constructor` or `prototype` |
-| One value | ≤ 256 KiB, UTF-8 bytes of its compact JSON |
-| Keys per room | ≤ 32 |
-| All values per room | ≤ 1 MiB |
+| One value | ≤ 1 MiB, UTF-8 bytes of its compact JSON |
+| Keys per room | ≤ 64 |
+| All values per room | ≤ 4 MiB |
 | Writes per dispatch | ≤ 32 |
 
 A write over a limit is skipped and reported, never fatal. A stored value that cannot be
@@ -147,16 +152,19 @@ game-master agent can call during the turn; it is available in hook scripts only
 - `name` matches `[a-z][a-z0-9_]{0,31}`. `spec` is an object: `description` (required,
   ≤ 200 characters), `params` (optional free-text hint of the argument shape, ≤ 400
   characters), `rolls` (optional, at most 8 identifier slots mapped to dice expressions).
-  Unknown `spec` keys are ignored. A registration that breaks these rules is dropped with
-  a logged warning; for a repeated name the first valid registration wins; a room has at
-  most 24 actions.
+  `player` (optional boolean, default false) and `label` (optional: a string, or an
+  `{en, zh}` map, each text 1–60 characters). Unknown `spec` keys are ignored. A
+  registration that breaks these rules is dropped with a logged warning; for a repeated
+  name the first valid registration wins; a room has at most 24 actions.
 - A runtime exposes the room's actions to the agent as one tool. The reference names it
   `module_action` with parameters `action` (an enum of the names) and `args` (an object),
   and lists each action as `name — description [params]` in registration order.
 - Before each call the runtime refreshes the handler's view of variables and private
   state from the store, rolls each declared slot with its own dice engine, and calls
   `handler(args, event)` with `event = {actor, seed, rolls}` and
-  `rolls = {slot: {expr, total, dice}}`. `args` is at most 8 KiB serialized.
+  `rolls = {slot: {expr, total, dice}}`, plus `event.source`: `"keeper"` when the agent's
+  tool called it, `"player"` when a room member invoked it directly. `args` is at most 8 KiB
+  serialized.
 - The handler's return value is the tool result: a string as is, any other value as
   compact JSON, `undefined` as a short confirmation; at most 4,000 characters.
 - Effects (`setvar`, `setstate`, `emitUI`, `emitPanel`) are applied immediately as in §5,
@@ -166,6 +174,17 @@ game-master agent can call during the turn; it is available in hook scripts only
   **nothing**; the agent receives a failure line.
 - A `tool_use` handler sees and may deny action calls. A runtime MUST cap the calls per
   turn (the reference: 16) and MUST NOT run two action calls concurrently.
+- **Player-invokable actions.** An action with `player: true` may also be run by any room
+  member directly, with no agent round (the reference: the `.act <name> [args]` command,
+  where `args` is a JSON object or free text delivered as `{"text": …}`). Its return value
+  is then **player-visible authorial output** — the same trust stance as `narrate` —
+  delivered to the whole room. A runtime MUST NOT reveal actions without `player: true`
+  to players (an unknown name and a keeper-only one get the same answer), MUST NOT consult
+  `tool_use` for such a call (it is not a tool call), MUST fire `variables_changed` once
+  after it when it wrote variables, and SHOULD let the agent learn the result on its next
+  turn. The seed of such a call MUST still derive from persisted inputs (the reference keeps
+  a per-room counter of these calls). A runtime MAY advertise the player actions to clients
+  (the reference: protocol 2.6 `state.actions`).
 
 **Effect emitters.** Each emitter's cap applies **per event dispatch**.
 

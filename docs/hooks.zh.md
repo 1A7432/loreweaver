@@ -16,7 +16,7 @@
 - **随技能：** 在技能的 `SKILL.md` 旁边放一个 `hooks.js`。技能为房间启用时它就生效——开关就是现成的 `.skill enable <id>`，不用学新东西。
 - **随卡：** 原生包（`*.lorecard.json`，format v1）把脚本放在顶层 `hooks` 列表里（字符串或 `{code: "…"}` 对象）；酒馆形状的卡用 `extensions.loreweaver_hooks` 脚本字符串列表。带钩子的卡就是**世界卡**：由管理员以 `.import <文件> world` 导入时装上（玩家的人物导入会剥掉它们——见 [cards.zh.md](cards.zh.md)）；**重新导入这张卡会替换它的脚本**，不会叠加出重复。
 
-一个房间最多跑 **16 个脚本**，每个最多 **40,000 字符**；超出的直接跳过并记警告。
+一个房间最多跑 **16 个脚本**，每个最多 **400,000 字符**、合计最多 **2,000,000 字符**（超过合计的脚本按顺序跳过）；超出的直接跳过并记警告。
 
 ## 事件
 
@@ -81,7 +81,7 @@ on("dice_rolled", (event) => {
 - **API（只有钩子有——世界书 EJS 模板拿不到）：** `getstate(key)` 返回存储值的一份新拷贝，键不存在时返回 `undefined`。改这份拷贝什么都不会变，除非你再 `setstate` 回去。`setstate(key, value)` 存任意 JSON 值（对象、数组、字符串、数字、布尔），存的是调用那一刻的样子；`setstate(key, null)` 或 `setstate(key)` 删除这个键。不是 JSON 的值——函数、循环引用、内部任何位置的 `NaN`/`Infinity`——当场拒绝并留日志。
 - **契约和 `setvar` 一样：** 写入先缓冲在沙箱里，分发结束后由引擎校验、限量、持久化。处理器立刻就能看到自己先前的 `setstate` 写入。每次分发之后，沙箱都会重新同步到引擎实际存下的内容，所以被引擎拒绝的写入只在发出它的那次分发结束前可见。要在处理器里调用它：脚本顶层的 `setstate` 不属于任何事件，会被丢弃（留日志）。
 - **快照：** 沙箱里的状态视图在每个阶段开始时都等于已持久化的状态：本回合解释器构建时读一次，回复阶段开始时再读一次，每次模组动作之前也再读一次。（钩子是这个存储唯一的写入者，但同伴的嵌套回合会在它自己的解释器上运行房间的钩子，所以真相在存储里，不在快照里。）本回合的每个事件——`turn_start`、`dice_rolled`、`clock_advanced`、`reply_ready`、`variables_changed`——的写入都会持久化。**`tool_use` 不会：** 它只有 `denyTool` 生效，所以它的 `setstate` 写入被丢弃（留日志）、沙箱视图回滚，和它那里的变量写入同样不被应用是一致的。
-- **限额：** 键为 1–64 个 `A–Z a–z 0–9 _ . : -` 字符，且不能是 `__proto__`、`constructor` 或 `prototype`；每个值 ≤ 256 KiB（紧凑 JSON 的 UTF-8 字节数）；每个房间 ≤ 32 个键、总计 ≤ 1 MiB；每次事件分发 ≤ 32 次 `setstate` 写入。超限的写入被跳过并记为钩子警告——绝不致命，其余写入照常落地。存储中被损坏的值读出来就是不存在。
+- **限额：** 键为 1–64 个 `A–Z a–z 0–9 _ . : -` 字符，且不能是 `__proto__`、`constructor` 或 `prototype`；每个值 ≤ 1 MiB（紧凑 JSON 的 UTF-8 字节数）；每个房间 ≤ 64 个键、总计 ≤ 4 MiB；每次事件分发 ≤ 32 次 `setstate` 写入。超限的写入被跳过并记为钩子警告——绝不致命，其余写入照常落地。存储中被损坏的值读出来就是不存在。
 - **生命周期：** 它是房间状态，所以 `.undo` 会随回合一起回退它，房间导出会带上它，`.reset all` 会清掉它（和清掉模组变量是同一级；`.reset story` 和 `.reset chars` 会保留它，正如保留变量）。开发房间（`.dev mount`）重载会保留它。
 
 ## 模组动作——`defineAction`
@@ -111,12 +111,43 @@ defineAction("book_hour", {
 守秘人看到的是一个工具 `module_action(action, args)`，它的描述按注册顺序把每个动作列成 `名字 — 描述 [params]`；`action` 是这些名字的枚举。已经过了 325 时，`module_action({action: "book_hour", args: {pace: "slow"}})` 掷出 `[10, 8, 6, 4, 6, 2, 4, 10]`，返回 `"Hour 4 (slow): 5 successes, +125; 450 of 800 across."`——守秘人叙述的就是**这个**。
 
 - **注册：** 在任意钩子脚本里调用 `defineAction(name, spec, handler)`。`name` 为 `[a-z][a-z0-9_]{0,31}`。`spec.description` 必填（≤ 200 字符）；`spec.params` 是可选的参数形状自由文本提示（≤ 400 字符）；`spec.rolls` 可选，把至多 8 个标识符槽位映射到骰子表达式。未知的 spec 键被忽略。不合格的注册被丢弃并记加载警告；重名时第一个合格的注册生效；每个房间至多 **24** 个动作。
-- **处理器** 收到 `args`（模型给的 JSON 对象，≤ 8 KiB）和 `event`——`{actor, seed, rolls}`，其中 `rolls` 是由真实骰子引擎掷出的 `{槽位: {expr, total, dice}}`（牌桌会看到骰子帧；没声明 `rolls` 的动作不发骰子帧）。处理器可以是 `async` 的。返回字符串就原样使用，返回其他值就用紧凑 JSON 字符串化，什么都不返回则守秘人得到一行简短的“已完成”。结果在 4,000 字符处截断，并带可见的截断标记。
+- **处理器** 收到 `args`（模型给的 JSON 对象，≤ 8 KiB）和 `event`——`{actor, seed, rolls, source}`，其中 `source` 是 `"keeper"` 或 `"player"`（见下文），`rolls` 是由真实骰子引擎掷出的 `{槽位: {expr, total, dice}}`（牌桌会看到骰子帧；没声明 `rolls` 的动作不发骰子帧）。处理器可以是 `async` 的。返回字符串就原样使用，返回其他值就用紧凑 JSON 字符串化，什么都不返回则守秘人得到一行简短的“已完成”。结果在 4,000 字符处截断，并带可见的截断标记。
 - **效果** 立即生效，走的路径和事件一样：`setvar`（经过校验，并算作本回合的钩子写入——`variables_changed` 会报告它们，书记官不会去碰）、`setstate`、`emitUI`、`emitPanel`（每回合上限照旧）。`inject`、`narrate`、`rewriteReply` 和 `denyTool` 在动作里被忽略（留日志）：返回结果就是动作的声音。
 - **新鲜视图：** 每次调用之前，引擎都从存储重新读取变量和私有状态，所以动作能看到守秘人回合中途的写入，以及之前每个动作的写入。
 - **失败什么都不应用。** 处理器抛错、超时（1 秒）、始终不落定，或者返回不是 JSON 的东西，守秘人就会收到一行带错误文本的失败信息；它的效果一律不应用，沙箱视图回滚。回合照常继续。
 - **守卫：** `tool_use` 处理器能像看到其他工具调用一样看到 `module_action` 调用（`e.arguments.action`、`e.arguments.args`），并可以 `denyTool`。每个守秘人回合至多 **16** 次动作调用；超过之后工具会告诉守秘人用已有的结果来叙述。调用从不并发执行。
 - **工具什么时候存在：** 只在本回合的钩子注册了至少一个动作时才有；钩子关闭（`TRPG_ENABLE_FULL_EJS=false`）就没有这个工具。准备阶段和游玩阶段都提供。动作的骰子不会触发 `dice_rolled`——动作已经处理过它们了。
+
+### 玩家动作——`player: true`
+
+> **玩家动作的结果是玩家可见的。** 成员执行它时，处理器返回的一切都会广播给整张牌桌——和 `narrate`、`emitUI` 是同一个信任立场。`player: true` 的动作在玩家路径上绝不要返回守秘人专属的内容；一个动作要同时服务两种受众，就按 `event.source` 分支。
+
+再加两个可选的 spec 字段，动作就成了任何房间成员都能直接执行、不需要守秘人跑一轮的东西——给重模拟的模组用的 MUD 节奏小动作：
+
+```js
+defineAction("forage", {
+  description: "Search the hedgerow for food",
+  params: "{where?: string}",
+  player: true,                                  // 成员可以用 `.act` 执行
+  label: { en: "Forage", zh: "采集" },           // 每个 ≤ 60 字符；也可以是一个普通字符串
+  rolls: { find: "1d6" },
+}, (args, event) => {
+  const pantry = (getstate("pantry") ?? 0) + event.rolls.find.total;
+  setstate("pantry", pantry);
+  setvar("food", pantry);
+  return event.source === "player"
+    ? `You find ${event.rolls.find.total} handfuls. The pantry holds ${pantry}.`
+    : `Forage booked: +${event.rolls.find.total}, pantry ${pantry}.`;
+});
+```
+
+- **`.act`** 列出房间里的玩家动作（`显示名（id）— 描述 [params]`，只发给调用者）；**`.act <名字> [参数]`** 执行其中一个。能解析成 JSON 对象的参数就是 args；其他内容以 `{"text": "<输入的文字>"}` 送达；什么都不写就是 `{}`。未知的名字和没有 `player: true` 的动作得到同样的回复，所以守秘人专属的动作永远不会被报给玩家。
+- 处理器拿到 `event.source: "player"`（守秘人的 `module_action` 工具传 `"keeper"`）；两条路径上 `event.actor` 都是发起调用的成员。
+- 它像 `.ra` 一样运行：在房间的回合锁和输入频率限制之内，结果是一条全房间可见的 `system` 消息（声明了 `rolls` 时带骰子帧，入房回放时也会重放），失败只发给调用者。效果走和工具相同的路径；`emitUI`/`emitPanel` 帧会送达，房间的 `state` 会刷新。它写了变量时，事后会触发一次 `variables_changed`（其中 `narrate()` 的内容并入回复），所以模组逻辑在两条路径上表现一致。
+- **没有每回合上限**（普通的输入频率限制管着它），也**不经过 `tool_use` 检查**：它不是工具调用，所以 `denyTool` 守卫看不到它。
+- **守秘人会知道：** 每个结果（最近 8 条，每条 400 字符）会进入守秘人下一次提示词里一小段「自你上一回合以来，玩家执行了……」，随后清空。
+- **种子：** `.act` 在守秘人回合之外运行，所以它的种子流是 `command:action:<n>`，`n` 是房间内 `.act` 调用的计数器（撤销会把它回退）。
+- **客户端：** 协议 2.6 在每个 `state` 帧上列出玩家动作（`state.actions`），客户端可以把它们做成按钮；这份列表在每次构建房间钩子引擎时缓存（每个守秘人回合、每次 `.act`、安装钩子、开关技能），可能短暂落后于变化。
 
 ## 种子——`event.seed`
 
