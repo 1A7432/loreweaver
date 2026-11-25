@@ -49,10 +49,10 @@ Windows（PowerShell）：
 irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | iex
 ```
 
-> **粘贴之前先读这段。** 开发版是作为普通 GitHub Release 发布的，所以 `releases/latest` 指的是**最新的构建**，不是最新的*稳定版*——是一个 `release-<版本>.dev<N>+g<sha>` 形状的 tag，不是 `v2.6.0`。对一个迭代这么快的项目，这个默认值是合理的，但它该是你自己知情之后做的选择，而不是「latest」这个词替你做的。想装某个确定的版本，就去取那个 Release 自带的安装脚本，它会把自己钉在那一版上：
+> **粘贴之前先读这段。** 开发版是作为普通 GitHub Release 发布的，所以 `releases/latest` 指的是**最新的构建**，不是最新的*稳定版*——是一个 `release-<版本>.dev<N>+g<sha>` 形状的 tag，不是 `v2.6.1`。对一个迭代这么快的项目，这个默认值是合理的，但它该是你自己知情之后做的选择，而不是「latest」这个词替你做的。想装某个确定的版本，就去取那个 Release 自带的安装脚本，它会把自己钉在那一版上：
 >
 > ```bash
-> curl -fsSL https://github.com/1A7432/loreweaver/releases/download/v2.6.0/install.sh | bash
+> curl -fsSL https://github.com/1A7432/loreweaver/releases/download/v2.6.1/install.sh | bash
 > ```
 >
 > `TRPG_RELEASE_TAG=<tag>` 可以覆盖任何安装脚本的选择，并且会把一键开服下载的服务器也钉到同一个 Release，客户端和服务端不会走散；`TRPG_SERVER_RELEASE_TAG` 只钉服务端。GitHub 连不上时，`TRPG_ORIGIN=https://1a7432.site/trpg` 走镜像。每个压缩包在解压前都会按发布的 SHA-256 校验一遍；对不上就直接失败，绝不退而求其次去装别的东西。
