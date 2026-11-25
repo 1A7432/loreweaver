@@ -62,13 +62,13 @@ irm https://github.com/1A7432/loreweaver/releases/latest/download/install.ps1 | 
 
 > **Read this before you paste it.** Development builds are published as ordinary GitHub releases,
 > so `releases/latest` resolves to the **newest build**, not the newest *stable* one — a
-> `release-<version>.dev<N>+g<sha>` tag rather than `v2.5.0`. For a project moving this fast that is the
+> `release-<version>.dev<N>+g<sha>` tag rather than `v2.6.0`. For a project moving this fast that is the
 > right default, but it should be a choice you make knowingly rather than one the word "latest"
 > makes for you. To install a specific release instead, fetch that release's own installer — it
 > pins itself:
 >
 > ```bash
-> curl -fsSL https://github.com/1A7432/loreweaver/releases/download/v2.5.0/install.sh | bash
+> curl -fsSL https://github.com/1A7432/loreweaver/releases/download/v2.6.0/install.sh | bash
 > ```
 >
 > `TRPG_RELEASE_TAG=<tag>` overrides the choice for any installer and pins the one-click server
