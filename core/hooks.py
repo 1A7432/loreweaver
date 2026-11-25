@@ -101,8 +101,8 @@ EVENTS = ("turn_start", "reply_ready", "dice_rolled", "variables_changed", "cloc
 # A large simulation kernel must fit (owner 2026-11-25): one script up to 400k characters,
 # and a room's scripts together up to 2M — scripts past the total are skipped, in order,
 # with a load warning. Rules scripts (`core.rules_script`) keep their own, smaller cap.
-MAX_HOOK_SOURCE_CHARS = 400_000
-MAX_HOOK_TOTAL_SOURCE_CHARS = 2_000_000
+MAX_HOOK_SOURCE_CHARS = 1_000_000
+MAX_HOOK_TOTAL_SOURCE_CHARS = 8_000_000
 MAX_SCRIPTS = 16
 MAX_INJECTIONS = 8
 MAX_INJECT_CHARS = 4_000

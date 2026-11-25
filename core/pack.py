@@ -43,7 +43,7 @@ from core.card_split import WorldPayloads, detect_world_payloads
 from core.charcard import MAX_CARD_FILE_BYTES, parse_card_bytes
 from core.hooks import MAX_HOOK_SOURCE_CHARS, UI_IMAGE_MIMES
 from core.lore_overlay import Overlay, OverlayError, parse_overlay_file, validate_overlay
-from core.lorecard import looks_like_lorecard, parse_lorecard_bytes
+from core.lorecard import MAX_LORECARD_FILE_BYTES, looks_like_lorecard, parse_lorecard_bytes
 from core.panels import (
     CODE_MIMES,
     MAX_PANEL_CODE_BYTES,
@@ -691,6 +691,15 @@ def _validate_rulepack_file(
     ]
 
 
+def _check_card_size(path: str, data: bytes) -> None:
+    """A native bundle may be up to `MAX_LORECARD_FILE_BYTES` (it carries a module's hook
+    kernel); any other card keeps the SillyTavern cap, `MAX_CARD_FILE_BYTES`."""
+    if len(data) > MAX_LORECARD_FILE_BYTES:
+        raise PackError(f"card {path}: exceeds the {MAX_LORECARD_FILE_BYTES}-byte cap")
+    if len(data) > MAX_CARD_FILE_BYTES and not looks_like_lorecard(data):
+        raise PackError(f"card {path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
+
+
 def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
     """Parse + cap-check one bundled card; returns ``(has_ejs, world_payloads)``.
 
@@ -698,8 +707,7 @@ def _validate_card_bytes(path: str, data: bytes) -> tuple[bool, WorldPayloads]:
     M14 parser rather than the SillyTavern one, so their machinery (typed specs aside —
     hooks, ``secret`` lore, declaration entries) reaches ``detect_world_payloads`` and the
     ``kind: world`` rule instead of hiding behind a lenient generic-JSON read."""
-    if len(data) > MAX_CARD_FILE_BYTES:
-        raise PackError(f"card {path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
+    _check_card_size(path, data)
     try:
         if looks_like_lorecard(data):
             bundle = parse_lorecard_bytes(data, filename=PurePosixPath(path).name)
@@ -1401,10 +1409,10 @@ def _verify_pack(archive: zipfile.ZipFile, manifest: PackManifest) -> None:
         if card_path not in names:
             raise PackError(f"declared card missing from archive: {card_path!r}")
         info = archive.getinfo(card_path)
-        if info.file_size > MAX_CARD_FILE_BYTES:
-            raise PackError(f"card {card_path}: exceeds the {MAX_CARD_FILE_BYTES}-byte cap")
+        if info.file_size > MAX_LORECARD_FILE_BYTES:
+            raise PackError(f"card {card_path}: exceeds the {MAX_LORECARD_FILE_BYTES}-byte cap")
         with archive.open(info) as handle:
-            data = handle.read(MAX_CARD_FILE_BYTES + 1)
+            data = handle.read(MAX_LORECARD_FILE_BYTES + 1)
         card_ejs, payloads = _validate_card_bytes(card_path, data)
         _enforce_card_kind(card_path, manifest.card_kind(card_path), payloads)
         has_ejs = has_ejs or card_ejs

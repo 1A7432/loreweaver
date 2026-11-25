@@ -471,7 +471,11 @@ async def run_scribe(
             if hooks is _HOOKS_UNLOADED:
                 # The turn it is about, not the room counter (which has moved on), and a lane
                 # of its own so its `tool_use` seeds never collide with the turn's.
-                hooks = await load_room_hook_engine(services, ctx, turn=turn, lane="scribe-hooks")
+                # Only the `tool_use` event is ever fired here, so a room whose scripts never
+                # name it gets no engine at all (a large module's build costs real time).
+                hooks = await load_room_hook_engine(
+                    services, ctx, turn=turn, lane="scribe-hooks", require_event="tool_use"
+                )
             refusal = _hook_refusal(hooks, op, var_id)
             if refusal:
                 logger.info("scribe: op on %s refused by a hook: %s", var_id, refusal)

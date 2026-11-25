@@ -52,12 +52,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from core.card_split import card_hook_codes
-from core.charcard import MAX_CARD_FILE_BYTES, CharacterCard, parse_card_bytes
+from core.charcard import CharacterCard, parse_card_bytes
 from core.condexpr import CondExprError, referenced_paths
 from core.documents import KEEPER_VIEWER, MODVARS_ID, MVU_ID, PLAYER_VIEWER, Document, project
 from core.lore_overlay import Overlay, OverlayError, parse_overlay_file
 from core.lore_overlay import apply as apply_overlay
-from core.lorecard import looks_like_lorecard, parse_lorecard_bytes
+from core.lorecard import MAX_LORECARD_FILE_BYTES, looks_like_lorecard, parse_lorecard_bytes
 from core.modvars import MODVARS_DOC_TYPE
 from core.mvu_compat import (
     MAX_FLAT_LEAVES,
@@ -366,7 +366,7 @@ def _merge_tree(target: dict[str, Any], incoming: Mapping[str, Any]) -> None:
 
 def _gather_cards(tree: _Tree, source: Path) -> None:
     for card_entry in tree.manifest.card_entries:
-        data = _read_bytes(tree, source, card_entry.path, MAX_CARD_FILE_BYTES)
+        data = _read_bytes(tree, source, card_entry.path, MAX_LORECARD_FILE_BYTES)
         if data is None:
             continue
         name = PurePosixPath(card_entry.path).name

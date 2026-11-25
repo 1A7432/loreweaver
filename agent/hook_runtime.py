@@ -66,6 +66,7 @@ async def load_room_hook_engine(
     turn: int | None = None,
     lane: str = "hooks",
     ordinal_offset: int = 0,
+    require_event: str | None = None,
 ) -> HookEngine | None:
     """Build this turn's hook engine, or `None` (hooks inert) when nothing is registered,
     the `ejs` extra is missing, or `enable_full_ejs` is off (that switch governs hooks and
@@ -79,15 +80,29 @@ async def load_room_hook_engine(
     ordinals elsewhere than 0 (the `.act` lane's persisted counter).
 
     Every build on the turn and command lanes also refreshes the room's cached player-action
-    manifest (`ACTION_MANIFEST_KEY`) — cleared when hooks are off or nothing registered."""
-    engine = await _build_room_hook_engine(services, ctx, turn=turn, lane=lane, ordinal_offset=ordinal_offset)
+    manifest (`ACTION_MANIFEST_KEY`) — cleared when hooks are off or nothing registered.
+
+    `require_event` skips the build (returns `None`) when no script's source contains that
+    event name literally — a caller that will only ever fire one event (the Scribe's `tool_use`
+    veto) need not pay for an engine no handler of that event can live in. Handlers register
+    with `on("tool_use", …)`; a name assembled at runtime would defeat the check, which is why
+    the docs ask for the literal."""
+    engine = await _build_room_hook_engine(
+        services, ctx, turn=turn, lane=lane, ordinal_offset=ordinal_offset, require_event=require_event
+    )
     if lane in _MANIFEST_LANES:
         await store_action_manifest(services, ctx.chat_key, engine)
     return engine
 
 
 async def _build_room_hook_engine(
-    services: Services, ctx: AgentCtx, *, turn: int | None, lane: str, ordinal_offset: int
+    services: Services,
+    ctx: AgentCtx,
+    *,
+    turn: int | None,
+    lane: str,
+    ordinal_offset: int,
+    require_event: str | None = None,
 ) -> HookEngine | None:
     if not services.settings.enable_full_ejs:
         return None
@@ -107,6 +122,8 @@ async def _build_room_hook_engine(
                 scripts.append(HookScript(source_id=f"skill:{skill.id}", code=skill.hooks))
         scripts.extend(await _room_scripts(services, ctx.chat_key))
         if not scripts:
+            return None
+        if require_event is not None and not any(require_event in script.code for script in scripts):
             return None
 
         modvar_state = await load_modvars(services.documents, ctx.chat_key)
@@ -154,6 +171,17 @@ async def load_action_manifest(services: Services, chat_key: str) -> list[dict[s
     except Exception:  # noqa: BLE001 — a corrupt cache reads as "no actions"
         return []
     return [entry for entry in entries if isinstance(entry, dict) and isinstance(entry.get("id"), str)] if isinstance(entries, list) else []
+
+
+def manifest_label(entry: dict[str, Any], locale: str) -> str:
+    """A manifest entry's label for `locale` (zh* → zh, else en), then a plain-string label,
+    then any label, then the action id — the same rule as `core.hooks.ActionSpec.label_for`."""
+    labels = entry.get("labels") if isinstance(entry.get("labels"), dict) else {}
+    wanted = "zh" if str(locale or "").casefold().startswith("zh") else "en"
+    for key in (wanted, "*", "en", "zh"):
+        if isinstance(labels.get(key), str) and labels[key]:
+            return labels[key]
+    return str(entry.get("id", ""))
 
 
 async def refresh_action_manifest(services: Services, chat_key: str) -> None:

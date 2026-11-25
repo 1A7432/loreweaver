@@ -94,16 +94,11 @@ async def _actions(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
     Read from the manifest the last hook-engine build cached (`agent.hook_runtime`), never by
     building an engine per frame — so the list is as fresh as the room's last Keeper turn,
     `.act`, hook install or skill toggle. Keeper-only actions are never in the manifest."""
-    from agent.hook_runtime import load_action_manifest
+    from agent.hook_runtime import load_action_manifest, manifest_label
 
-    wanted = "zh" if str(ctx.locale or "").casefold().startswith("zh") else "en"
     actions: list[dict[str, Any]] = []
     for entry in await load_action_manifest(services, ctx.chat_key):
-        labels = entry.get("labels") if isinstance(entry.get("labels"), dict) else {}
-        label = next(
-            (str(labels[key]) for key in (wanted, "*", "en", "zh") if isinstance(labels.get(key), str) and labels[key]),
-            str(entry["id"]),
-        )
+        label = manifest_label(entry, ctx.locale)
         item: dict[str, Any] = {"id": str(entry["id"]), "label": label, "description": str(entry.get("description", ""))}
         if isinstance(entry.get("params"), str) and entry["params"]:
             item["params"] = entry["params"]

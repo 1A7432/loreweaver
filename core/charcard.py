@@ -51,6 +51,11 @@ def parse_card_file(path: str | Path) -> CharacterCard:
     return parse_card_bytes(_read_card_bytes(card_path), filename=card_path.name)
 
 
+def read_card_bytes(card_path: Path, limit: int = MAX_CARD_FILE_BYTES) -> bytes:
+    """A card file's bytes, bounded by `limit` (regular files only)."""
+    return _read_card_bytes(card_path, limit)
+
+
 def _read_card_bytes(card_path: Path, limit: int = MAX_CARD_FILE_BYTES) -> bytes:
     # Regular files only: a character device like `/dev/zero` reports st_size 0 yet
     # never hits EOF, so an unbounded `read_bytes()` would OOM. `is_file()` rejects it.

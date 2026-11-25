@@ -64,6 +64,11 @@ MAX_BACKUP_MEDIA_BYTES = 32 * 1024 * 1024
 MAX_BACKUP_MEDIA_FILES = 1_024
 MAX_BACKUP_STORE_ROWS = 20_000
 MAX_BACKUP_STORE_BYTES = 12 * 1024 * 1024
+# room_state carries the card-installed hook scripts (`room_hooks`, up to
+# `core.hooks.MAX_HOOK_TOTAL_SOURCE_CHARS` = 8M characters) and the hooks' private state (up
+# to `core.hooks.MAX_STATE_TOTAL_BYTES` = 4 MiB), each JSON-escaped once more in the backup;
+# the generic section cap above would refuse a room running a large module (2.6.1).
+MAX_BACKUP_ROOM_STATE_BYTES = 32 * 1024 * 1024
 MAX_BACKUP_VECTOR_POINTS = 10_000
 MAX_BACKUP_VECTOR_VALUES = 750_000
 MAX_BACKUP_VECTOR_BYTES = 16 * 1024 * 1024
@@ -451,7 +456,7 @@ async def room_state_rows(
         _bounded_section(
             rows,
             count_limit=MAX_BACKUP_STORE_ROWS,
-            byte_limit=MAX_BACKUP_STORE_BYTES,
+            byte_limit=MAX_BACKUP_ROOM_STATE_BYTES,
             name="room state rows",
         )
     return rows
@@ -1502,7 +1507,7 @@ async def import_room(
     _bounded_section(
         raw_state,
         count_limit=MAX_BACKUP_STORE_ROWS,
-        byte_limit=MAX_BACKUP_STORE_BYTES,
+        byte_limit=MAX_BACKUP_ROOM_STATE_BYTES,
         name="room state rows",
     )
     validated_state: list[dict[str, Any]] = []

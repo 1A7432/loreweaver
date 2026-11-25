@@ -764,3 +764,9 @@ def test_a_script_at_the_raised_per_script_cap_loads():
     assert engine.fire("turn_start", {}).narrations == ["big"]
     too_big = create_hook_engine([HookScript("big", code + "z"), HookScript("ok", body)], flat_variables={}, tree={})
     assert too_big.fire("turn_start", {}).narrations == ["big"]  # only the second script ran
+
+
+def test_the_2_6_1_capacity_numbers():
+    from core.hooks import MAX_HOOK_SOURCE_CHARS, MAX_HOOK_TOTAL_SOURCE_CHARS, MAX_SCRIPTS
+
+    assert (MAX_HOOK_SOURCE_CHARS, MAX_HOOK_TOTAL_SOURCE_CHARS, MAX_SCRIPTS) == (1_000_000, 8_000_000, 16)

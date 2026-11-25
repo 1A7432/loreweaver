@@ -33,10 +33,10 @@ from agent.tools import tool
 from core.card_split import WorldPayloads, card_hook_codes, detect_world_payloads, split_card
 from core.character_manager import CharacterSheet
 from core.character_rules import render_validation_notice, validate_sheet
-from core.charcard import PNG_SIGNATURE, CharacterCard, parse_card_bytes
+from core.charcard import MAX_CARD_FILE_BYTES, PNG_SIGNATURE, CharacterCard, parse_card_bytes, read_card_bytes
 from core.documents import MODULE_POOL_ID, PLAYER_VIEWER
 from core.lore_overlay import SetupItem
-from core.lorecard import Lorecard, looks_like_lorecard, parse_lorecard_bytes
+from core.lorecard import MAX_LORECARD_FILE_BYTES, Lorecard, looks_like_lorecard, parse_lorecard_bytes
 from core.module_brief import BRIEF_DOC_TYPE, DIRECTIVE_FIELDS, brief_id, build_brief
 from core.modvars import define_modvar
 from core.pregen_roster import pregen_add
@@ -54,10 +54,14 @@ def _parse_any_card_file(host_path: Path) -> tuple[CharacterCard, Lorecard | Non
     a `*.lorecard.json` (the studio forge's lossless export) parses through
     `core.lorecard` and hands back its extras — typed variable specs — alongside the
     embedded card; anything else is a stock SillyTavern card with no extras."""
-    data = host_path.read_bytes()
+    # Bounded read: a native bundle may be up to `MAX_LORECARD_FILE_BYTES` (a module's hook
+    # kernel rides in it); anything else keeps the SillyTavern card cap.
+    data = read_card_bytes(host_path, limit=MAX_LORECARD_FILE_BYTES)
     if looks_like_lorecard(data):
         lorecard = parse_lorecard_bytes(data, host_path.name)
         return lorecard.card, lorecard
+    if len(data) > MAX_CARD_FILE_BYTES:
+        raise ValueError("character card file exceeds the size limit")  # i18n-exempt: folded into localized import-failed messages
     return parse_card_bytes(data, host_path.name), None
 
 
