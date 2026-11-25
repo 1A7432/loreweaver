@@ -455,11 +455,55 @@ operator's content, the operator's box):
   is not a model and is not asked. Independently of any guard, the Scribe never writes a
   variable a hook wrote that same turn: most hook phases run after the narration is final,
   so where the two disagree, the narration is the stale one.
+  A `tool_use` dispatch honours `denyTool` and nothing else: its variable and `setstate`
+  writes are not applied.
   With module UI panels (Layer D) there is additionally `emitPanel(panelId, payload)` — an
   opaque JSON payload (≤ 32 KB, ≤ 20 per turn) for one pack-declared panel, delivered as a
   `panel_event` ONLY to viewers whose manifest contains that panel. The same
   trust stance applies, with one sharpening: a payload for an `audience: all` panel reaches
   players — keeper secrets go, if anywhere, into `audience: keeper` panels only.
+- **Hook-private state — `getstate(key)` / `setstate(key, value)`**: a JSON store only hooks
+  can read (not in the EJS template bridge), one `room_state` row per key under
+  `hook_state:`. It is NOT part of the variable space: never rendered into the Keeper
+  prompt, never on a player or admin wire frame, never a `variables_changed` write or a
+  `KPTurnResult.hook_writes` entry, invisible to the Scribe, conditions and panels. Same
+  iron-rule-#1 shape as `setvar`: buffered in the sandbox, validated against the caps
+  (`core.hooks.MAX_STATE_*`: key `[A-Za-z0-9_.:-]{1,64}`, value ≤ 256 KiB, ≤ 32 keys and
+  ≤ 1 MiB per room, ≤ 32 writes per dispatch) and persisted by
+  `agent.hook_runtime.apply_hook_state_writes` after every non-`tool_use` dispatch; a
+  refused write is skipped and logged, a corrupt row reads as absent; the reserved keys
+  `__proto__`/`constructor`/`prototype` are refused, and the sandbox view is built with
+  `JSON.parse` so a nested `"__proto__"` member stays an own property. The sandbox view
+  equals the persisted state at the start of each phase: snapshotted when the turn's engine
+  is built (`load_room_hook_engine` — the one loader every engine, the Scribe's included,
+  goes through), re-read at the start of the reply phases and before every module action,
+  because a nested companion turn runs the room's hooks on an engine of its own. Its facet (`hook_state`) dies at `.reset all`,
+  mirroring the module variables and the MVU tree; undo and export/import carry it as
+  ordinary room state.
+- **Module actions — `defineAction(name, spec, handler)`**: the in-turn resolution channel.
+  The reply-phase events run after the narration is final, so a hook could never answer the
+  Keeper within the turn; an action can. Every registered action is surfaced as ONE dynamic
+  tool, `module_action(action, args)` (`agent.hook_actions`), offered only when the turn's
+  engine has ≥ 1 action, assembled beside the rulepack subsystem tools (so the rounds and
+  the end-of-turn checks offer the same catalog) and dispatched in `agent.loop._dispatch_one`
+  after the `tool_use` veto. Per call the engine re-reads the variable snapshots and the
+  private state, pre-rolls the declared dice with the real dice engine (a `subsystem` dice
+  frame, exactly like a rulepack script flow), runs the handler under the sandbox's per-eval
+  time limit and applies its effects at once through the existing paths: `setvar` writes
+  join the turn's `hook_writes` (so `variables_changed` reports them and the Scribe leaves
+  them alone), `setstate`, `emitUI`/`emitPanel` under the per-turn caps; `inject`,
+  `narrate`, `rewriteReply`, `denyTool` are ignored (warned). The return value is the tool
+  result (string as is, else compact JSON, ≤ 4,000 chars). A throw, timeout, unsettled
+  promise or non-JSON result applies NOTHING and returns a localized failure line. Caps
+  (`core.hooks`): name `[a-z][a-z0-9_]{0,31}`, 24 actions per room (first valid duplicate
+  wins), description ≤ 200, params hint ≤ 400, ≤ 8 roll slots, args ≤ 8 KiB, ≤ 16 calls per
+  KP turn; calls are always a concurrency barrier. A rulepack subsystem may not be named
+  `module_action`.
+- **`event.seed`**: every dispatch (the six events and every action) carries a 53-bit seed
+  derived like `agent.prompt_builder.turn_rng` — sha256 over (room, turn in flight,
+  `<lane>:<event>:<ordinal>`) — from persisted inputs only, so the same room state replays
+  the same seeds (an undo-and-retry included). `Math.random()` is not replayable. The
+  Scribe's `tool_use` veto engine uses its own lane.
 - **Contract (iron rule #1)**: hooks REQUEST effects; deterministic engine code validates,
   caps, and applies them — `setvar` on a declared module variable goes through kind/bounds
   validation, everything else lands in the MVU tree. One sandboxed interpreter per turn
@@ -487,9 +531,20 @@ operator's content, the operator's box):
   ```
 
   This is not a workaround for the sandbox's lifetime — it IS iron rule #1. Anything that has
-  to survive a turn is real state, and real state belongs to the deterministic engine. (Declare
-  the variable in your module so it gets bounds and a label; an undeclared name still persists,
-  as an MVU leaf.)
+  to survive a turn is real state, and real state belongs to the deterministic engine. The
+  engine keeps two kinds, and the choice is **who reads it**: a tracker the table or the Keeper
+  should see is a **variable** (`setvar`/`incvar` — declare it in your module so it gets bounds
+  and a label; an undeclared name still persists, as an MVU leaf); machinery state only the
+  hooks read — a ledger, a queue, a state machine's internals — goes in **`setstate`**, which
+  persists just the same but never costs a prompt line, a panel slot or a variable:
+
+  ```js
+  on('dice_rolled', (e) => {
+    const log = getstate('roll_log') ?? [];         // a fresh copy, or undefined
+    setstate('roll_log', log.concat([e.rolls.length]).slice(-50));   // PERSISTED, hook-only
+  })
+  ```
+
   `TRPG_ENABLE_FULL_EJS=false` switches this off along with hooks and full EJS (rules scripts and prep scripts are not governed by that flag).
 
 ### C.2 Python entry-point plugins (still deferred)

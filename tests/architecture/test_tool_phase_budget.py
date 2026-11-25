@@ -109,3 +109,40 @@ def test_prep_phase_is_a_superset_of_play():
     play = {schema["function"]["name"] for schema in toolset.schemas(phase=PLAY_PHASE)}
 
     assert play < prep, "play must be a strict subset — nothing exists only in play"
+
+
+# The `module_action` tool (hook-defined module actions, `agent.hook_actions`) is NOT part of
+# the static toolset above: it exists only in a room whose hook scripts register actions, and
+# its size is the pack author's to spend. It is counted here rather than exempted. Measured
+# 2026-11-25: a room maxed out on every registration cap (24 actions, 32-char names, 200-char
+# descriptions, 400-char params hints) sends 16,885 characters on top of the static play
+# phase — about 80% of the budget above — while a typical pack (four short actions) sends ~1k.
+# The ceiling pins the caps: raising any of them moves this number, and that is the moment
+# to decide whether the room can afford it.
+MODULE_ACTION_SCHEMA_WORST_CASE = 17_000
+
+
+def test_the_module_action_tool_is_bounded_by_its_caps():
+    from agent.hook_actions import module_action_schemas
+    from core.hooks import (
+        MAX_ACTION_DESCRIPTION_CHARS,
+        MAX_ACTION_PARAMS_CHARS,
+        MAX_ACTIONS,
+        ActionSpec,
+    )
+
+    class _Engine:
+        actions = tuple(
+            ActionSpec(
+                name=f"a{index:02d}" + "x" * 29,
+                description="d" * MAX_ACTION_DESCRIPTION_CHARS,
+                params="p" * MAX_ACTION_PARAMS_CHARS,
+            )
+            for index in range(MAX_ACTIONS)
+        )
+
+    size = _payload(module_action_schemas(_Engine()))  # type: ignore[arg-type]
+    assert size <= MODULE_ACTION_SCHEMA_WORST_CASE, (
+        f"a maxed-out module_action tool is {size} characters, past {MODULE_ACTION_SCHEMA_WORST_CASE}"
+    )
+    assert module_action_schemas(None) == []

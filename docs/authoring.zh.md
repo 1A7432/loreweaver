@@ -188,6 +188,35 @@ on('turn_start', () => {
 });
 ```
 
+引擎持有两种持久状态，按谁来读它来选。牌桌或守秘人应该看到的状态量是**变量**（就是上面这种——在 `variables[]` 里声明）。只有你的钩子自己读的机制——账本、队列、状态机内部——改放进钩子的私有存储，这样它不占提示词的一行、不占面板，也不占一个变量位：
+
+```js
+on('dice_rolled', (e) => {
+  const tally = getstate('tide_rolls') ?? { count: 0 };   // 一份新拷贝，或 undefined
+  tally.count += e.rolls.length;
+  setstate('tide_rolls', tally);                          // 会持久化，只有钩子看得见
+});
+```
+
+`getstate`/`setstate` 在一个短键下存任意 JSON 值（`setstate(key, null)` 删除它）；上限和确切语义见 [hooks.zh.md](hooks.zh.md#私有状态getstate--setstate)。
+
+**守秘人需要在本回合拿到钩子的答案时，写一个模组动作。** 有三样东西看着像，其实不是一回事：
+
+- **`dice_rolled`（以及其他事件）**——在叙述定稿*之后*才响应。适合守秘人不据此叙述的记账：计数、刷新面板、为下一回合埋个凶兆。不适合守秘人马上要说出口的数——它早已说出了自己猜的那个。
+- **模组动作（`defineAction`）**——守秘人在回合中途以 `module_action` *调用*它，引擎掷出声明的骰子，你的处理器按房间状态记下结果，并返回守秘人据以叙述的那一行。适合模组机制：行军账本、讨价还价的桌面、仪式进度。
+- **规则包脚本流程**（带 `script:` 的 `subsystems:`）——*规则系统*层面的机制：不接受参数，读当前角色的卡表，返回一组封闭词汇的效果并应用到那张卡表上。适合一个系统自己的检定（类似理智的损失、成长检定）；它读写不了模组的状态。
+
+```js
+defineAction('book_hour', {description: 'Book one march hour; returns the booked line',
+                           params: '{pace: "fast"|"slow"}', rolls: {march: '8d10'}}, (args, e) => {
+  const crossed = (getstate('crossed') ?? 0) + e.rolls.march.total;
+  setstate('crossed', crossed);
+  return `Booked: ${crossed} across.`;
+});
+```
+
+完整契约见 [hooks.zh.md](hooks.zh.md#模组动作defineaction)。
+
 ### 你的模组为什么是一张“世界卡”
 
 再看一眼构建输出：`Contains 1 WORLD card(s)`。你从来没声明过这件事，是构建**检测**出来的——因为这张卡带了钩子、类型化变量、secret 设定或者 EJS，任何一样会重编程整张牌桌的东西。

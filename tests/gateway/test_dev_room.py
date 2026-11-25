@@ -128,6 +128,9 @@ async def test_mount_reload_edit_cycle_syncs_the_room(tmp_path):
     # A live value written between reloads survives the next reload (InitVar-merge
     # semantics for the tree, keep-current-value semantics for typed specs).
     await set_modvar(services.documents, CHAT, "suspicion", 7)
+    # The hooks' private `setstate` store is preserved the same way: nothing on the reload
+    # path touches it.
+    await services.store.state_set(CHAT, "hook_state:ledger", '{"crossed":475}')
 
     # The author edits one entry and deletes another; the reload replaces, never stacks.
     edited = {
@@ -143,6 +146,7 @@ async def test_mount_reload_edit_cycle_syncs_the_room(tmp_path):
     assert titles["Lighthouse"].content == "It burns RED now."
     assert "Cellar" not in titles  # the orphan left with its source
     assert (await load_modvars(services.documents, CHAT))["values"]["suspicion"] == 7
+    assert await services.store.state_get(CHAT, "hook_state:ledger") == '{"crossed":475}'
 
     # A source tree that stops parsing reports and changes nothing.
     (src / "pack.yaml").write_text("id: [broken", encoding="utf-8")

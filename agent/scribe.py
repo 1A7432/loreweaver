@@ -469,7 +469,9 @@ async def run_scribe(
                 continue
             # Built only once an op has passed the evidence gate: most passes write nothing.
             if hooks is _HOOKS_UNLOADED:
-                hooks = await load_room_hook_engine(services, ctx)
+                # The turn it is about, not the room counter (which has moved on), and a lane
+                # of its own so its `tool_use` seeds never collide with the turn's.
+                hooks = await load_room_hook_engine(services, ctx, turn=turn, lane="scribe-hooks")
             refusal = _hook_refusal(hooks, op, var_id)
             if refusal:
                 logger.info("scribe: op on %s refused by a hook: %s", var_id, refusal)

@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.condexpr import MAX_EXPR_LEN
+from core.hooks import MODULE_ACTION_TOOL
 
 TEMPLATES = (
     "check_with_loss",
@@ -57,6 +58,8 @@ TEMPLATES = (
 )
 
 MAX_SUBSYSTEMS = 16
+# Tool names the engine itself materializes per turn; a pack subsystem may not take one.
+RESERVED_TOOL_NAMES = frozenset({MODULE_ACTION_TOOL})
 MAX_TABLE_ENTRIES = 64
 _FUMBLE_LOSS_POLICIES = ("all", "max")
 
@@ -226,6 +229,10 @@ def parse_subsystems(
         tool_name = str(name).strip()
         if not tool_name.isidentifier() or tool_name.startswith("_"):
             raise SubsystemError(f"rulepack '{pack_id}': subsystem name {name!r} must be an identifier")  # i18n-exempt: pack-author diagnostic, raised at load time
+        if tool_name in RESERVED_TOOL_NAMES:
+            raise SubsystemError(
+                f"rulepack '{pack_id}': subsystem name {tool_name!r} is reserved for the engine's module-action tool; rename the subsystem"  # i18n-exempt: pack-author diagnostic, raised at load time
+            )
         if not isinstance(spec_raw, Mapping):
             raise SubsystemError(f"rulepack '{pack_id}': subsystems.{tool_name} must be a mapping")  # i18n-exempt: pack-author diagnostic, raised at load time
         if "script" in spec_raw:

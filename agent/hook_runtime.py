@@ -10,6 +10,13 @@ authorial output, exactly like lore text).
 through validation — a name matching a declared module variable goes through
 `core.modvars.set_modvar` (kind/bounds enforced), anything else lands in the MVU tree
 via `core.mvu_compat.apply_set`. A failing write is skipped and reported, never fatal.
+
+`load_hook_state` / `apply_hook_state_writes` are the same two halves for the hook-PRIVATE
+state store (`getstate`/`setstate`): one `room_state` row per key under `HOOK_STATE_PREFIX`,
+validated by `core.hooks.plan_state_writes`, and deliberately outside the variable space —
+no prompt section, no wire frame, no `variables_changed`, no `KPTurnResult.hook_writes`.
+Both are plain per-room functions taking the turn's engine, so any dispatch site — a turn
+phase today, a mid-turn tool dispatch tomorrow — loads and applies through the same path.
 """
 
 from __future__ import annotations
@@ -20,7 +27,15 @@ from typing import Any
 
 from agent.context import AgentCtx
 from agent.services import Services
-from core.hooks import HookEngine, HookScript, create_hook_engine
+from core.hooks import (
+    HookEngine,
+    HookOutcome,
+    HookScript,
+    create_hook_engine,
+    decode_state_value,
+    plan_state_writes,
+    valid_state_key,
+)
 from core.modvars import load_modvars, set_modvar
 from core.mvu_compat import apply_set, load_mvu, save_mvu
 from core.skills import load_skill
@@ -30,12 +45,24 @@ logger = logging.getLogger(__name__)
 
 ROOM_HOOKS_CAP = 16
 
+# One room_state row per hook-private state key: `hook_state:<key>` → compact JSON. Per-key
+# rows so a small write never rewrites the rest, and so undo snapshots, export/import and the
+# reset facet below carry it like every other room_state row with no code of their own.
+HOOK_STATE_PREFIX = "hook_state:"
 
-async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine | None:
+
+async def load_room_hook_engine(
+    services: Services, ctx: AgentCtx, *, turn: int | None = None, lane: str = "hooks"
+) -> HookEngine | None:
     """Build this turn's hook engine, or `None` (hooks inert) when nothing is registered,
     the `ejs` extra is missing, or `enable_full_ejs` is off (that switch governs hooks and
     full EJS only — rules scripts and prep scripts do not read it). Best-effort throughout —
-    never raises into the turn."""
+    never raises into the turn.
+
+    `turn` is the turn in flight for `event.seed` — by default the same counter
+    `agent.prompt_builder.turn_rng`'s caller uses (completed turns + 1); a lane that runs
+    after the turn completed (the Scribe) passes the turn it is about. `lane` keeps two
+    engines of one turn from drawing the same seeds."""
     if not services.settings.enable_full_ejs:
         return None
     try:
@@ -58,7 +85,20 @@ async def load_room_hook_engine(services: Services, ctx: AgentCtx) -> HookEngine
 
         modvar_state = await load_modvars(services.documents, ctx.chat_key)
         mvu_tree = await load_mvu(services.documents, ctx.chat_key)
-        engine = create_hook_engine(scripts, flat_variables=modvar_state["values"], tree=mvu_tree)
+        state = await load_hook_state(services, ctx.chat_key)
+        if turn is None:
+            from agent.chronicle import chronicle_turn
+
+            turn = await chronicle_turn(services.store, ctx.chat_key) + 1
+        engine = create_hook_engine(
+            scripts,
+            flat_variables=modvar_state["values"],
+            tree=mvu_tree,
+            state=state,
+            room=ctx.chat_key,
+            turn=turn,
+            lane=lane,
+        )
         if engine is not None and engine.load_warnings:
             logger.warning("hook script load warnings for %s: %s", ctx.chat_key, engine.load_warnings)
         return engine
@@ -117,6 +157,92 @@ async def apply_hook_writes(services: Services, chat_key: str, writes: list[tupl
             continue
     if tree_dirty:
         await save_mvu(services.documents, chat_key, tree)
+    return applied
+
+
+async def _read_hook_state(services: Services, chat_key: str) -> dict[str, Any]:
+    """The room's hook-private state, key → value. Raises only on a store failure: a row
+    with a bad key or an undecodable value is skipped (logged) — "key absent"."""
+    state: dict[str, Any] = {}
+    for row in await services.store.state_list(chat_key, prefix=HOOK_STATE_PREFIX):
+        key = str(row.get("key") or "")[len(HOOK_STATE_PREFIX):]
+        value = decode_state_value(row.get("value"))
+        if not valid_state_key(key) or value is None:
+            logger.warning("hook state row %r in %s is unusable; treated as absent", row.get("key"), chat_key)
+            continue
+        state[key] = value
+    return state
+
+
+async def load_hook_state(services: Services, chat_key: str) -> dict[str, Any]:
+    """The room's hook-private state snapshot for a new `HookEngine`. Never raises: a store
+    failure means a turn whose hooks start with no state, not a broken turn."""
+    try:
+        return await _read_hook_state(services, chat_key)
+    except Exception:  # noqa: BLE001 — hooks never break a turn
+        logger.warning("hook state load failed for %s; hooks see no state this turn", chat_key, exc_info=True)
+        return {}
+
+
+async def refresh_hook_views(
+    services: Services, chat_key: str, engine: HookEngine | None, *, variables: bool = False
+) -> None:
+    """Reset the engine's sandbox views to the store: the hook-private state always, the
+    variable snapshots too when `variables` (a module action must see mid-turn Keeper-tool
+    writes). The store is authoritative — hooks are the state's only writer, but a nested
+    companion turn runs hooks on an engine of its own — so each phase starts from what is
+    persisted. Never raises: on a store failure the view the engine already has stays."""
+    if engine is None:
+        return
+    try:
+        state = await _read_hook_state(services, chat_key)
+    except Exception:  # noqa: BLE001 — hooks never break a turn
+        logger.warning("hook state refresh failed for %s; keeping the current view", chat_key, exc_info=True)
+    else:
+        engine.sync_state(state)
+    if variables:
+        try:
+            modvar_state = await load_modvars(services.documents, chat_key)
+            tree = await load_mvu(services.documents, chat_key)
+        except Exception:  # noqa: BLE001 — hooks never break a turn
+            logger.warning("hook variable refresh failed for %s; keeping the current view", chat_key, exc_info=True)
+        else:
+            engine.refresh_variables(modvar_state["values"], tree)
+
+
+async def apply_hook_state_writes(
+    services: Services, chat_key: str, engine: HookEngine | None, outcome: HookOutcome
+) -> list[str]:
+    """Persist one dispatch's buffered `setstate` writes; return the keys that were applied.
+
+    Validation is `core.hooks.plan_state_writes` over the state AS STORED (not the engine's
+    snapshot), so the caps hold across every dispatch of the turn. Refused writes and the
+    sandbox-side refusals are logged as hook warnings. Afterwards the engine's sandbox view is
+    reset to what was persisted, so a refused write stops being visible to later handlers.
+    Never raises — on a store failure nothing is claimed applied and the view is re-read."""
+    warnings = list(outcome.state_warnings)
+    applied: list[str] = []
+    if outcome.state_writes:
+        try:
+            current = await _read_hook_state(services, chat_key)
+            plan = plan_state_writes(current, outcome.state_writes)
+            warnings += plan.warnings
+            if plan.deletes:
+                await services.store.state_delete_keys(
+                    chat_key, keys=[HOOK_STATE_PREFIX + key for key in plan.deletes]
+                )
+            for key, text in plan.upserts.items():
+                await services.store.state_set(chat_key, HOOK_STATE_PREFIX + key, text)
+            applied = plan.applied
+            if engine is not None:
+                engine.sync_state(plan.state)
+        except Exception:  # noqa: BLE001 — hooks never break a turn
+            logger.warning("hook state writes failed for %s", chat_key, exc_info=True)
+            applied = []
+            if engine is not None:
+                engine.sync_state(await load_hook_state(services, chat_key))
+    if warnings:
+        logger.warning("hook state warnings for %s: %s", chat_key, warnings)
     return applied
 
 
@@ -185,6 +311,20 @@ ROOM_FACETS = (
         # when the session does. It is not the hooks themselves (those are module state,
         # above) — a fresh session re-runs the same hooks and writes its own ring.
         state_keys=frozenset({INJECTION_RING_KEY}),
+        storages=frozenset({STORAGE_ROOM_STATE}),
+    ),
+    RoomStateFacet(
+        name="hook_state",
+        owner="agent.hook_runtime",
+        reset_scope="all",
+        # The hooks' private `setstate` store is module machinery in the same sense as the
+        # variable space it stands beside: it dies at exactly the scope that kills the module
+        # variables (`core.modvars`) and the MVU tree (`core.mvu_compat`). A lighter reset
+        # keeps both, so a hook never finds its own machinery out of step with the trackers
+        # it drives — mirroring is the whole rule; if those two ever move, this moves with
+        # them. It is ordinary room_state, so undo snapshots and export/import carry it with
+        # no code here.
+        state_prefixes=frozenset({HOOK_STATE_PREFIX}),
         storages=frozenset({STORAGE_ROOM_STATE}),
     ),
 )
