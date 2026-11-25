@@ -215,6 +215,48 @@ on('turn_start', () => {
 });
 ```
 
+The engine keeps two kinds of durable state, and you choose by who reads it. A tracker the
+table or the Keeper should see is a **variable** (above — declare it in `variables[]`). Machinery
+only your hooks read — a ledger, a queue, a state machine's internals — goes in the hooks'
+private store instead, so it never costs a prompt line, a panel or a variable slot:
+
+```js
+on('dice_rolled', (e) => {
+  const tally = getstate('tide_rolls') ?? { count: 0 };   // a fresh copy, or undefined
+  tally.count += e.rolls.length;
+  setstate('tide_rolls', tally);                          // persisted, seen by hooks only
+});
+```
+
+`getstate`/`setstate` take any JSON value under a short key (`setstate(key, null)` deletes it);
+the caps and the exact semantics are in [hooks.md](hooks.md#private-state--getstate--setstate).
+
+**When the Keeper needs the hook's answer this turn, write a module action.** Three tools look
+alike and are not:
+
+- **`dice_rolled` (and the other events)** — reacts *after* the narration is final. Right for
+  bookkeeping the Keeper does not narrate from: a tally, a panel refresh, an omen for next turn.
+  Wrong for a number the Keeper is about to say out loud — it will have said its own guess.
+- **A module action (`defineAction`)** — the Keeper *calls* it mid-turn as `module_action`,
+  the engine rolls the declared dice, your handler books the result against room state and
+  returns the line the Keeper narrates from. Right for module machinery: a march ledger, a
+  bargaining table, a ritual's progress.
+- **A rulepack script flow** (`subsystems:` with `script:`) — a *rule-system* mechanic: no
+  arguments, reads the active character's sheet, returns a closed effect vocabulary applied to
+  that sheet. Right for a system's own check (a sanity-style loss, an improvement roll); it
+  cannot read or write the module's state.
+
+```js
+defineAction('book_hour', {description: 'Book one march hour; returns the booked line',
+                           params: '{pace: "fast"|"slow"}', rolls: {march: '8d10'}}, (args, e) => {
+  const crossed = (getstate('crossed') ?? 0) + e.rolls.march.total;
+  setstate('crossed', crossed);
+  return `Booked: ${crossed} across.`;
+});
+```
+
+The full contract is in [hooks.md](hooks.md#module-actions--defineaction).
+
 ### Why your module is a "world card"
 
 Look again at the build output: `Contains 1 WORLD card(s)`. You never declared that. The build

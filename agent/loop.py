@@ -164,7 +164,19 @@ from agent.history import (
     migrate_legacy_blob,
     trim_folded,
 )
-from agent.hook_runtime import apply_hook_writes, load_room_hook_engine, record_hook_injections
+from agent.hook_actions import (
+    dispatch_module_action,
+    drain_action_effects,
+    module_action_schemas,
+    offers_module_action,
+)
+from agent.hook_runtime import (
+    apply_hook_state_writes,
+    apply_hook_writes,
+    load_room_hook_engine,
+    record_hook_injections,
+    refresh_hook_views,
+)
 from agent.kp_tools_subsystems import dispatch_subsystem, subsystem_schemas
 from agent.player_line import player_line_body
 from agent.prompt_builder import build_system_prompt_parts
@@ -183,7 +195,7 @@ from agent.turn_checks import (
 )
 from agent.undo import capture as capture_snapshot
 from core.chronicle import estimate_tokens
-from core.hooks import MAX_PANEL_EVENTS_PER_TURN
+from core.hooks import MAX_PANEL_EVENTS_PER_TURN, MODULE_ACTION_TOOL
 from core.mvu_compat import mvu_apply_text
 from core.rulepacks import RulePack
 from core.skills import unlocked_tools_for
@@ -496,6 +508,7 @@ async def _run_kp_turn_body(
     if hook_engine is not None:
         outcome = hook_engine.fire("turn_start", {"user_message": utterance, "actor": ctx.user_id})
         hook_writes_this_turn += await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+        await apply_hook_state_writes(services, ctx.chat_key, hook_engine, outcome)
         hook_ui_frames += outcome.ui_blocks
         hook_panel_events += outcome.panel_events
         if outcome.injections:
@@ -530,7 +543,11 @@ async def _run_kp_turn_body(
     # tools exist here (a system that declares none materializes none), and their
     # schemas ride alongside the static toolset for this turn.
     room_pack = await services.room_rulepack(ctx)
-    subsystem_tools = subsystem_schemas(room_pack)
+    # Module actions ride the same dynamic lane: one `module_action` tool, present only when
+    # this turn's hook engine registered at least one action (`agent.hook_actions`). Folded
+    # in here so every schema build of the turn — the rounds and the end-of-turn checks —
+    # offers exactly what `_dispatch_one` will accept.
+    subsystem_tools = [*subsystem_schemas(room_pack), *module_action_schemas(hook_engine)]
 
     # M20 A2: history is APPEND-ONLY between folds — the sliding window is gone, because
     # dropping its front every turn invalidated every downstream cache prefix. The one
@@ -746,6 +763,11 @@ async def _run_kp_turn_body(
             # message — that exchange DID happen and stays; only then does the line stay
             # with it, as its parent.)
             await abandon_message(services, ctx.chat_key, key, own_user_record_id)
+            # Module actions that ran in earlier rounds DID apply their effects; their frames
+            # go out with the failure like turn_start's do.
+            action_effects = drain_action_effects(hook_engine)
+            hook_ui_frames += action_effects.ui_frames
+            hook_panel_events += action_effects.panel_events
             return KPTurnResult(
                 reply=reply,
                 tool_trace=tool_trace,
@@ -864,6 +886,13 @@ async def _run_kp_turn_body(
         logger.warning("MVU update-block processing failed", exc_info=True)
     reply = _strip_text_tool_calls(reply)
 
+    # What this turn's module actions wrote and emitted sits between turn_start's and the reply
+    # phases' in every list: the Scribe must leave those variables alone and
+    # `variables_changed` must report them, exactly like any other hook write.
+    action_effects = drain_action_effects(hook_engine)
+    hook_writes_this_turn += action_effects.writes
+    hook_ui_frames += action_effects.ui_frames
+    hook_panel_events += action_effects.panel_events
     if hook_engine is not None:
         reply, hook_writes_this_turn, reply_ui_frames, reply_panel_events = await _run_reply_hooks(
             services, ctx, hook_engine, reply, tool_trace, mvu_applied, hook_writes_this_turn
@@ -1337,11 +1366,16 @@ async def _dispatch_one(
     if denial is not None:
         tool_result, suppressed = denial, True
     else:
-        tool_result = (
-            await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
-            if room_pack is not None
-            else None
-        )
+        if call.name == MODULE_ACTION_TOOL and offers_module_action(hook_engine):
+            # Only when offered: otherwise it falls through to the toolset, which refuses it
+            # like any unknown tool. Never a concurrent run — see `_concurrency_groups`.
+            tool_result = await dispatch_module_action(services, ctx, hook_engine, call.arguments)
+        else:
+            tool_result = (
+                await dispatch_subsystem(services, ctx, room_pack, call.name, call.arguments)
+                if room_pack is not None
+                else None
+            )
         if tool_result is None:
             tool_result = await toolset.dispatch(
                 call.name, ctx, call.arguments, unlocked, phase=phase, capabilities=capabilities
@@ -1615,6 +1649,10 @@ async def _run_reply_hooks(
     ui_frames: list[dict] = []
     panel_events: list[dict] = []
     try:
+        # The state view starts the reply phases equal to the store: a nested companion turn
+        # (`companion_act`) ran hooks on an engine of its own and may have written state this
+        # engine's snapshot predates; reading the stale copy would lose its update.
+        await refresh_hook_views(services, ctx.chat_key, engine)
         rolls = [
             {"tool": item.get("name", ""), "result": str(item.get("result", ""))[:200]}
             for item in tool_trace
@@ -1623,6 +1661,7 @@ async def _run_reply_hooks(
         if rolls:
             outcome = engine.fire("dice_rolled", {"rolls": rolls})
             hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            await apply_hook_state_writes(services, ctx.chat_key, engine, outcome)
             ui_frames += outcome.ui_blocks
             panel_events += outcome.panel_events
             if outcome.narrations:
@@ -1641,6 +1680,7 @@ async def _run_reply_hooks(
                 },
             )
             hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            await apply_hook_state_writes(services, ctx.chat_key, engine, outcome)
             ui_frames += outcome.ui_blocks
             panel_events += outcome.panel_events
             if outcome.narrations:
@@ -1648,6 +1688,7 @@ async def _run_reply_hooks(
 
         outcome = engine.fire("reply_ready", {"reply": reply})
         hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+        await apply_hook_state_writes(services, ctx.chat_key, engine, outcome)
         ui_frames += outcome.ui_blocks
         panel_events += outcome.panel_events
         if outcome.rewrite is not None:
@@ -1672,6 +1713,7 @@ async def _run_reply_hooks(
         if changed:
             outcome = engine.fire("variables_changed", {"writes": changed})
             hook_writes = hook_writes + await apply_hook_writes(services, ctx.chat_key, outcome.writes)
+            await apply_hook_state_writes(services, ctx.chat_key, engine, outcome)
             ui_frames += outcome.ui_blocks
             panel_events += outcome.panel_events
             if outcome.narrations:

@@ -30,7 +30,9 @@
   number. A keeper's own `.var` command is a person, not a model lane, and is not asked.
 - **Not fixed here:** the Keeper still narrates a ledger number the hook has not booked
   yet. That is the pack's to solve (the hook could `narrate()` the booked line itself); it
-  is the same root as the Keeper's root-value estimates in the same run.
+  is the same root as the Keeper's root-value estimates in the same run. Closed
+  2026-11-25 by [module actions](module-actions.md): the pack books the hour in an action
+  the Keeper calls mid-turn and narrates the line it returns.
 - **Rule home:** `agent/scribe.py` (`run_scribe`, `_hook_refusal`), `agent/loop.py`
   (`KPTurnResult.hook_writes`), `gateway/turn.py`, `docs/plugins.md` (`tool_use` bullet);
   tests `tests/agent/test_scribe_hook_veto.py`, `tests/agent/test_scribe.py`,

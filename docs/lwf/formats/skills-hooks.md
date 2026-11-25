@@ -4,7 +4,10 @@
 against the unpublished 1.0 draft, 2.0 adds two events (`clock_advanced`,
 `tool_use` with `denyTool`), `decvar`, the native-bundle hook location, the image and
 performance block kinds for `emitUI`, and `emitPanel` as stable. It also corrects the
-cap and kill-switch statements of 1.0 to what the reference enforces. Reference
+cap and kill-switch statements of 1.0 to what the reference enforces. The hook-private
+state store (`getstate`/`setstate`, §4), module actions (`defineAction`, §4) and
+`event.seed` (§3) are **additive** extensions within 2.0: a script that uses none of them
+behaves exactly as before. Reference
 implementation: `core/skills.py`, `core/hooks.py`, `agent/hook_runtime.py`,
 `core/ejs_full.py`, `core/ejs_lite.py` and the hook phases in `agent/loop.py` in the
 Loreweaver engine.
@@ -76,6 +79,13 @@ rejection is logged.
 After the reply, the phases run in this order: `dice_rolled`, `clock_advanced` (once per
 advance), `reply_ready`, `variables_changed`.
 
+**`event.seed`.** Every payload above, and every module action's `event` (§4), also carries
+`seed`: a non-negative integer below 2^53. A runtime MUST derive it from persisted inputs
+only (the reference: sha256 over the room, the turn in flight and the dispatch's stream
+and ordinal within the turn), so that the same room state yields the same seeds and a
+rewound turn replays them. Script authors needing randomness SHOULD seed their own
+generator from it; `Math.random()` is not replayable.
+
 **`denyTool(reason)`** may be called in a `tool_use` handler. It refuses the tool call,
 and the reason goes back to the agent as the refusal. A refusal **fails open**: if the
 dispatch fails or times out, the call is allowed. A room admin's own commands are not
@@ -101,6 +111,61 @@ is authorial output, so authors MUST NOT emit keeper-only material.
 earlier writes as it requested them, before validation. It does not see writes that
 tools or the reply made earlier in the same turn. `variables_changed` reports which paths
 changed and how, never the new values.
+
+**Private state.** A hook-only JSON store, separate from the variables. It is available
+in hook handlers only, never in templates (§7).
+
+- `getstate(key)`: returns a copy of the stored value, or `undefined` when the key is
+  absent. Mutating the copy changes nothing stored.
+- `setstate(key, value)`: stores any JSON value, as it is at the moment of the call.
+  `null` or `undefined` deletes the key. A value that cannot be represented as JSON,
+  including NaN or Infinity anywhere inside it, is refused and logged.
+
+A runtime MUST keep this store out of the variable space: it is never rendered into the
+game-master prompt, never sent to any client, never reported by `variables_changed`, and
+never resolvable by conditions, panel bindings or `getvar`. Writes are buffered and applied
+like variable writes (§5); a handler sees its own earlier writes at once. At the start of
+each phase (the turn's first event, the after-reply phases, each module action) the
+handler's view MUST equal the persisted store. Writes made in a `tool_use` handler are not
+applied. Limits, which a runtime MUST enforce per write:
+
+| Limit | Value |
+|---|---|
+| Key | 1–64 characters of `A–Z a–z 0–9 _ . : -`; not `__proto__`, `constructor` or `prototype` |
+| One value | ≤ 256 KiB, UTF-8 bytes of its compact JSON |
+| Keys per room | ≤ 32 |
+| All values per room | ≤ 1 MiB |
+| Writes per dispatch | ≤ 32 |
+
+A write over a limit is skipped and reported, never fatal. A stored value that cannot be
+decoded reads as absent. The store is room state: a runtime that rewinds, exports or
+resets a room treats it like the room's typed variables.
+
+**Module actions.** `defineAction(name, spec, handler)` registers a mechanic the
+game-master agent can call during the turn; it is available in hook scripts only.
+
+- `name` matches `[a-z][a-z0-9_]{0,31}`. `spec` is an object: `description` (required,
+  ≤ 200 characters), `params` (optional free-text hint of the argument shape, ≤ 400
+  characters), `rolls` (optional, at most 8 identifier slots mapped to dice expressions).
+  Unknown `spec` keys are ignored. A registration that breaks these rules is dropped with
+  a logged warning; for a repeated name the first valid registration wins; a room has at
+  most 24 actions.
+- A runtime exposes the room's actions to the agent as one tool. The reference names it
+  `module_action` with parameters `action` (an enum of the names) and `args` (an object),
+  and lists each action as `name — description [params]` in registration order.
+- Before each call the runtime refreshes the handler's view of variables and private
+  state from the store, rolls each declared slot with its own dice engine, and calls
+  `handler(args, event)` with `event = {actor, seed, rolls}` and
+  `rolls = {slot: {expr, total, dice}}`. `args` is at most 8 KiB serialized.
+- The handler's return value is the tool result: a string as is, any other value as
+  compact JSON, `undefined` as a short confirmation; at most 4,000 characters.
+- Effects (`setvar`, `setstate`, `emitUI`, `emitPanel`) are applied immediately as in §5,
+  and its variable writes count as the turn's hook writes (`variables_changed` reports
+  them). `inject`, `narrate`, `rewriteReply` and `denyTool` have no effect in an action.
+- A handler that throws, times out, does not settle or returns a non-JSON value applies
+  **nothing**; the agent receives a failure line.
+- A `tool_use` handler sees and may deny action calls. A runtime MUST cap the calls per
+  turn (the reference: 16) and MUST NOT run two action calls concurrently.
 
 **Effect emitters.** Each emitter's cap applies **per event dispatch**.
 
@@ -140,13 +205,15 @@ the buffer after the handler returns.
   variable tree.
 - A write that fails validation is skipped and reported, never fatal.
 - At most 64 writes are applied per dispatch.
+- A `setstate` write is checked against the private-state limits (§4) on top of the
+  state as stored, so the room-wide limits hold across every dispatch of a turn.
 
 ## 6. Sandbox (normative floor)
 
 - **A fresh interpreter every turn.** The runtime builds the hook interpreter anew for
-  each turn. Nothing survives to the next turn or crosses into another room, so a value
+  each turn (module actions run in the same interpreter as that turn's events). Nothing survives to the next turn or crosses into another room, so a value
   kept in a script global resets every turn. Durable state MUST go through the variable
-  bridge.
+  bridge or the private state store (§4).
 - **Hard limits.** A memory cap (the reference uses 64 MiB) and a time limit per
   evaluation (1 s), armed **before** a script's top-level code runs. An infinite loop
   times out and never hangs the runtime.
