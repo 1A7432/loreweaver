@@ -31,7 +31,7 @@ on("clock_advanced",    (event) => { ... });  // event.from、event.to、event.d
 on("tool_use",          (event) => { ... });  // event.tool、event.arguments——可 denyTool(理由)
 ```
 
-- **`turn_start`**——守秘人开始思考之前触发，带着玩家输入。这是 `inject()` 唯一有意义的事件：注入的段落会进入**本**回合的守秘人提示词。
+- **`turn_start`**——守秘人开始思考之前触发，带着玩家输入。这是 `inject()` 唯一有意义的事件：注入的段落会进入**本**回合的守秘人提示词。它的 `narrate()` 文本会先被留住，再作为所有钩子叙述中的第一条追加到回复后面（见下表）；`rewriteReply()` 和 `denyTool()` 在这里不起作用。
 - **`reply_ready`**——守秘人的叙事已经完成，`event.reply` 是全文。`narrate()` / `rewriteReply()` 该在这里用。
 - **`dice_rolled`**——本回合有骰子工具结算了。
 - **`variables_changed`**——本回合发生了变量写入：钩子自己的写入、回复自带的 `<UpdateVariable>` 命令、守秘人的 `set_variable`／`adjust_variable`／`set_stat`／`adjust_stat` 工具调用，一律计入。**每回合最多触发一次**，所以一个「响应变量变化又去写变量」的钩子不可能无限连锁——终止是构造出来的，不是靠自觉。
@@ -57,7 +57,7 @@ on("tool_use",          (event) => { ... });  // event.tool、event.arguments—
 | 发射器 | 作用 | 限额（除注明外按每次事件分发计） |
 |---|---|---|
 | `inject(text)` | 往本回合守秘人提示词里加一段（仅 `turn_start`） | 8 × 4,000 字符 |
-| `narrate(text)` | 追加到玩家可见回复后面 | 8 × 2,000 字符 |
+| `narrate(text)` | 追加到玩家可见回复后面，按事件顺序：`turn_start`、`dice_rolled`、`clock_advanced`、`reply_ready`、`variables_changed`（后面的处理器在 `event.reply` 里能看到前面的叙述）。在 `tool_use` 和模组动作里被忽略；provider 失败的回合一条都不送出 | 8 × 2,000 字符 |
 | `rewriteReply(text)` | 替换玩家可见回复 | 1 × 4,000 字符 |
 | `emitUI(blocks, opts?)` | 在客户端画声明式 UI（见下） | 8 次发射 |
 | `emitPanel(panelId, payload)` | 把一份不透明的 JSON 载荷发给某个模组面板自己的代码（`panel_event` 帧） | 每**回合** 20 次，每次 32 KiB |

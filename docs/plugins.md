@@ -435,7 +435,7 @@ operator's content, the operator's box):
 - **API**: `on("turn_start"|"reply_ready"|"dice_rolled"|"variables_changed"|"clock_advanced"|"tool_use", handler)`, the
   full variable bridge (`getvar`/`setvar`/`variables`/`stat_data`, lodash as `_`), and the
   effect emitters `inject(text)` (adds a section to this turn's keeper prompt),
-  `narrate(text)` (appends to the player-visible reply), `rewriteReply(text)`, `log(text)`,
+  `narrate(text)` (appends to the player-visible reply, in event order with `turn_start`'s first), `rewriteReply(text)`, `log(text)`,
   and `emitUI(blocks, opts?)` — declarative UI blocks (meter/stat/badge/text/divider/choices)
   clients render as `ui` frames, e.g.
   `emitUI([{kind:"meter", label:"Fear", value:3, min:0, max:10}], {panel:"sidebar", id:"hud"})`;
