@@ -54,7 +54,9 @@ on("tool_use",          (event) => { ... });  // event.tool, event.arguments —
 
 - **`turn_start`** — fires before the Keeper thinks, with the player's input. This
   is the only event where `inject()` is useful: the injected section joins **this**
-  turn's Keeper prompt.
+  turn's Keeper prompt. Its `narrate()` texts are held and appended to the reply first
+  among hook narrations (see the table below); `rewriteReply()` and `denyTool()` have no
+  effect here.
 - **`reply_ready`** — the Keeper's narration is complete; `event.reply` is the text.
   The place for `narrate()` / `rewriteReply()`.
 - **`dice_rolled`** — one or more dice tools resolved this turn.
@@ -114,7 +116,7 @@ Effect emitters:
 | Emitter | Does | Caps (per event dispatch unless noted) |
 |---|---|---|
 | `inject(text)` | adds a section to this turn's Keeper prompt (`turn_start` only) | 8 × 4,000 chars |
-| `narrate(text)` | appends to the player-visible reply | 8 × 2,000 chars |
+| `narrate(text)` | appends to the player-visible reply, in event order: `turn_start`, `dice_rolled`, `clock_advanced`, `reply_ready`, `variables_changed` (a later handler's `event.reply` includes earlier narrations). Ignored in `tool_use` and in module actions; a turn the provider failed delivers none | 8 × 2,000 chars |
 | `rewriteReply(text)` | replaces the player-visible reply | 1 × 4,000 chars |
 | `emitUI(blocks, opts?)` | draws declarative UI in clients (below) | 8 emissions |
 | `emitPanel(panelId, payload)` | sends an opaque JSON payload to one module panel's own code (`panel_event` frame) | 20 per **turn**, 32 KiB each |

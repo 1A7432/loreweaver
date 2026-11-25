@@ -381,3 +381,142 @@ async def test_keeper_tool_variable_writes_fire_variables_changed():
     # The record is consumed by the turn: a second turn without writes fires nothing.
     second = await run_kp_turn(ctx, services, Toolset(ModuleVarTools(services)), "wait")
     assert "changed:" not in second.reply
+
+
+# ---------------------------------------------------------------------------
+# turn_start narrate() (owner verdict 2026-11-25: honoured, first among hook narrations)
+# ---------------------------------------------------------------------------
+
+
+async def test_turn_start_narration_reaches_the_reply_and_the_persisted_record():
+    from agent.history import DEFAULT_HISTORY_KEY, load_chain
+
+    services = _services(FakeLLM(script=[assistant_text("The tide is out.")]))
+    ctx = _ctx("chat-hooks-ts-narrate")
+    await install_room_hooks(services, ctx.chat_key, "test", ["on('turn_start', () => narrate('[the bells ring]'));"])
+
+    result = await run_kp_turn(ctx, services, Toolset(), "listen")
+
+    assert result.reply == "The tide is out.\n\n[the bells ring]"
+    chain = await load_chain(services, ctx.chat_key, DEFAULT_HISTORY_KEY)
+    assert chain[-1]["content"] == result.reply  # what is stored is what the table got
+
+
+async def test_turn_start_narration_comes_first_and_reply_ready_reads_it():
+    llm = FakeLLM(script=[assistant_tools(tool_call("skill_check", skill_name="Spot Hidden")), assistant_text("Done.")])
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-ts-order")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        [
+            "on('turn_start', () => narrate('A-start'));"
+            "on('dice_rolled', () => narrate('B-dice'));"
+            "on('reply_ready', (e) => narrate('C-ready saw start=' + e.reply.includes('A-start')));"
+        ],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(_DiceProvider()), "search")
+
+    assert result.reply == "Done.\n\nA-start\n\nB-dice\n\nC-ready saw start=true"
+
+
+async def test_rewrite_reply_still_replaces_everything():
+    services = _services(FakeLLM(script=[assistant_text("Original.")]))
+    ctx = _ctx("chat-hooks-ts-rewrite")
+    await install_room_hooks(
+        services,
+        ctx.chat_key,
+        "test",
+        ["on('turn_start', () => narrate('early')); on('reply_ready', () => rewriteReply('Rewritten.'));"],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "go")
+
+    assert result.reply == "Rewritten."
+
+
+async def test_turn_start_narration_rides_the_max_rounds_finalizer():
+    script = [*[assistant_tools(tool_call("skill_check", skill_name="Spot")) for _ in range(12)], assistant_text("Closing.")]
+    services = _services(FakeLLM(script=script))
+    ctx = _ctx("chat-hooks-ts-finalizer")
+    await install_room_hooks(services, ctx.chat_key, "test", ["on('turn_start', () => narrate('[omen]'));"])
+
+    result = await run_kp_turn(ctx, services, Toolset(_DiceProvider()), "search everything")
+
+    assert result.reply.startswith("Closing.") and "[omen]" in result.reply
+
+
+async def test_a_provider_failure_delivers_no_turn_start_narration():
+    def boom(messages, tools):
+        raise RuntimeError("provider down")
+
+    services = _services(FakeLLM(responder=boom))
+    ctx = _ctx("chat-hooks-ts-failure")
+    await install_room_hooks(services, ctx.chat_key, "test", ["on('turn_start', () => narrate('[omen]'));"])
+
+    result = await run_kp_turn(ctx, services, Toolset(), "go")
+
+    assert "[omen]" not in result.reply  # the turn did not happen; nor did its narration
+
+
+async def test_turn_start_narrations_keep_the_per_dispatch_caps():
+    from core.hooks import MAX_NARRATION_CHARS, MAX_NARRATIONS
+
+    services = _services(FakeLLM(script=[assistant_text("ok")]))
+    ctx = _ctx("chat-hooks-ts-caps")
+    await install_room_hooks(
+        services, ctx.chat_key, "test",
+        [f"on('turn_start', () => {{ for (let i = 0; i < {MAX_NARRATIONS + 2}; i++) narrate(String(i) + 'x'.repeat({MAX_NARRATION_CHARS})); }});"],
+    )
+
+    result = await run_kp_turn(ctx, services, Toolset(), "go")
+
+    lines = result.reply.split("\n\n", 1)[1].split("\n")
+    assert len(lines) == MAX_NARRATIONS and all(len(line) == MAX_NARRATION_CHARS for line in lines)
+
+
+async def test_turn_start_narration_is_not_streamed_and_lands_in_the_final_text():
+    """Like every hook narration: the stream carries only the model's text, and the final
+    `narrative` frame (built from `result.reply`) replaces the draft with the whole thing."""
+    services = _services(FakeLLM(script=[assistant_text("The tide is out.")]))
+    ctx = _ctx("chat-hooks-ts-stream")
+    await install_room_hooks(services, ctx.chat_key, "test", ["on('turn_start', () => narrate('[the bells ring]'));"])
+    frames: list[dict] = []
+
+    async def emit(frame: dict) -> None:
+        frames.append(frame)
+
+    result = await run_kp_turn(ctx, services, Toolset(), "listen", on_reply_delta=emit)
+
+    streamed = "".join(frame["text"] for frame in frames)
+    assert "[the bells ring]" not in streamed and "The tide is out." in streamed
+    assert result.reply.endswith("[the bells ring]")
+
+
+async def test_end_of_turn_checks_never_read_a_turn_start_narration():
+    """The narration joins after the checks: a hook's own roll line is not the Keeper's
+    forged roll, so it must not cost a corrective round."""
+    llm = FakeLLM(responder=lambda messages, tools: assistant_text("The archive is quiet."))
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-ts-checks")
+    await install_room_hooks(services, ctx.chat_key, "test", ["on('turn_start', () => narrate('The omen die: rolled 57.'));"])
+
+    result = await run_kp_turn(ctx, services, Toolset(), "read")
+
+    assert len(llm.calls) == 1  # no check round fired
+    assert result.reply == "The archive is quiet.\n\nThe omen die: rolled 57."
+
+
+async def test_turn_start_narration_rides_a_reply_the_checks_corrected():
+    replies = iter(["You rolled 57 and found it.", "You search the room carefully."])
+    llm = FakeLLM(responder=lambda messages, tools: assistant_text(next(replies)))
+    services = _services(llm)
+    ctx = _ctx("chat-hooks-ts-corrected")
+    await install_room_hooks(services, ctx.chat_key, "test", ["on('turn_start', () => narrate('[omen]'));"])
+
+    result = await run_kp_turn(ctx, services, Toolset(), "search")
+
+    assert len(llm.calls) == 2  # dice_forged refused the first reply
+    assert result.reply == "You search the room carefully.\n\n[omen]"

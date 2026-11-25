@@ -172,7 +172,7 @@ game-master agent can call during the turn; it is available in hook scripts only
 | Emitter | Effect | Cap per dispatch |
 |---|---|---|
 | `inject(text)` | Adds a section to this turn's game-master prompt. Only useful in `turn_start`. | 8 × 4,000 characters |
-| `narrate(text)` | Appends to the player-visible reply, after a blank line. | 8 × 2,000 characters |
+| `narrate(text)` | Appends to the player-visible reply, after a blank line, in event order (`turn_start` first, held until the reply exists, then the after-reply phases in order); a later handler's `reply` includes earlier narrations. No effect in `tool_use` or a module action; a turn that fails before producing a reply delivers none. | 8 × 2,000 characters |
 | `rewriteReply(text)` | Replaces the player-visible reply. It takes effect in `reply_ready`. | 1 × 4,000 characters |
 | `emitUI(blocks, opts?)` | Sends declarative UI blocks to clients as protocol `ui` frames. | 8 emissions × 16 blocks |
 | `emitPanel(panelId, payload)` | Sends an opaque event to one declared panel ([panels.md](panels.md) §4). | 20 per **turn** across all dispatches, each ≤ 32 KB serialized |

@@ -37,7 +37,8 @@ ones above it:
  1. Reset per-turn residue on the (reused) ``AgentCtx``: dice payloads, NPC
     lines, ``hook_injections`` / ``clock_advances`` / ``variable_writes``.
  2. Fire the ``turn_start`` hook BEFORE prompt assembly — its injections and
-    variable writes must shape this very prompt.
+    variable writes must shape this very prompt; its ``narrate()`` texts are held
+    for step 10.
  3. Adopt legacy history (``migrate_legacy_blob``), then run the routine
     chronicle fold (``maybe_fold_chronicle``) — also BEFORE assembly, so the
     emergency ceiling keeps headroom for the fold's own generation.
@@ -73,7 +74,8 @@ ones above it:
     fallback.
 10. Reply post-processing, in THIS order: MVU ``<UpdateVariable>`` blocks
     applied + stripped (deterministic code does the bookkeeping) → text-shaped
-    tool calls stripped → reply hooks (``apply``/``reply`` phases) →
+    tool calls stripped → turn_start's held narrations appended → reply hooks
+    (``apply``/``reply`` phases) →
     ``output_review`` (the censor sees final text) → stream gate drained.
 11. Persist the reply, advance the chronicle counter, photograph the room for
     undo (``capture_snapshot`` AFTER the counter, so snapshot ``turn_index``
@@ -492,6 +494,10 @@ async def _run_kp_turn_body(
     hook_writes_this_turn: list[str] = []
     hook_ui_frames: list[dict] = []
     hook_panel_events: list[dict] = []
+    # turn_start's narrate() texts: they join the reply FIRST among hook narrations, at the
+    # start of the reply phases (`_run_reply_hooks`), so every path that delivers and
+    # persists a reply carries them and the provider-failure return (no turn) does not.
+    turn_start_narrations: list[str] = []
     ctx.extra.pop("hook_injections", None)  # reused ctx must not leak a prior turn's injections
     ctx.extra.pop("clock_advances", None)  # same for a prior turn's unconsumed clock records
     ctx.extra.pop("variable_writes", None)  # and a prior turn's keeper-tool variable writes
@@ -513,6 +519,7 @@ async def _run_kp_turn_body(
         hook_panel_events += outcome.panel_events
         if outcome.injections:
             ctx.extra["hook_injections"] = outcome.injections
+        turn_start_narrations = outcome.narrations
     key = history_key or DEFAULT_HISTORY_KEY
     await migrate_legacy_blob(services, ctx.chat_key, key)
     # M18 campaign chronicle: the context-pressure fold runs BEFORE prompt assembly —
@@ -895,7 +902,14 @@ async def _run_kp_turn_body(
     hook_panel_events += action_effects.panel_events
     if hook_engine is not None:
         reply, hook_writes_this_turn, reply_ui_frames, reply_panel_events = await _run_reply_hooks(
-            services, ctx, hook_engine, reply, tool_trace, mvu_applied, hook_writes_this_turn
+            services,
+            ctx,
+            hook_engine,
+            reply,
+            tool_trace,
+            mvu_applied,
+            hook_writes_this_turn,
+            turn_start_narrations=turn_start_narrations,
         )
         hook_ui_frames += reply_ui_frames
         hook_panel_events += reply_panel_events
@@ -1637,6 +1651,8 @@ async def _run_reply_hooks(
     tool_trace: list[dict],
     mvu_applied: list,
     hook_writes: list[str],
+    *,
+    turn_start_narrations: list[str] | None = None,
 ) -> tuple[str, list[str], list[dict], list[dict]]:
     """Fire the post-reply hook phases in order: dice_rolled (when any dice tool resolved this
     turn), clock_advanced (once per game-clock advance recorded by the clock tool this turn),
@@ -1645,9 +1661,17 @@ async def _run_reply_hooks(
     it, so hook cascades terminate by construction. Best-effort: a failing phase logs and the
     reply passes through unchanged. The third/fourth return values collect every phase's
     validated emitUI() / emitPanel() emissions in fire order (protocol v1.7 `ui` frame
-    payloads / v1.8 `panel_event` payloads)."""
+    payloads / v1.8 `panel_event` payloads).
+
+    `turn_start_narrations` (that event's `narrate()` texts, held since the turn began) are
+    appended first, with the same join as every other phase's, so `reply_ready` reads them in
+    `event.reply` like it reads `dice_rolled`'s. They land here rather than where the event
+    fired so the end-of-turn checks and the `<UpdateVariable>` parse never read hook text as
+    the Keeper's, and so the provider-failure return, which delivers no turn, carries none."""
     ui_frames: list[dict] = []
     panel_events: list[dict] = []
+    if turn_start_narrations:
+        reply = reply.rstrip() + "\n\n" + "\n".join(turn_start_narrations)
     try:
         # The state view starts the reply phases equal to the store: a nested companion turn
         # (`companion_act`) ran hooks on an engine of its own and may have written state this

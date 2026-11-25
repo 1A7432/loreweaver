@@ -57,7 +57,7 @@ class _DiceProvider:
         return f"{skill_name}: rolled 42 vs 65 -> hard success"
 
 
-# turn_start narrations are not applied by the loop, so the count is narrated at reply_ready.
+# The count is narrated at reply_ready, after every phase of the turn has had its say.
 COUNTER_HOOK = (
     "on('turn_start', () => setstate('turns', (getstate('turns') ?? 0) + 1));"
     "on('reply_ready', () => narrate('turn#' + getstate('turns')));"
