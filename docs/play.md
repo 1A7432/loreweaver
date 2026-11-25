@@ -182,6 +182,7 @@ projection that keeps every other secret out of your client — keeper annotatio
 | `.sc <success>/<failure>` | a sanity check, in systems that have one — `.sc 1/1d6` |
 | `.ri` | roll into the initiative order, or show it |
 | `.pc` | the module's pre-generated cast |
+| `.act` | the module's own player actions, if it has any; `.act <name> [args]` runs one — no wait for the Keeper, and the whole table sees the result |
 | `.recap` | the spoiler-free story so far |
 | `.report` | export a session report — the scoreboard; `.report full` adds every dice roll and the whole conversation |
 | `.report html` | the same keepsake as a printable, self-contained web page, sent to **your** client only — the terminal client saves it (`~/Downloads/loreweaver`, else `~/.loreweaver/reports`) for you to open in a browser |

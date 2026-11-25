@@ -281,6 +281,10 @@ async def _switch_everything_on(
         # already does (`pack.install.shadowed`); an author debugging "my skill changed
         # nothing" has no other way to see it. A courtesy line, not a gate.
         live.append(ctx.i18n.t("commands.pack.shadowed", ids=", ".join(report.shadowed)))
+    # The skills just enabled may register player actions (`state.actions`).
+    from agent.hook_runtime import refresh_action_manifest
+
+    await refresh_action_manifest(ctx.services, ctx.chat_key)
 
     world_refs = [
         f"{pack_id}/{card_path}"

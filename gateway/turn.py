@@ -219,6 +219,18 @@ async def run_turn(
                 await origin.deliver(reply_event)
         else:
             await hub.publish(ctx.chat_key, reply_event)
+            # A command's hook effects (`.act`): the same delivery a Keeper turn's get —
+            # `ui` frames past the media reachability gate, published and laned for join
+            # replay; `panel_event`s only to viewers whose manifest holds the panel.
+            if reply is not None and reply.ui_frames:
+                ui_frames = await filter_ui_media(services, ctx.chat_key, list(reply.ui_frames))
+                ui_events = [Event.ui(ui_frame) for ui_frame in ui_frames]
+                for ui_event in ui_events:
+                    await hub.publish(ctx.chat_key, ui_event)
+                if ui_events:
+                    await record_turn_events(services, ctx.chat_key, ui_events)
+            if reply is not None and reply.panel_events:
+                await deliver_panel_events(hub, services, ctx.chat_key, list(reply.panel_events))
     else:
         # `.bot off` (gateway.commands.rooms.cmd_bot_toggle) mutes the AI Keeper for this
         # room: the player message above is still echoed to everyone (a human-Keeper

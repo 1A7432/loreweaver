@@ -57,6 +57,9 @@ from net.room_backup import room_rows, room_vector_points
 
 logger = logging.getLogger(__name__)
 
+# v2.6 adds `state.actions`: the room's player-invokable module actions (`defineAction` with
+# `player: true`), from a manifest the last hook-engine build cached — clients offer them and
+# send `.act <id> <json>` through the ordinary input path, so no new client frame.
 # v2.4 adds the `report` frame: a server-generated, self-contained HTML session report
 # (`.report html` / `.report html reveal`), stored as an UNLISTED room blob and announced
 # to the issuing connection only — fetched over the ordinary media GET, never broadcast,
@@ -69,7 +72,7 @@ logger = logging.getLogger(__name__)
 # `panel_intent` client frame, and pack-asset resolution on the media byte channel.
 # v1.7 added declarative hook-emitted `ui` frames (core.hooks emitUI); v1.6 added
 # player-visible module variables on the state frame.
-_PROTOCOL_VERSION = "2.5"
+_PROTOCOL_VERSION = "2.6"
 # Public alias for out-of-band consumers (the `.lwpack` engine-minimum check in app.py).
 PROTOCOL_VERSION = _PROTOCOL_VERSION
 _SERVER_BANNER = "loreweaver/1"

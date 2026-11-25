@@ -1,13 +1,13 @@
 *English · [中文](protocol.zh.md)*
 
-# loreweaver networked TUI — wire protocol 2.5
+# loreweaver networked TUI — wire protocol 2.6
 
 This is the open, versioned wire protocol between a loreweaver server (started via
 `python -m app --serve`) and the OpenTUI terminal client. The engine itself
 (deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
 session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.5"`. The same
+Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.6"`. The same
 frames + `join` handshake ride the transport; only the carrier + its framing differ:
 
 - **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
@@ -37,6 +37,19 @@ a panel template block carrying `visible_when` and cannot evaluate that conditio
 it does not implement the field, or does not implement that corner of the grammar, or the
 evaluation errors — MUST NOT render the block. Ignoring the gate draws content the author
 hid, so the undecidable case fails CLOSED, exactly as an unresolved `$var` does.
+
+**2.6 (additive)** adds `state.actions`: the room's PLAYER-invokable module actions —
+hook-registered mechanics (`defineAction(name, {player: true, …})`, see `docs/hooks.md`)
+that any member may run without a Keeper round. Each entry is `{id, label, description,
+params?}`; `label` is resolved like every other server label, `params` is the author's
+free-text hint of the argument shape. A client that offers them sends `.act <id> <args>`
+through the ordinary `input` frame (`args`: a JSON object, or plain text the server wraps
+as `{"text": …}`), so there is no new client frame; the result comes back as an ordinary
+`narrative` from `system`, broadcast like a `.ra` result, with a `dice` frame when the
+action declares rolls. The list is served from a cache the server refreshes whenever it
+builds the room's hook engine (each Keeper turn, each `.act`, a hook install, a skill
+toggle), so it can briefly lag a change; it is omitted when the room has none. A 2.5 client
+ignores the field and can still type `.act`.
 
 **2.5 (additive)** adds display labels BESIDE raw ids, all optional: `value_label` on an
 `enum` entry of `state.variables` (the pack's name for the current option),
@@ -136,7 +149,7 @@ connections receive `error too_many_connections` before `join` is read.
 ## Server → Client
 
 - `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.5", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
+  `{type:"welcome", protocol:"2.6", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
   `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
   `demo` means the server is using its offline sample Keeper, vector support is
   enabled, and this specific Keeper room was empty when the server checked it.
@@ -274,7 +287,7 @@ connections receive `error too_many_connections` before `join` is read.
   simply ignore it:
   `{type:"panel_event", panel:string, payload:any}`
 - `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], reset?:boolean}`
+  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], actions?:[{id:string,label:string,description:string,params?:string}], reset?:boolean}`
   `Resource = {id:string, label:string, value:number, max?:number}` — the rule
   system's vital meters (HP, sanity, mana, …) as generic data: a client renders
   the list as meters without knowing any system's field names. Entries arrive in

@@ -80,7 +80,35 @@ async def build_room_state(services: Services, ctx: AgentCtx) -> dict[str, Any]:
     if systems:
         state["systems"] = systems
 
+    actions = await _actions(services, ctx)
+    if actions:
+        state["actions"] = actions
+
     return state
+
+
+async def _actions(services: Services, ctx: AgentCtx) -> list[dict[str, Any]]:
+    """v2.6: the room's PLAYER-invokable module actions (`defineAction(..., {player: true})`),
+    each `{id, label, description, params?}` with `label` resolved like every other label.
+
+    Read from the manifest the last hook-engine build cached (`agent.hook_runtime`), never by
+    building an engine per frame — so the list is as fresh as the room's last Keeper turn,
+    `.act`, hook install or skill toggle. Keeper-only actions are never in the manifest."""
+    from agent.hook_runtime import load_action_manifest
+
+    wanted = "zh" if str(ctx.locale or "").casefold().startswith("zh") else "en"
+    actions: list[dict[str, Any]] = []
+    for entry in await load_action_manifest(services, ctx.chat_key):
+        labels = entry.get("labels") if isinstance(entry.get("labels"), dict) else {}
+        label = next(
+            (str(labels[key]) for key in (wanted, "*", "en", "zh") if isinstance(labels.get(key), str) and labels[key]),
+            str(entry["id"]),
+        )
+        item: dict[str, Any] = {"id": str(entry["id"]), "label": label, "description": str(entry.get("description", ""))}
+        if isinstance(entry.get("params"), str) and entry["params"]:
+            item["params"] = entry["params"]
+        actions.append(item)
+    return actions
 
 
 def _rule_systems() -> list[dict[str, str]]:

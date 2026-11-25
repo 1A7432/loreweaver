@@ -30,7 +30,7 @@ from typing import Any
 
 from core.ejs_full import MEMORY_LIMIT_BYTES, TIME_LIMIT_SECONDS, quickjs_available
 
-MAX_SCRIPT_CHARS = 40_000  # same cap as hooks.js sources
+MAX_SCRIPT_CHARS = 40_000  # rules scripts stay small; hooks.js sources have their own (larger) cap
 MAX_EFFECT_DELTAS = 8
 MAX_EFFECT_DELTA_MAGNITUDE = 1_000
 MAX_EFFECT_TEXT_CHARS = 2_000

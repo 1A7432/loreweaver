@@ -241,6 +241,10 @@ alike and are not:
   the engine rolls the declared dice, your handler books the result against room state and
   returns the line the Keeper narrates from. Right for module machinery: a march ledger, a
   bargaining table, a ritual's progress.
+- **A player action** (`defineAction` with `player: true`) — the same mechanic, but a
+  *player* runs it with `.act` and the table sees the result at once, no Keeper round:
+  foraging, crafting, moving a token, any MUD-paced micro-action of a simulation. Its result
+  is player-visible, and the Keeper reads it at the start of its next turn.
 - **A rulepack script flow** (`subsystems:` with `script:`) — a *rule-system* mechanic: no
   arguments, reads the active character's sheet, returns a closed effect vocabulary applied to
   that sheet. Right for a system's own check (a sanity-style loss, an improvement roll); it

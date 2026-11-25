@@ -393,6 +393,20 @@ async def build_system_prompt_parts(
     if whispers:
         volatile.append(i18n.t("prompt.scribe_notes") + "\n" + "\n".join(f"- {note}" for note in whispers))
 
+    # What players ran THEMSELVES since the Keeper's last turn (`.act` — module actions with
+    # `player: true`, protocol 2.6). A player's command result otherwise never reaches the
+    # Keeper. Read-and-clear from room_state like the whispers (`agent.hook_actions`):
+    # capped at 8 results × 400 chars, and a persisted row, so an undo replays it.
+    from agent.hook_actions import pop_player_action_log
+
+    player_actions = await pop_player_action_log(services, ctx.chat_key)
+    if player_actions:
+        volatile.append(
+            i18n.t("prompt.player_actions_header")
+            + "\n"
+            + "\n".join(i18n.t("prompt.player_action_line", **entry) for entry in player_actions)
+        )
+
     # Event-hook inject() texts for THIS turn (Layer C — agent.hook_runtime stashes them on
     # ctx.extra before this build; consumed per turn, never persisted).
     hook_injections = [text for text in (extra.get("hook_injections") or []) if isinstance(text, str)]
