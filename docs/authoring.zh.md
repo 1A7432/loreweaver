@@ -643,16 +643,16 @@ $ uv run python -m app --lint my-module/
 
 **真跑出了问题，把工具调用记下来。** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`（相对路径落在数据目录下）会把模型发出的每一次工具调用追加成一行 JSON——`{ts, ms, room, tool, phase, args, result}`，被拒绝的和被 hook 否决的也在内。它回答的是对话记录回答不了的问题：守秘人到底传了哪个参数、哪个工具每次都失败、一个回合的时间花在哪。默认关，值得一句提醒：文件里逐字记着工具的参数和结果，也就是你模组的秘密——它是调试用的，不是该贴进 bug 报告的东西。
 
-**脚本化链路**——不用 key、不联网、真骰子：
+**脚本化链路**——真骰子，离线与否由你决定：
 
 ```bash
 uv run python -m app --lint my-module/                 # 合法的包还会错在哪？
 uv run python -m app --pack my-module/                 # 它至少能构建吗？
 TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes
-TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
+TRPG_ENV_FILE=/dev/null TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
 ```
 
-`--script` 会把文件里每一行喂给离线 CLI，它跑的是完整的真实链路，只是守秘人是脚本化的、骰子有固定种子——不用 key，不联网。一份把接线从头到尾走一遍的脚本：
+`--script` 会把文件里每一行喂给 CLI，它跑的是完整的真实链路，骰子有固定种子。**只有当没有任何模型凭据进入这个进程时，它才是离线的。** CLI 用的是它被配置的那个模型，而配置来自三处：shell 环境变量（`TRPG_LLM__*`）；一个 env 文件——`TRPG_ENV_FILE`，默认是**你运行命令时所在目录**下的 `./.env`，所以在一个已经配置了模型的仓库目录里跑 `--script`，会调用真实模型、花掉真实的调用次数；以及登录后保存在数据目录里的凭据。三处都没有时，它才退回内置的离线演示守秘人，并打印 `running offline demo mode`——不用 key，不联网。上面那行命令就是强制离线的写法：`TRPG_ENV_FILE=/dev/null`（任何空文件都行；把变量设成空值**不行**，那会退回 `./.env`）、一个全新的 `TRPG_DATA_DIR`，并且 shell 里没有 `TRPG_LLM__*`。确实想让真实守秘人跑这份脚本时，去掉 `TRPG_ENV_FILE` 即可。一份把接线从头到尾走一遍的脚本：
 
 ```
 .xipu

@@ -36,8 +36,8 @@ scripts are not affected by it.
   [cards.md](cards.md)); **re-importing the card replaces its scripts** rather
   than stacking duplicates.
 
-A room runs at most **16 scripts**, each at most **400,000 characters** and together at
-most **2,000,000** (scripts past the total are skipped in order); anything
+A room runs at most **16 scripts**, each at most **1,000,000 characters** and together at
+most **8,000,000** (scripts past the total are skipped in order); anything
 beyond is skipped with a logged warning.
 
 ## Events
@@ -75,7 +75,10 @@ on("tool_use",          (event) => { ... });  // event.tool, event.arguments —
   call and the reason is fed back to the model (e.g.
   `on("tool_use", (e) => { if (e.tool === "game_clock") denyTool("time is frozen in this scene"); })`).
   Read the field names exactly — a guard reading a field this event does not carry
-  never fires, silently, and the door it was supposed to hold stands open.
+  never fires, silently, and the door it was supposed to hold stands open. Write the
+  event name literally (`on("tool_use", …)`): the Scribe builds its veto interpreter only
+  for a room whose scripts contain the text `tool_use`, so a name assembled at runtime
+  holds against the Keeper but not against the Scribe.
 
 Every event also carries **`event.seed`** — see [Seeds](#seeds--eventseed) below.
 

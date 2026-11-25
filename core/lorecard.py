@@ -67,7 +67,12 @@ HOOKS_KEY = "hooks"
 # and parse cost. Passing the file, entry or variable cap is FATAL: a document that far out of shape is not an author typo
 # worth half-importing. The entry / content / variable caps below are the room's own import limits
 # (``core.worldbook.MAX_IMPORT_ENTRIES`` / ``MAX_IMPORT_CONTENT_CHARS``, ``core.modvars.MAX_VARS``).
-MAX_LORECARD_FILE_BYTES = MAX_CARD_FILE_BYTES
+#
+# 2026-11-25 (2.6.1): a native bundle is where a large module ships its hook kernel (up to
+# `core.hooks.MAX_HOOK_TOTAL_SOURCE_CHARS` = 8M characters, UTF-8 up to 3 bytes each for CJK
+# data, plus JSON escaping and the lore itself), so its file cap is twice the SillyTavern card
+# cap. A ST card (a PNG portrait + JSON) keeps `MAX_CARD_FILE_BYTES`.
+MAX_LORECARD_FILE_BYTES = 2 * MAX_CARD_FILE_BYTES
 # The entry / content / variable caps ARE the room-import limits (same constants, not copies) and
 # behave the way the room does: too many entries or variables fails here at parse/pack time
 # instead of being rejected at `.import`; an over-long entry is skipped with a warning, exactly as

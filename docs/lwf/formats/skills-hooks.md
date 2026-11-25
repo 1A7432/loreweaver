@@ -7,8 +7,8 @@ performance block kinds for `emitUI`, and `emitPanel` as stable. It also correct
 cap and kill-switch statements of 1.0 to what the reference enforces. The hook-private
 state store (`getstate`/`setstate`, §4), module actions (`defineAction`, §4) and
 `event.seed` (§3) are **additive** extensions within 2.0: a script that uses none of them
-behaves exactly as before. The later rise of the script cap (40,000 → 400,000
-characters, plus a 2,000,000-character room total) and of the private-state limits is a
+behaves exactly as before. The later rise of the script cap (40,000 → 400,000 →
+1,000,000 characters, plus a room total of 2,000,000, then 8,000,000 characters) and of the private-state limits is a
 relaxation: every script that was valid stays valid. Player-invokable actions
 (`spec.player`, `spec.label`, `event.source`) are likewise additive. Reference
 implementation: `core/skills.py`, `core/hooks.py`, `agent/hook_runtime.py`,
@@ -60,7 +60,7 @@ Reference: `core/skills.py::parse_skill_text`, `gateway/ops.py::room_content_unf
   card's scripts and never stacks them.
 
 A room runs at most **16 scripts** in total, skills and cards together, and each script
-is at most **400,000 characters**; together a room's scripts are at most **2,000,000
+is at most **1,000,000 characters**; together a room's scripts are at most **8,000,000
 characters**, and scripts past that total are skipped in order. A script beyond the cap,
 a script that is too long,
 and a script that throws while loading are each skipped with a logged warning. The other

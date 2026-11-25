@@ -1,8 +1,9 @@
 # LWF: the `.lwpack` container
 
 **Version 2.0 · stable (additive-only).** Manifest schema `manifest_version: 2`. The
-`hooks.js` size cap rose from 40,000 to 400,000 characters on 2026-11-25 — a relaxation:
-every pack that was valid stays valid.
+`hooks.js` size cap rose from 40,000 to 400,000 characters (2.6.0) and to 1,000,000 (2.6.1),
+and a native-bundle card file may now reach 32 MiB — relaxations: every pack that was valid
+stays valid.
 Reference implementation: `core/pack.py` (build, verify, install), `infra/pack_source.py`
 (reference resolution) and `gateway/pack_install.py` (install doors) in the Loreweaver
 engine.
@@ -59,7 +60,7 @@ kind, and MUST NOT also be an asset or a card overlay.
 
 | Kind | Entry | Rules |
 |---|---|---|
-| `skills` | a skill directory | The last path segment is the skill id and MUST be a slug. The directory holds `SKILL.md` (required) and `hooks.js` (optional), and nothing else. `SKILL.md` MUST parse ([skills-hooks.md](skills-hooks.md) §1). `hooks.js` MUST NOT exceed 400,000 characters. |
+| `skills` | a skill directory | The last path segment is the skill id and MUST be a slug. The directory holds `SKILL.md` (required) and `hooks.js` (optional), and nothing else. `SKILL.md` MUST parse ([skills-hooks.md](skills-hooks.md) §1). `hooks.js` MUST NOT exceed 1,000,000 characters. |
 | `rulepacks` | a `.yaml` or `.yml` file | The file stem is the system id and MUST be a slug. The file MUST parse as a rulepack ([rulepacks.md](rulepacks.md)). The rules-script files it declares are shipped automatically (below). |
 | `cards` | a card entry | See §2.1. |
 | `lorebooks` | a JSON file | See §2.2. |
@@ -80,7 +81,7 @@ A card entry is either a path string or a mapping:
 
 | Key | Source | Built | Meaning |
 |---|---|---|---|
-| `path` | required | required | The card file, at most 16 MiB: a SillyTavern card (PNG or JSON) or a native bundle (`*.lorecard.json`). See [cards.md](cards.md) §1–§2. |
+| `path` | required | required | The card file: a SillyTavern card (PNG or JSON, at most 16 MiB) or a native bundle (`*.lorecard.json`, at most 32 MiB). See [cards.md](cards.md) §1–§2. |
 | `notes` | optional | optional | Install notes for the room admin: a string or an `{en, zh}` mapping, at most 2,000 characters per locale. |
 | `overlay` | optional | optional | The path of a lore-overlay file that annotates this card ([cards.md](cards.md) §7). |
 | `kind` | **forbidden** | **required** | `character` or `world`, stamped by the builder from payload detection. |
@@ -285,11 +286,11 @@ cap, but never lower it.
 | Archive entries; `files` records | 2,048 |
 | `pack.yaml` | 256 KiB |
 | Entries per content kind / asset records | 64 / 512 |
-| Card file / lorebook file | 16 MiB / 4 MiB |
+| Card file (SillyTavern / native bundle) / lorebook file | 16 MiB / 32 MiB / 4 MiB |
 | Panels per pack / panels file | 16 / 256 KiB |
 | Tier-2 code payload per panel | 2 MiB |
 | Presentation kit / preset / overlay file | 128 KiB / 2 MiB / 256,000 bytes |
-| `hooks.js` | 400,000 characters (a room loads at most 2,000,000 across all its scripts) |
+| `hooks.js` | 1,000,000 characters (a room loads at most 8,000,000 across all its scripts) |
 | Rules scripts / prep scripts | 40,000 / 20,000 characters |
 
 ### 6.3 Verification order

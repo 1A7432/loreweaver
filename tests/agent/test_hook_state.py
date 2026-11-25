@@ -378,9 +378,9 @@ async def test_a_full_store_round_trips_export_import_and_undo(tmp_path):
     """The raised caps (1 MiB per value, 4 MiB per room) still fit the room export's
     room_state budget and the undo snapshot path."""
     from core.hooks import MAX_STATE_TOTAL_BYTES, MAX_STATE_VALUE_BYTES
-    from net.room_backup import MAX_BACKUP_STORE_BYTES
+    from net.room_backup import MAX_BACKUP_ROOM_STATE_BYTES
 
-    assert MAX_STATE_TOTAL_BYTES < MAX_BACKUP_STORE_BYTES
+    assert MAX_STATE_TOTAL_BYTES < MAX_BACKUP_ROOM_STATE_BYTES
     services = _services(data_dir=str(tmp_path))
     keystore = Keystore()
     keystore.add(room="hook-full", name="Keeper", role="keeper")
@@ -405,4 +405,34 @@ async def test_a_full_store_round_trips_export_import_and_undo(tmp_path):
     assert await load_hook_state(services, chat_key) == full
     await apply_hook_state_writes(services, chat_key, None, HookOutcome(state_writes=[("chunk0", None)]))
     await import_room(services, keystore, exported["path"], expected_room="hook-full")
+    assert await load_hook_state(services, chat_key) == full
+
+
+async def test_a_room_at_full_hook_capacity_still_exports_and_imports(tmp_path):
+    """2.6.1: 8M characters of card-installed hook script (`room_hooks`) plus a full 4 MiB
+    private store ride room_state together; the room's backup must still carry them."""
+    from core.hooks import (
+        MAX_HOOK_SOURCE_CHARS,
+        MAX_HOOK_TOTAL_SOURCE_CHARS,
+        MAX_STATE_TOTAL_BYTES,
+        MAX_STATE_VALUE_BYTES,
+    )
+
+    services = _services(data_dir=str(tmp_path))
+    keystore = Keystore()
+    keystore.add(room="hook-capacity", name="Keeper", role="keeper")
+    chat_key = chat_key_for_room("hook-capacity")
+    body = "on('turn_start', () => {});\n"
+    script = body + "//" + "k" * (MAX_HOOK_SOURCE_CHARS - len(body) - 3) + "\n"
+    scripts = [script] * (MAX_HOOK_TOTAL_SOURCE_CHARS // MAX_HOOK_SOURCE_CHARS)
+    await install_room_hooks(services, chat_key, "card:kernel", scripts)
+    full = {f"chunk{index}": "z" * (MAX_STATE_VALUE_BYTES - 2) for index in range(MAX_STATE_TOTAL_BYTES // MAX_STATE_VALUE_BYTES)}
+    assert await apply_hook_state_writes(services, chat_key, None, HookOutcome(state_writes=list(full.items())))
+    hooks_row = await services.store.state_get(chat_key, "room_hooks")
+
+    exported = await export_room(services, keystore, "hook-capacity", "capacity.json")
+    await services.store.state_set(chat_key, "room_hooks", "[]")
+    await import_room(services, keystore, exported["path"], expected_room="hook-capacity")
+
+    assert await services.store.state_get(chat_key, "room_hooks") == hooks_row
     assert await load_hook_state(services, chat_key) == full

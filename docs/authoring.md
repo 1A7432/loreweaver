@@ -877,18 +877,26 @@ time it was tried, how long a turn spent where. Off unless you set it, and worth
 warning: the file records tool arguments and results verbatim, so it contains your
 module's secrets — a debugging artifact, not something to attach to a bug report.
 
-**The scripted pipeline** — no key, no network, real dice:
+**The scripted pipeline** — real dice, and offline when you make it so:
 
 ```bash
 uv run python -m app --lint my-module/                 # anything a valid pack still gets wrong?
 uv run python -m app --pack my-module/                 # does it even build?
 TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes
-TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
+TRPG_ENV_FILE=/dev/null TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
 ```
 
-`--script` feeds one command per line to the offline CLI, which runs the whole real pipeline with a
-scripted Keeper and seeded dice — no API key, no network. A run file that checks the wiring end to
-end:
+`--script` feeds one command per line to the CLI, which runs the whole real pipeline with seeded
+dice. **It is offline only when no provider credential reaches the process.** The CLI uses
+whatever model it is configured with, and it reads that configuration from three places: the
+shell environment (`TRPG_LLM__*`), an env file — `TRPG_ENV_FILE`, defaulting to `./.env` **in the
+directory you run it from**, so inside a checkout with a configured provider a `--script` run calls
+the real model and spends real calls — and credentials a login saved in the data directory. With
+none of them, it falls back to the built-in offline demo Keeper and prints `running offline demo
+mode`; no key, no network. The line above forces that: `TRPG_ENV_FILE=/dev/null` (any empty file;
+an empty variable does NOT work, it falls back to `./.env`), a fresh `TRPG_DATA_DIR`, and no
+`TRPG_LLM__*` in your shell. Drop `TRPG_ENV_FILE` when you do want a real Keeper on the run. A run
+file that checks the wiring end to end:
 
 ```
 .xipu

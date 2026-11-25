@@ -36,7 +36,9 @@ from agent.context import AgentCtx
 from agent.hook_runtime import (
     apply_hook_state_writes,
     apply_hook_writes,
+    load_action_manifest,
     load_room_hook_engine,
+    manifest_label,
     refresh_hook_views,
 )
 from agent.services import Services
@@ -361,16 +363,18 @@ async def pop_player_action_log(services: Services, chat_key: str) -> list[dict[
     return entries
 
 
-def _list_player_actions(engine: HookEngine | None, locale: str) -> PlayerActionReply:
-    specs = [spec for spec in (engine.actions if engine is not None else ()) if spec.player]
-    if not specs:
+async def _list_player_actions(services: Services, chat_key: str, locale: str) -> PlayerActionReply:
+    """`.act` alone: the room's player actions from the cached manifest — the same list a
+    client's `state.actions` shows, and no engine build (a large module's costs real time)."""
+    entries = await load_action_manifest(services, chat_key)
+    if not entries:
         return PlayerActionReply(t("commands.act.none", locale=locale), private=True)
     lines = [t("commands.act.list_header", locale=locale)]
-    for spec in specs:
-        hint = f" [{spec.params}]" if spec.params else ""
+    for entry in entries:
+        params = entry.get("params") if isinstance(entry.get("params"), str) else ""
         lines.append(
-            t("commands.act.list_line", locale=locale, label=spec.label_for(locale), id=spec.name,
-              description=spec.description, params=hint)
+            t("commands.act.list_line", locale=locale, label=manifest_label(entry, locale), id=entry["id"],
+              description=str(entry.get("description", "")), params=f" [{params}]" if params else "")
         )
     return PlayerActionReply("\n".join(lines), private=True)
 
@@ -388,7 +392,7 @@ async def run_player_action(
     name, _, rest = argument.strip().partition(" ")
     name = name.strip()
     if not name:
-        return _list_player_actions(await load_room_hook_engine(services, ctx, lane="command"), locale)
+        return await _list_player_actions(services, ctx.chat_key, locale)
     seq = await _next_command_seq(services, ctx.chat_key)
     engine = await load_room_hook_engine(services, ctx, lane="command", ordinal_offset=seq)
     unknown = PlayerActionReply(t("commands.act.unknown", locale=locale, name=name[:64]), failed=True)

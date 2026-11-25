@@ -39,7 +39,9 @@ Reference: `core/charcard.py::parse_card_bytes`.
 The native bundle is Loreweaver's own card format. It keeps what a SillyTavern card has
 no safe place for: keeper-only lore, typed trackers, a claimable cast, per-entry
 conditions, stable entry ids and hook scripts. A runtime recognizes it by content: a
-UTF-8 JSON object whose `format` is `"loreweaver.card"`.
+UTF-8 JSON object whose `format` is `"loreweaver.card"`. The file is at most 32 MiB — twice a
+SillyTavern card's, because a large module ships its hook kernel in it (an additive
+relaxation, 2.6.1).
 
 **Format version.** `format_version` is an integer, currently `1`. A consumer MUST refuse
 a newer version, and accepts an older one only through a registered migration. Version 0
