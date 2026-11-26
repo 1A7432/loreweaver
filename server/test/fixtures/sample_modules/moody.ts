@@ -22,5 +22,8 @@ export default defineModule({
       if (event.text === "throw") throw new Error("moody refuses");
       if (event.text === "spin") for (;;) {}
     },
+    toolUse(event) {
+      if (event.calls.some((call) => call.name === "spin")) for (;;) {}
+    },
   },
 });

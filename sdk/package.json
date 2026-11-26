@@ -6,7 +6,9 @@
   "private": true,
   "license": "MIT",
   "exports": {
-    "./module": "./src/module.ts"
+    "./module": "./src/module.ts",
+    "./runner": "./src/runner.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json && bun test"

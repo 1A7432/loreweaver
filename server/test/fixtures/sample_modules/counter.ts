@@ -17,7 +17,7 @@ export default defineModule({
   on: {
     turnStart(event, fx) {
       turns += 1;
-      fx.inject(`counter: turn ${turns}, ${event.speaker} said "${event.text}"`);
+      fx.inject(`counter: turn ${turns}, ${event.who.member?.name ?? "nobody"} said "${event.text}"`);
     },
   },
 });

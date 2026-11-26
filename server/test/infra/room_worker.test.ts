@@ -18,8 +18,10 @@ function worker(modules: string[], options: { timeoutMs?: number; checkpoints?: 
   return created;
 }
 
+const ADA = { member: { id: "m-ada", name: "Ada", role: "player" as const }, character: null };
+
 function event(turn: number, text: string) {
-  return { turn, seed: `s${turn}`, text, speaker: "Ada" };
+  return { turn, seed: `s${turn}`, text, who: ADA, variables: {}, clock: null };
 }
 
 test("a module loaded from a TypeScript file keeps its state from one call to the next", async () => {

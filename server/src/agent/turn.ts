@@ -3,6 +3,7 @@
 // kinds of place — a worker exchange, a model call, outbound network — and holds no
 // room state across any of them.
 import type { NarrativeData } from "loreweaver-protocol/v3";
+import type { Who } from "loreweaver/module";
 
 import type { Clock } from "../infra/ids.ts";
 import type { ChatMessage, LLMClient } from "../infra/llm/index.ts";
@@ -36,6 +37,11 @@ export interface TurnInput {
   readonly turn: number;
   readonly speaker: string;
   readonly text: string;
+  /**
+   * Who is speaking, as modules are told. Until the room passes seating, it is the
+   * speaker as a player with no character.
+   */
+  readonly who?: Who;
 }
 
 export async function runTurn(deps: TurnDeps, sink: TurnSink, input: TurnInput): Promise<void> {
@@ -47,7 +53,9 @@ export async function runTurn(deps: TurnDeps, sink: TurnSink, input: TurnInput):
       turn: input.turn,
       seed: `${input.room}:${input.turn}:turnStart`,
       text: input.text,
-      speaker: input.speaker,
+      who: input.who ?? { member: { id: input.speaker, name: input.speaker, role: "player" }, character: null },
+      variables: {},
+      clock: null,
     });
     for (const problem of started.problems) sink.problem(problem);
 
