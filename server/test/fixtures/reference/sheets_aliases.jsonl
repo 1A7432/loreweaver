@@ -1,0 +1,2544 @@
+{"canonical":"力量","kind":"resolve_skill","name":"力量","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"str","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"STR","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"strength","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"Strength","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"体质","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"con","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"CON","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"constitution","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"Constitution","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"體質","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"体型","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"siz","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"SIZ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"size","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"Size","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"體型","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"体形","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"體形","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"敏捷","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"dex","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"DEX","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"dexterity","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"Dexterity","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"外貌","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"app","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"APP","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"appearance","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"Appearance","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"外表","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"智力","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"int","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"INT","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"intelligence","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"Intelligence","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"idea","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"灵感","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"靈感","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"意志","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"pow","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"POW","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"power","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"Power","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"will","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"willpower","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"教育","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"edu","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"EDU","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"education","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"Education","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"knowledge","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"知识","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"知識","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"幸运","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"LUC","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"luck","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"LUCK","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"luck value","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"幸运值","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"运气","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"幸運","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"運氣","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"幸運值","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"DB","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"db","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"damage bonus","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"伤害加值","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"傷害加值","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"体格","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"build","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"Build","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"體格","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"移动力","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"mov","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"MOV","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"move","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"movement","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"移動力","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"移动速度","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"移動速度","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"移速","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"护甲","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"ar","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"AR","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"armor","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"armour","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"装甲","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"護甲","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"裝甲","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"理智","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"san","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"SAN","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"sanity","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"Sanity","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"san值","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"SAN值","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"理智值","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"理智点数","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"心智","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"心智点数","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"心智點數","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"理智點數","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"理智上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"sanmax","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"SANMAX","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"max sanity","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"sanity max","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"san上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"SAN上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"san值上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"SAN值上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"理智值上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"理智点数上限","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"心智上限","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"生命值","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"hp","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"HP","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"hit points","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"health","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"生命","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"体力","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"體力","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"血量","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"耐久值","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"生命值上限","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"hpmax","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"HPMAX","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"max hp","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"hp max","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"生命上限","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"体力上限","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"體力上限","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"血量上限","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"耐久值上限","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"魔法值","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"mp","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"MP","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"magic points","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"魔法","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"魔力","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"魔力值","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"魔法值上限","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"mpmax","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"MPMAX","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"max mp","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"mp max","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"魔法上限","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"蓝量上限","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"藍量上限","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信用评级","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"credit rating","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"credit","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"cr","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"CR","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信誉","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信用","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信誉度","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信用評級","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信譽","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"信譽度","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"取悦","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"charm","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"魅惑","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"取悅","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"媚惑","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"勾引","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"风情","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"風情","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"话术","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"fast talk","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"fast-talk","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"快速交谈","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"話術","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"快速交談","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"调情","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"撩拨","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"調情","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"撩撥","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"恐吓","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"intimidate","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"intimidation","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"恐嚇","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"威吓","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"威嚇","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"说服","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"persuade","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"persuasion","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"辩论","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"议价","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"演讲","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"說服","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"辯論","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"議價","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"演講","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"心理学","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"psychology","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"psychoanalysis check","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"心理學","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"洞察情感","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"察言观色","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"共情","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"同理心","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"察言觀色","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"母语","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"own language","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"language own","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"native language","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"母語","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"外语","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"foreign language","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"other language","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"language","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"语言","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"語言","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"外語","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"其他语言","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"其他語言","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"估价","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"appraise","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"appraisal","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"鉴定","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"估價","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"乔装","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"disguise","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"伪装","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"喬裝","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"潜行","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"stealth","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"sneak","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"hide","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"躲藏","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"潛行","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"隐匿","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"追踪","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"track","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"tracking","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"跟踪","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"追蹤","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"跟蹤","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"侦查","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"spot hidden","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"spot","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"notice","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"perception","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"侦察","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"偵查","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"偵察","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"发现","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"聆听","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"listen","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"hearing","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"倾听","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"聆聽","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"傾聽","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"读唇","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"read lips","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"lip reading","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"唇语","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"讀唇","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"唇語","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"图书馆","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"library use","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"library","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"library-use","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"图书馆使用","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"圖書館使用","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"图书馆利用","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"圖書館","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"圖書館利用","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"生存","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"survival","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"survive","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"攀爬","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"climb","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"climbing","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"攀岩","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"攀登","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"攀巖","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"跳跃","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"jump","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"jumping","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"跳躍","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"骑乘","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"ride","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"riding","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"骑术","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"騎術","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"游泳","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"swim","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"swimming","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"遊泳","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"潜水","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"diving","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"dive","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"潛水","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"艺术与手艺","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"art craft","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"art and craft","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"arts crafts","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"art/craft","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"艺术和手艺","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"艺术","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"手艺","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"工艺","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"技艺","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"藝術與手藝","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"藝術和手藝","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"表演","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"perform","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"performance","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"acting","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"艺术和手艺:表演","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"艺术和手艺（表演）","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"美术","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"fine art","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"art","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"美術","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"艺术和手艺:美术","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"艺术和手艺（美术）","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"伪造","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"forgery","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"forge","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"偽造","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"摄影","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"photography","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"photo","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"攝影","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"写作","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"writing","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"literature","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"文学","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"寫作","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"文學","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"音乐","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"music","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"音樂","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"舞蹈","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"dance","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"dancing","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"厨艺","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"cooking","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"cook","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"cuisine","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"烹饪","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"廚藝","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"烹飪","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"妙手","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"sleight of hand","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"sleight","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"legerdemain","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"巧手","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"藏匿","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"盗窃","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"盜竊","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"锁匠","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"locksmith","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"locksmithing","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"lockpick","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"lock picking","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"开锁","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"撬锁","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"钳工","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"鎖匠","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"鉗工","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"開鎖","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"撬鎖","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"电气维修","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"electrical repair","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"electrical","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"electrician","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"电器维修","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"电工","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"電氣維修","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"電器維修","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"電工","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"机械维修","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"mechanical repair","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"mechanical","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"mechanics","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"repair","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"机器维修","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"机修","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"機器維修","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"機修","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"機械維修","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"计算机使用","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"computer use","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"computer","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"computers","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"电脑使用","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"計算機使用","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"電腦使用","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"计算机","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"电脑","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"計算機","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"電腦","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"导航","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"navigate","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"navigation","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"领航","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"領航","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"導航","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"汽车驾驶","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"drive auto","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"drive automobile","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"drive","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"driving","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"auto","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"automobile","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"驾驶","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"駕駛","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"汽車駕駛","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"汽车","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"汽車","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"开车","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"開車","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"驾车","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"駕車","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"驾驶:飞行器","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"pilot aircraft","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"aircraft","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"飞行器","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"开飞行器","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"驾驶飞行器","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"驾驶（飞行器）","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"驾驶:船","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"pilot boat","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"boat","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"ship","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"船","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"开船","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"驾驶船","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"驾驶（船）","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"驯兽","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"animal handling","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"animal handling coc","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"animal training","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"animal","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"动物驯养","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"驯养","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"馴獸","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"動物馴養","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"馴養","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"操作重型机械","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"operate heavy machinery","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"heavy machinery","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"重型操作","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"重型机械","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"重型","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"重机","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"操作重型機械","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"重型機械","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"重機","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"斗殴","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"fighting brawl","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"brawl","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"fighting","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"fist","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"格斗","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"格斗:斗殴","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"格斗（斗殴）","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"鬥毆","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"格鬥","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"斧","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"axe","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"ax","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"斧头","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"斧子","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"斧頭","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"格斗:斧","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"格斗（斧）","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"链锯","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"chainsaw","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"chain saw","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"电锯","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"油锯","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"鏈鋸","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"電鋸","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"油鋸","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"连枷","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"flail","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"链枷","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"連枷","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"鏈枷","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"绞索","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"garrote","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"garotte","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"绞具","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"絞索","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"絞具","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"矛","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"spear","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"lance","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"剑","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"sword","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"swordsmanship","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"剑术","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"劍","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"劍術","pack":"coc7"}
+{"canonical":"鞭","kind":"resolve_skill","name":"鞭","pack":"coc7"}
+{"canonical":"鞭","kind":"resolve_skill","name":"whip","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"射击","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"firearms","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"firearm","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"shooting","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"gun","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"guns","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"火器","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"枪械","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"槍械","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"射擊","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"手枪","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"handgun","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"pistol","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"firearms handgun","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"shoot handgun","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"shooting handgun","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"射击:手枪","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"射击（手枪）","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"手槍","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"步霰","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"rifle shotgun","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"rifle/shotgun","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"rifle","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"shotgun","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"long gun","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"firearms rifle","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"firearms shotgun","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"步枪/霰弹枪","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"射击:步枪","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"射击:霰弹枪","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"步枪","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"霰弹枪","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"散弹枪","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"步槍","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"霰彈槍","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"步槍/霰彈槍","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"投掷","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"throw","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"throwing","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"投擲","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"爆破","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"demolitions","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"demolition","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"explosives","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"炮术","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"artillery","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"gunnery","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"炮術","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"火炮","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"急救","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"first aid","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"first-aid","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"医疗","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"医学","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"medicine","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"medical","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"醫學","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"醫療","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"精神分析","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"psychoanalysis","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"psycho analysis","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"心理分析","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"催眠","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"hypnosis","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"hypnotism","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"会计","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"accounting","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"accountant","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"會計","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"法律","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"law","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"legal","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"律法","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"历史","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"history","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"歷史","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"考古学","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"archaeology","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"archeology","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"考古學","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"博物","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"natural world","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"nature","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"natural history","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"自然","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"自然学","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"自然史","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"自然學","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"博物学","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"博物學","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"人类学","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"anthropology","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"人類學","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"神秘学","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"occult","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"occultism","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"神秘學","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"电子学","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"electronics","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"electronic","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"電子學","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"科学","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"science","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"sciences","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"科學","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"天文学","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"astronomy","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"科学:天文学","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"科学（天文学）","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"天文學","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"生物学","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"biology","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"科学:生物学","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"科学（生物学）","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"生物學","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"植物学","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"botany","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"科学:植物学","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"科学（植物学）","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"植物學","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"化学","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"chemistry","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"科学:化学","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"科学（化学）","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"化學","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"密码学","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"cryptography","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"cryptology","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"科学:密码学","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"科学（密码学）","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"密碼學","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"工程学","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"engineering","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"engineer","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"科学:工程学","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"科学（工程学）","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"工程學","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"司法科学","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"forensics","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"forensic science","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"科学:司法科学","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"科学（司法科学）","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"司法科學","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"地质学","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"geology","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"geography","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"科学:地质学","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"科学（地质学）","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"地質學","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"地理学","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"数学","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"mathematics","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"math","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"maths","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"科学:数学","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"科学（数学）","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"數學","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"气象学","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"meteorology","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"weather science","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"科学:气象学","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"科学（气象学）","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"氣象學","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"药学","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"pharmacy","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"pharmacology","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"科学:药学","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"科学（药学）","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"藥學","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"物理学","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"physics","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"physical science","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"科学:物理学","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"科学（物理学）","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"物理","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"物理學","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"动物学","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"zoology","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"科学:动物学","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"科学（动物学）","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"動物學","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"克苏鲁神话","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"cthulhu mythos","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"mythos","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"cm","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"CM","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"克苏鲁","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"克苏鲁神话知识","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"克蘇魯","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"克蘇魯神話","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"克蘇魯神話知識","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":" ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  侦查  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"SPOT HIDDEN","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"Spot_Hidden","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"spot  hidden","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"spot\thidden","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"驾驶：飞行器","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"驾驶(飞行器)","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳＴＲ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"str ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"Ｓtr","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"ß","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"İ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"ǅ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"nope","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"力 量","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"力量力量","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"dodge","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"闪避","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"SPOT_HIDDEN","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"Spot Hidden","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"unknown skill","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"不存在的技能","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"祖传菜刀","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"Occult lore","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"  力量  ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"  str  ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"  STR  ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"STRENGTH","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"  strength  ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"  Strength  ","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"  体质  ","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"  con  ","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"  CON  ","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"CONSTITUTION","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"  constitution  ","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"  Constitution  ","pack":"coc7"}
+{"canonical":"体质","kind":"resolve_skill","name":"  體質  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  体型  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  siz  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  SIZ  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"SIZE","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  size  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  Size  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  體型  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  体形  ","pack":"coc7"}
+{"canonical":"体型","kind":"resolve_skill","name":"  體形  ","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  敏捷  ","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  dex  ","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  DEX  ","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"DEXTERITY","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  dexterity  ","pack":"coc7"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  Dexterity  ","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"  外貌  ","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"  app  ","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"  APP  ","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"APPEARANCE","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"  appearance  ","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"  Appearance  ","pack":"coc7"}
+{"canonical":"外貌","kind":"resolve_skill","name":"  外表  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  智力  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  int  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  INT  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"INTELLIGENCE","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  intelligence  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  Intelligence  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"IDEA","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  idea  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  灵感  ","pack":"coc7"}
+{"canonical":"智力","kind":"resolve_skill","name":"  靈感  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  意志  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  pow  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  POW  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"POWER","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  power  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  Power  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"WILL","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  will  ","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"WILLPOWER","pack":"coc7"}
+{"canonical":"意志","kind":"resolve_skill","name":"  willpower  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  教育  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  edu  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  EDU  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"EDUCATION","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  education  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  Education  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"KNOWLEDGE","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  knowledge  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  知识  ","pack":"coc7"}
+{"canonical":"教育","kind":"resolve_skill","name":"  知識  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  幸运  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  LUC  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  luck  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  LUCK  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"LUCK VALUE","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  luck value  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  幸运值  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  运气  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  幸運  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  運氣  ","pack":"coc7"}
+{"canonical":"幸运","kind":"resolve_skill","name":"  幸運值  ","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"  DB  ","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"  db  ","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"DAMAGE BONUS","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"  damage bonus  ","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"  伤害加值  ","pack":"coc7"}
+{"canonical":"DB","kind":"resolve_skill","name":"  傷害加值  ","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"  体格  ","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"BUILD","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"  build  ","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"  Build  ","pack":"coc7"}
+{"canonical":"体格","kind":"resolve_skill","name":"  體格  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  移动力  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  mov  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  MOV  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"MOVE","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  move  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"MOVEMENT","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  movement  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  移動力  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  移动速度  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  移動速度  ","pack":"coc7"}
+{"canonical":"移动力","kind":"resolve_skill","name":"  移速  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  护甲  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  ar  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  AR  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"ARMOR","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  armor  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"ARMOUR","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  armour  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  装甲  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  護甲  ","pack":"coc7"}
+{"canonical":"护甲","kind":"resolve_skill","name":"  裝甲  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  理智  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  san  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  SAN  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"SANITY","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  sanity  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  Sanity  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  san值  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  SAN值  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  理智值  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  理智点数  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  心智  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  心智点数  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  心智點數  ","pack":"coc7"}
+{"canonical":"理智","kind":"resolve_skill","name":"  理智點數  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  理智上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  sanmax  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  SANMAX  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"MAX SANITY","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  max sanity  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"SANITY MAX","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  sanity max  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  san上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  SAN上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  san值上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  SAN值上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  理智值上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  理智点数上限  ","pack":"coc7"}
+{"canonical":"理智上限","kind":"resolve_skill","name":"  心智上限  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  生命值  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  hp  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  HP  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"HIT POINTS","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  hit points  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"HEALTH","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  health  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  生命  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  体力  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  體力  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  血量  ","pack":"coc7"}
+{"canonical":"生命值","kind":"resolve_skill","name":"  耐久值  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  生命值上限  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  hpmax  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  HPMAX  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"MAX HP","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  max hp  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"HP MAX","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  hp max  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  生命上限  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  体力上限  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  體力上限  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  血量上限  ","pack":"coc7"}
+{"canonical":"生命值上限","kind":"resolve_skill","name":"  耐久值上限  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  魔法值  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  mp  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  MP  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"MAGIC POINTS","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  magic points  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  魔法  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  魔力  ","pack":"coc7"}
+{"canonical":"魔法值","kind":"resolve_skill","name":"  魔力值  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  魔法值上限  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  mpmax  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  MPMAX  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"MAX MP","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  max mp  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"MP MAX","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  mp max  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  魔法上限  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  蓝量上限  ","pack":"coc7"}
+{"canonical":"魔法值上限","kind":"resolve_skill","name":"  藍量上限  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信用评级  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"CREDIT RATING","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  credit rating  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"CREDIT","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  credit  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  cr  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  CR  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信誉  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信用  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信誉度  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信用評級  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信譽  ","pack":"coc7"}
+{"canonical":"信用评级","kind":"resolve_skill","name":"  信譽度  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  取悦  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"CHARM","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  charm  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  魅惑  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  取悅  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  媚惑  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  勾引  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  风情  ","pack":"coc7"}
+{"canonical":"取悦","kind":"resolve_skill","name":"  風情  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  话术  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"FAST TALK","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  fast talk  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"FAST-TALK","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  fast-talk  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  快速交谈  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  話術  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  快速交談  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  调情  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  撩拨  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  調情  ","pack":"coc7"}
+{"canonical":"话术","kind":"resolve_skill","name":"  撩撥  ","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"  恐吓  ","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"INTIMIDATE","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"  intimidate  ","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"INTIMIDATION","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"  intimidation  ","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"  恐嚇  ","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"  威吓  ","pack":"coc7"}
+{"canonical":"恐吓","kind":"resolve_skill","name":"  威嚇  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  说服  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"PERSUADE","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  persuade  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"PERSUASION","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  persuasion  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  辩论  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  议价  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  演讲  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  說服  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  辯論  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  議價  ","pack":"coc7"}
+{"canonical":"说服","kind":"resolve_skill","name":"  演講  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  心理学  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"PSYCHOLOGY","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  psychology  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"PSYCHOANALYSIS CHECK","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  psychoanalysis check  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  心理學  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  洞察情感  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  察言观色  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  共情  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  同理心  ","pack":"coc7"}
+{"canonical":"心理学","kind":"resolve_skill","name":"  察言觀色  ","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"  母语  ","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"OWN LANGUAGE","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"  own language  ","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"LANGUAGE OWN","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"  language own  ","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"NATIVE LANGUAGE","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"  native language  ","pack":"coc7"}
+{"canonical":"母语","kind":"resolve_skill","name":"  母語  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  外语  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"FOREIGN LANGUAGE","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  foreign language  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"OTHER LANGUAGE","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  other language  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"LANGUAGE","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  language  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  语言  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  語言  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  外語  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  其他语言  ","pack":"coc7"}
+{"canonical":"外语","kind":"resolve_skill","name":"  其他語言  ","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"  估价  ","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"APPRAISE","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"  appraise  ","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"APPRAISAL","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"  appraisal  ","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"  鉴定  ","pack":"coc7"}
+{"canonical":"估价","kind":"resolve_skill","name":"  估價  ","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"  乔装  ","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"DISGUISE","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"  disguise  ","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"  伪装  ","pack":"coc7"}
+{"canonical":"乔装","kind":"resolve_skill","name":"  喬裝  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  潜行  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"STEALTH","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  stealth  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"SNEAK","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  sneak  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"HIDE","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  hide  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  躲藏  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  潛行  ","pack":"coc7"}
+{"canonical":"潜行","kind":"resolve_skill","name":"  隐匿  ","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"  追踪  ","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"TRACK","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"  track  ","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"TRACKING","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"  tracking  ","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"  跟踪  ","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"  追蹤  ","pack":"coc7"}
+{"canonical":"追踪","kind":"resolve_skill","name":"  跟蹤  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  spot hidden  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"SPOT","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  spot  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"NOTICE","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  notice  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"PERCEPTION","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  perception  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  侦察  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  偵查  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  偵察  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  发现  ","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"  聆听  ","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"LISTEN","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"  listen  ","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"HEARING","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"  hearing  ","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"  倾听  ","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"  聆聽  ","pack":"coc7"}
+{"canonical":"聆听","kind":"resolve_skill","name":"  傾聽  ","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"  读唇  ","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"READ LIPS","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"  read lips  ","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"LIP READING","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"  lip reading  ","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"  唇语  ","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"  讀唇  ","pack":"coc7"}
+{"canonical":"读唇","kind":"resolve_skill","name":"  唇語  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  图书馆  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"LIBRARY USE","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  library use  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"LIBRARY","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  library  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"LIBRARY-USE","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  library-use  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  图书馆使用  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  圖書館使用  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  图书馆利用  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  圖書館  ","pack":"coc7"}
+{"canonical":"图书馆","kind":"resolve_skill","name":"  圖書館利用  ","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"  生存  ","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"SURVIVAL","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"  survival  ","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"SURVIVE","pack":"coc7"}
+{"canonical":"生存","kind":"resolve_skill","name":"  survive  ","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"  攀爬  ","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"CLIMB","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"  climb  ","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"CLIMBING","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"  climbing  ","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"  攀岩  ","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"  攀登  ","pack":"coc7"}
+{"canonical":"攀爬","kind":"resolve_skill","name":"  攀巖  ","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"  跳跃  ","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"JUMP","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"  jump  ","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"JUMPING","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"  jumping  ","pack":"coc7"}
+{"canonical":"跳跃","kind":"resolve_skill","name":"  跳躍  ","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"  骑乘  ","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"RIDE","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"  ride  ","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"RIDING","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"  riding  ","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"  骑术  ","pack":"coc7"}
+{"canonical":"骑乘","kind":"resolve_skill","name":"  騎術  ","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"  游泳  ","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"SWIM","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"  swim  ","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"SWIMMING","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"  swimming  ","pack":"coc7"}
+{"canonical":"游泳","kind":"resolve_skill","name":"  遊泳  ","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"  潜水  ","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"DIVING","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"  diving  ","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"DIVE","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"  dive  ","pack":"coc7"}
+{"canonical":"潜水","kind":"resolve_skill","name":"  潛水  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  艺术与手艺  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"ART CRAFT","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  art craft  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"ART AND CRAFT","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  art and craft  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"ARTS CRAFTS","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  arts crafts  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"ART/CRAFT","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  art/craft  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  艺术和手艺  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  艺术  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  手艺  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  工艺  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  技艺  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  藝術與手藝  ","pack":"coc7"}
+{"canonical":"艺术与手艺","kind":"resolve_skill","name":"  藝術和手藝  ","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"  表演  ","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"PERFORM","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"  perform  ","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"PERFORMANCE","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"  performance  ","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"ACTING","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"  acting  ","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"  艺术和手艺:表演  ","pack":"coc7"}
+{"canonical":"表演","kind":"resolve_skill","name":"  艺术和手艺（表演）  ","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"  美术  ","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"FINE ART","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"  fine art  ","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"ART","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"  art  ","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"  美術  ","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"  艺术和手艺:美术  ","pack":"coc7"}
+{"canonical":"美术","kind":"resolve_skill","name":"  艺术和手艺（美术）  ","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"  伪造  ","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"FORGERY","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"  forgery  ","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"FORGE","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"  forge  ","pack":"coc7"}
+{"canonical":"伪造","kind":"resolve_skill","name":"  偽造  ","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"  摄影  ","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"PHOTOGRAPHY","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"  photography  ","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"PHOTO","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"  photo  ","pack":"coc7"}
+{"canonical":"摄影","kind":"resolve_skill","name":"  攝影  ","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"  写作  ","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"WRITING","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"  writing  ","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"LITERATURE","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"  literature  ","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"  文学  ","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"  寫作  ","pack":"coc7"}
+{"canonical":"写作","kind":"resolve_skill","name":"  文學  ","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"  音乐  ","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"MUSIC","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"  music  ","pack":"coc7"}
+{"canonical":"音乐","kind":"resolve_skill","name":"  音樂  ","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"  舞蹈  ","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"DANCE","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"  dance  ","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"DANCING","pack":"coc7"}
+{"canonical":"舞蹈","kind":"resolve_skill","name":"  dancing  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  厨艺  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"COOKING","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  cooking  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"COOK","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  cook  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"CUISINE","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  cuisine  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  烹饪  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  廚藝  ","pack":"coc7"}
+{"canonical":"厨艺","kind":"resolve_skill","name":"  烹飪  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  妙手  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"SLEIGHT OF HAND","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  sleight of hand  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"SLEIGHT","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  sleight  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"LEGERDEMAIN","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  legerdemain  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  巧手  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  藏匿  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  盗窃  ","pack":"coc7"}
+{"canonical":"妙手","kind":"resolve_skill","name":"  盜竊  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  锁匠  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"LOCKSMITH","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  locksmith  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"LOCKSMITHING","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  locksmithing  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"LOCKPICK","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  lockpick  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"LOCK PICKING","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  lock picking  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  开锁  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  撬锁  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  钳工  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  鎖匠  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  鉗工  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  開鎖  ","pack":"coc7"}
+{"canonical":"锁匠","kind":"resolve_skill","name":"  撬鎖  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  电气维修  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"ELECTRICAL REPAIR","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  electrical repair  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"ELECTRICAL","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  electrical  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"ELECTRICIAN","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  electrician  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  电器维修  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  电工  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  電氣維修  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  電器維修  ","pack":"coc7"}
+{"canonical":"电气维修","kind":"resolve_skill","name":"  電工  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  机械维修  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"MECHANICAL REPAIR","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  mechanical repair  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"MECHANICAL","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  mechanical  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"MECHANICS","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  mechanics  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"REPAIR","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  repair  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  机器维修  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  机修  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  機器維修  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  機修  ","pack":"coc7"}
+{"canonical":"机械维修","kind":"resolve_skill","name":"  機械維修  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  计算机使用  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"COMPUTER USE","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  computer use  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"COMPUTER","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  computer  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"COMPUTERS","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  computers  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  电脑使用  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  計算機使用  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  電腦使用  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  计算机  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  电脑  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  計算機  ","pack":"coc7"}
+{"canonical":"计算机使用","kind":"resolve_skill","name":"  電腦  ","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"  导航  ","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"NAVIGATE","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"  navigate  ","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"NAVIGATION","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"  navigation  ","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"  领航  ","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"  領航  ","pack":"coc7"}
+{"canonical":"导航","kind":"resolve_skill","name":"  導航  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  汽车驾驶  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"DRIVE AUTO","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  drive auto  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"DRIVE AUTOMOBILE","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  drive automobile  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"DRIVE","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  drive  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"DRIVING","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  driving  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"AUTO","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  auto  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"AUTOMOBILE","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  automobile  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  驾驶  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  駕駛  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  汽車駕駛  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  汽车  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  汽車  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  开车  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  開車  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  驾车  ","pack":"coc7"}
+{"canonical":"汽车驾驶","kind":"resolve_skill","name":"  駕車  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  驾驶:飞行器  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"PILOT AIRCRAFT","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  pilot aircraft  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"AIRCRAFT","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  aircraft  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  飞行器  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  开飞行器  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  驾驶飞行器  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  驾驶（飞行器）  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  驾驶:船  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"PILOT BOAT","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  pilot boat  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"BOAT","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  boat  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"SHIP","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  ship  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  船  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  开船  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  驾驶船  ","pack":"coc7"}
+{"canonical":"驾驶:船","kind":"resolve_skill","name":"  驾驶（船）  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  驯兽  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"ANIMAL HANDLING","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  animal handling  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"ANIMAL HANDLING COC","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  animal handling coc  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"ANIMAL TRAINING","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  animal training  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"ANIMAL","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  animal  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  动物驯养  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  驯养  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  馴獸  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  動物馴養  ","pack":"coc7"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  馴養  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  操作重型机械  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"OPERATE HEAVY MACHINERY","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  operate heavy machinery  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"HEAVY MACHINERY","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  heavy machinery  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  重型操作  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  重型机械  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  重型  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  重机  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  操作重型機械  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  重型機械  ","pack":"coc7"}
+{"canonical":"操作重型机械","kind":"resolve_skill","name":"  重機  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  斗殴  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"FIGHTING BRAWL","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  fighting brawl  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"BRAWL","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  brawl  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"FIGHTING","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  fighting  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"FIST","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  fist  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  格斗  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  格斗:斗殴  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  格斗（斗殴）  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  鬥毆  ","pack":"coc7"}
+{"canonical":"斗殴","kind":"resolve_skill","name":"  格鬥  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  斧  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"AXE","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  axe  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"AX","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  ax  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  斧头  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  斧子  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  斧頭  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  格斗:斧  ","pack":"coc7"}
+{"canonical":"斧","kind":"resolve_skill","name":"  格斗（斧）  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  链锯  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"CHAINSAW","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  chainsaw  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"CHAIN SAW","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  chain saw  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  电锯  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  油锯  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  鏈鋸  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  電鋸  ","pack":"coc7"}
+{"canonical":"链锯","kind":"resolve_skill","name":"  油鋸  ","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"  连枷  ","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"FLAIL","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"  flail  ","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"  链枷  ","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"  連枷  ","pack":"coc7"}
+{"canonical":"连枷","kind":"resolve_skill","name":"  鏈枷  ","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"  绞索  ","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"GARROTE","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"  garrote  ","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"GAROTTE","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"  garotte  ","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"  绞具  ","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"  絞索  ","pack":"coc7"}
+{"canonical":"绞索","kind":"resolve_skill","name":"  絞具  ","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"  矛  ","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"SPEAR","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"  spear  ","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"LANCE","pack":"coc7"}
+{"canonical":"矛","kind":"resolve_skill","name":"  lance  ","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"  剑  ","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"SWORD","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"  sword  ","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"SWORDSMANSHIP","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"  swordsmanship  ","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"  剑术  ","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"  劍  ","pack":"coc7"}
+{"canonical":"剑","kind":"resolve_skill","name":"  劍術  ","pack":"coc7"}
+{"canonical":"鞭","kind":"resolve_skill","name":"  鞭  ","pack":"coc7"}
+{"canonical":"鞭","kind":"resolve_skill","name":"WHIP","pack":"coc7"}
+{"canonical":"鞭","kind":"resolve_skill","name":"  whip  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  射击  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"FIREARMS","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  firearms  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"FIREARM","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  firearm  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"SHOOTING","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  shooting  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"GUN","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  gun  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"GUNS","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  guns  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  火器  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  枪械  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  槍械  ","pack":"coc7"}
+{"canonical":"射击","kind":"resolve_skill","name":"  射擊  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  手枪  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"HANDGUN","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  handgun  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"PISTOL","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  pistol  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"FIREARMS HANDGUN","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  firearms handgun  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"SHOOT HANDGUN","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  shoot handgun  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"SHOOTING HANDGUN","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  shooting handgun  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  射击:手枪  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  射击（手枪）  ","pack":"coc7"}
+{"canonical":"手枪","kind":"resolve_skill","name":"  手槍  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  步霰  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"RIFLE SHOTGUN","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  rifle shotgun  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"RIFLE/SHOTGUN","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  rifle/shotgun  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"RIFLE","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  rifle  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"SHOTGUN","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  shotgun  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"LONG GUN","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  long gun  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"FIREARMS RIFLE","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  firearms rifle  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"FIREARMS SHOTGUN","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  firearms shotgun  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  步枪/霰弹枪  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  射击:步枪  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  射击:霰弹枪  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  步枪  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  霰弹枪  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  散弹枪  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  步槍  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  霰彈槍  ","pack":"coc7"}
+{"canonical":"步霰","kind":"resolve_skill","name":"  步槍/霰彈槍  ","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"  投掷  ","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"THROW","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"  throw  ","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"THROWING","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"  throwing  ","pack":"coc7"}
+{"canonical":"投掷","kind":"resolve_skill","name":"  投擲  ","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"  爆破  ","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"DEMOLITIONS","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"  demolitions  ","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"DEMOLITION","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"  demolition  ","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"EXPLOSIVES","pack":"coc7"}
+{"canonical":"爆破","kind":"resolve_skill","name":"  explosives  ","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"  炮术  ","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"ARTILLERY","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"  artillery  ","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"GUNNERY","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"  gunnery  ","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"  炮術  ","pack":"coc7"}
+{"canonical":"炮术","kind":"resolve_skill","name":"  火炮  ","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"  急救  ","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"FIRST AID","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"  first aid  ","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"FIRST-AID","pack":"coc7"}
+{"canonical":"急救","kind":"resolve_skill","name":"  first-aid  ","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"  医疗  ","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"  医学  ","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"MEDICINE","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"  medicine  ","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"MEDICAL","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"  medical  ","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"  醫學  ","pack":"coc7"}
+{"canonical":"医学","kind":"resolve_skill","name":"  醫療  ","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"  精神分析  ","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"PSYCHOANALYSIS","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"  psychoanalysis  ","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"PSYCHO ANALYSIS","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"  psycho analysis  ","pack":"coc7"}
+{"canonical":"精神分析","kind":"resolve_skill","name":"  心理分析  ","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"  催眠  ","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"HYPNOSIS","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"  hypnosis  ","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"HYPNOTISM","pack":"coc7"}
+{"canonical":"催眠","kind":"resolve_skill","name":"  hypnotism  ","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"  会计  ","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"ACCOUNTING","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"  accounting  ","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"ACCOUNTANT","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"  accountant  ","pack":"coc7"}
+{"canonical":"会计","kind":"resolve_skill","name":"  會計  ","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"  法律  ","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"LAW","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"  law  ","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"LEGAL","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"  legal  ","pack":"coc7"}
+{"canonical":"法律","kind":"resolve_skill","name":"  律法  ","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"  历史  ","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"HISTORY","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"  history  ","pack":"coc7"}
+{"canonical":"历史","kind":"resolve_skill","name":"  歷史  ","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"  考古学  ","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"ARCHAEOLOGY","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"  archaeology  ","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"ARCHEOLOGY","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"  archeology  ","pack":"coc7"}
+{"canonical":"考古学","kind":"resolve_skill","name":"  考古學  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  博物  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"NATURAL WORLD","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  natural world  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"NATURE","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  nature  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"NATURAL HISTORY","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  natural history  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  自然  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  自然学  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  自然史  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  自然學  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  博物学  ","pack":"coc7"}
+{"canonical":"博物","kind":"resolve_skill","name":"  博物學  ","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"  人类学  ","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"ANTHROPOLOGY","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"  anthropology  ","pack":"coc7"}
+{"canonical":"人类学","kind":"resolve_skill","name":"  人類學  ","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"  神秘学  ","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"OCCULT","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"  occult  ","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"OCCULTISM","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"  occultism  ","pack":"coc7"}
+{"canonical":"神秘学","kind":"resolve_skill","name":"  神秘學  ","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"  电子学  ","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"ELECTRONICS","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"  electronics  ","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"ELECTRONIC","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"  electronic  ","pack":"coc7"}
+{"canonical":"电子学","kind":"resolve_skill","name":"  電子學  ","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"  科学  ","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"SCIENCE","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"  science  ","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"SCIENCES","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"  sciences  ","pack":"coc7"}
+{"canonical":"科学","kind":"resolve_skill","name":"  科學  ","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"  天文学  ","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"ASTRONOMY","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"  astronomy  ","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"  科学:天文学  ","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"  科学（天文学）  ","pack":"coc7"}
+{"canonical":"天文学","kind":"resolve_skill","name":"  天文學  ","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"  生物学  ","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"BIOLOGY","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"  biology  ","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"  科学:生物学  ","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"  科学（生物学）  ","pack":"coc7"}
+{"canonical":"生物学","kind":"resolve_skill","name":"  生物學  ","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"  植物学  ","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"BOTANY","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"  botany  ","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"  科学:植物学  ","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"  科学（植物学）  ","pack":"coc7"}
+{"canonical":"植物学","kind":"resolve_skill","name":"  植物學  ","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"  化学  ","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"CHEMISTRY","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"  chemistry  ","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"  科学:化学  ","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"  科学（化学）  ","pack":"coc7"}
+{"canonical":"化学","kind":"resolve_skill","name":"  化學  ","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"  密码学  ","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"CRYPTOGRAPHY","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"  cryptography  ","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"CRYPTOLOGY","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"  cryptology  ","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"  科学:密码学  ","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"  科学（密码学）  ","pack":"coc7"}
+{"canonical":"密码学","kind":"resolve_skill","name":"  密碼學  ","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"  工程学  ","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"ENGINEERING","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"  engineering  ","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"ENGINEER","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"  engineer  ","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"  科学:工程学  ","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"  科学（工程学）  ","pack":"coc7"}
+{"canonical":"工程学","kind":"resolve_skill","name":"  工程學  ","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"  司法科学  ","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"FORENSICS","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"  forensics  ","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"FORENSIC SCIENCE","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"  forensic science  ","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"  科学:司法科学  ","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"  科学（司法科学）  ","pack":"coc7"}
+{"canonical":"司法科学","kind":"resolve_skill","name":"  司法科學  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  地质学  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"GEOLOGY","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  geology  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"GEOGRAPHY","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  geography  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  科学:地质学  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  科学（地质学）  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  地質學  ","pack":"coc7"}
+{"canonical":"地质学","kind":"resolve_skill","name":"  地理学  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  数学  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"MATHEMATICS","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  mathematics  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"MATH","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  math  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"MATHS","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  maths  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  科学:数学  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  科学（数学）  ","pack":"coc7"}
+{"canonical":"数学","kind":"resolve_skill","name":"  數學  ","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"  气象学  ","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"METEOROLOGY","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"  meteorology  ","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"WEATHER SCIENCE","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"  weather science  ","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"  科学:气象学  ","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"  科学（气象学）  ","pack":"coc7"}
+{"canonical":"气象学","kind":"resolve_skill","name":"  氣象學  ","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"  药学  ","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"PHARMACY","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"  pharmacy  ","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"PHARMACOLOGY","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"  pharmacology  ","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"  科学:药学  ","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"  科学（药学）  ","pack":"coc7"}
+{"canonical":"药学","kind":"resolve_skill","name":"  藥學  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  物理学  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"PHYSICS","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  physics  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"PHYSICAL SCIENCE","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  physical science  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  科学:物理学  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  科学（物理学）  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  物理  ","pack":"coc7"}
+{"canonical":"物理学","kind":"resolve_skill","name":"  物理學  ","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"  动物学  ","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"ZOOLOGY","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"  zoology  ","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"  科学:动物学  ","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"  科学（动物学）  ","pack":"coc7"}
+{"canonical":"动物学","kind":"resolve_skill","name":"  動物學  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  克苏鲁神话  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"CTHULHU MYTHOS","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  cthulhu mythos  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"MYTHOS","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  mythos  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  cm  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  CM  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  克苏鲁  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  克苏鲁神话知识  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  克蘇魯  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  克蘇魯神話  ","pack":"coc7"}
+{"canonical":"克苏鲁神话","kind":"resolve_skill","name":"  克蘇魯神話知識  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"    ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"     ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"    侦查    ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  SPOT HIDDEN  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  Spot_Hidden  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"SPOT  HIDDEN","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  spot  hidden  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"SPOT\tHIDDEN","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  spot\thidden  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  驾驶：飞行器  ","pack":"coc7"}
+{"canonical":"驾驶:飞行器","kind":"resolve_skill","name":"  驾驶(飞行器)  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  ＳＴＲ  ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"STR ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"  str   ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳTR","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  Ｓtr  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"SS","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  ß  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  İ  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"Ǆ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  ǅ  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"NOPE","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  nope  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  力 量  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  力量力量  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"DODGE","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  dodge  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  闪避  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  SPOT_HIDDEN  ","pack":"coc7"}
+{"canonical":"侦查","kind":"resolve_skill","name":"  Spot Hidden  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"UNKNOWN SKILL","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  unknown skill  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  不存在的技能  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  祖传菜刀  ","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"OCCULT LORE","pack":"coc7"}
+{"canonical":null,"kind":"resolve_skill","name":"  Occult lore  ","pack":"coc7"}
+{"canonical":"力量","kind":"resolve_skill","name":"力量","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"str","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"STR","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"strength","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"Strength","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"敏捷","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"dex","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"DEX","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"dexterity","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"Dexterity","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"体质","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"con","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"CON","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"constitution","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"Constitution","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"體質","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"體魄","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"体魄","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"智力","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"int","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"INT","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"intelligence","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"Intelligence","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"感知","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"wis","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"WIS","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"wisdom","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"Wisdom","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"魅力","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"cha","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"CHA","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"charisma","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"Charisma","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"ac","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"AC","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"armor class","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"armour class","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"护甲等级","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"护甲值","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"护甲","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"護甲等級","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"護甲值","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"護甲","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"装甲","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"裝甲","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"hp","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"HP","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"hit points","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"health","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"生命值","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"生命","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"血量","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"体力","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"體力","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"耐久值","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"hpmax","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"HPMAX","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"max hp","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"hp max","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"生命值上限","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"生命上限","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"血量上限","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"耐久上限","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"dc","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"DC","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"difficulty class","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"spell save dc","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"难度等级","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"法术豁免","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"難度等級","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"法術豁免","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"hd","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"HD","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"hit dice","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"生命骰","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"pp","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"PP","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"passive perception","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"passive wisdom","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"被动察觉","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"被动感知","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"被動察覺","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"PW","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"熟练","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"proficiency","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"proficiency bonus","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"prof","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"pb","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"熟练加值","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"熟練","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"熟練加值","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"体型","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"siz","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"size","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"體型","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"体形","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"體形","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"运动","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"athletics","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"athletic","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"運動","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"体操","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"acrobatics","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"acrobat","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"杂技","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"特技","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"體操","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"雜技","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"特技動作","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"特技动作","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"巧手","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"sleight of hand","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"sleight","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"legerdemain","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"上手把戲","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"上手把戏","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"隐匿","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"stealth","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"sneak","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"hide","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"隱匿","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"潜行","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"潛行","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"调查","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"investigation","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"investigate","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"調查","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"奥秘","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"arcana","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"arcane","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"奧秘","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"历史","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"history","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"歷史","pack":"dnd5e"}
+{"canonical":"自然","kind":"resolve_skill","name":"自然","pack":"dnd5e"}
+{"canonical":"自然","kind":"resolve_skill","name":"nature","pack":"dnd5e"}
+{"canonical":"宗教","kind":"resolve_skill","name":"宗教","pack":"dnd5e"}
+{"canonical":"宗教","kind":"resolve_skill","name":"religion","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"察觉","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"perception","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"perceive","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"spot","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"notice","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"察覺","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"觉察","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"覺察","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"观察","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"洞悉","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"insight","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"sense motive","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"洞察","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"察言觀色","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"察言观色","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"驯兽","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"animal handling","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"animal","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"馴獸","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"驯养","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"馴養","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"動物馴服","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"動物馴養","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"动物驯服","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"动物驯养","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"医药","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"medicine","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"medical","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"醫藥","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"医疗","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"醫療","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"求生","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"survival","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"survive","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"生存","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"游说","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"persuasion","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"persuade","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"diplomacy","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"说服","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"话术","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"遊說","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"說服","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"話術","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"欺瞒","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"deception","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"deceive","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"bluff","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"lie","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"唬骗","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"欺诈","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"欺骗","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"诈骗","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"欺瞞","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"唬騙","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"欺詐","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"欺騙","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"詐騙","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"威吓","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"intimidation","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"intimidate","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"恐吓","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"威嚇","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"恐嚇","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"表演","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"performance","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"perform","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"等级","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":" ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  侦查  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT HIDDEN","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"Spot_Hidden","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"spot  hidden","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"spot\thidden","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶：飞行器","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶:飞行器","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶（飞行器）","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶(飞行器)","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"艺术和手艺（表演）","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"艺术和手艺:表演","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳＴＲ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"str ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"Ｓtr","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"ß","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"İ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"ǅ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"nope","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"力 量","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"力量力量","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"level","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"先攻修正","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"速度","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"载重","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"负重","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"class","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"职业","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"race","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"种族","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"unknown","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"祖传菜刀","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"SPOT","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"  力量  ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"  str  ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"  STR  ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"STRENGTH","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"  strength  ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"  Strength  ","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  敏捷  ","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  dex  ","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  DEX  ","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"DEXTERITY","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  dexterity  ","pack":"dnd5e"}
+{"canonical":"敏捷","kind":"resolve_skill","name":"  Dexterity  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  体质  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  con  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  CON  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"CONSTITUTION","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  constitution  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  Constitution  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  體質  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  體魄  ","pack":"dnd5e"}
+{"canonical":"体质","kind":"resolve_skill","name":"  体魄  ","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"  智力  ","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"  int  ","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"  INT  ","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"INTELLIGENCE","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"  intelligence  ","pack":"dnd5e"}
+{"canonical":"智力","kind":"resolve_skill","name":"  Intelligence  ","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"  感知  ","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"  wis  ","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"  WIS  ","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"WISDOM","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"  wisdom  ","pack":"dnd5e"}
+{"canonical":"感知","kind":"resolve_skill","name":"  Wisdom  ","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"  魅力  ","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"  cha  ","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"  CHA  ","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"CHARISMA","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"  charisma  ","pack":"dnd5e"}
+{"canonical":"魅力","kind":"resolve_skill","name":"  Charisma  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  ac  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  AC  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"ARMOR CLASS","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  armor class  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"ARMOUR CLASS","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  armour class  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  护甲等级  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  护甲值  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  护甲  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  護甲等級  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  護甲值  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  護甲  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  装甲  ","pack":"dnd5e"}
+{"canonical":"ac","kind":"resolve_skill","name":"  裝甲  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  hp  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  HP  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"HIT POINTS","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  hit points  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"HEALTH","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  health  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  生命值  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  生命  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  血量  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  体力  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  體力  ","pack":"dnd5e"}
+{"canonical":"hp","kind":"resolve_skill","name":"  耐久值  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  hpmax  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  HPMAX  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"MAX HP","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  max hp  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"HP MAX","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  hp max  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  生命值上限  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  生命上限  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  血量上限  ","pack":"dnd5e"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  耐久上限  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  dc  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  DC  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"DIFFICULTY CLASS","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  difficulty class  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"SPELL SAVE DC","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  spell save dc  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  难度等级  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  法术豁免  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  難度等級  ","pack":"dnd5e"}
+{"canonical":"dc","kind":"resolve_skill","name":"  法術豁免  ","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"  hd  ","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"  HD  ","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"HIT DICE","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"  hit dice  ","pack":"dnd5e"}
+{"canonical":"hd","kind":"resolve_skill","name":"  生命骰  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  pp  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  PP  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"PASSIVE PERCEPTION","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  passive perception  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"PASSIVE WISDOM","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  passive wisdom  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  被动察觉  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  被动感知  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  被動察覺  ","pack":"dnd5e"}
+{"canonical":"pp","kind":"resolve_skill","name":"  PW  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  熟练  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"PROFICIENCY","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  proficiency  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"PROFICIENCY BONUS","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  proficiency bonus  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"PROF","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  prof  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"PB","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  pb  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  熟练加值  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  熟練  ","pack":"dnd5e"}
+{"canonical":"熟练","kind":"resolve_skill","name":"  熟練加值  ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"  体型  ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"SIZ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"  siz  ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"SIZE","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"  size  ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"  體型  ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"  体形  ","pack":"dnd5e"}
+{"canonical":"体型","kind":"resolve_skill","name":"  體形  ","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"  运动  ","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"ATHLETICS","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"  athletics  ","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"ATHLETIC","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"  athletic  ","pack":"dnd5e"}
+{"canonical":"运动","kind":"resolve_skill","name":"  運動  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  体操  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"ACROBATICS","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  acrobatics  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"ACROBAT","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  acrobat  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  杂技  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  特技  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  體操  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  雜技  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  特技動作  ","pack":"dnd5e"}
+{"canonical":"体操","kind":"resolve_skill","name":"  特技动作  ","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"  巧手  ","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"SLEIGHT OF HAND","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"  sleight of hand  ","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"SLEIGHT","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"  sleight  ","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"LEGERDEMAIN","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"  legerdemain  ","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"  上手把戲  ","pack":"dnd5e"}
+{"canonical":"巧手","kind":"resolve_skill","name":"  上手把戏  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  隐匿  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"STEALTH","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  stealth  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"SNEAK","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  sneak  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"HIDE","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  hide  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  隱匿  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  潜行  ","pack":"dnd5e"}
+{"canonical":"隐匿","kind":"resolve_skill","name":"  潛行  ","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"  调查  ","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"INVESTIGATION","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"  investigation  ","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"INVESTIGATE","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"  investigate  ","pack":"dnd5e"}
+{"canonical":"调查","kind":"resolve_skill","name":"  調查  ","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"  奥秘  ","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"ARCANA","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"  arcana  ","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"ARCANE","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"  arcane  ","pack":"dnd5e"}
+{"canonical":"奥秘","kind":"resolve_skill","name":"  奧秘  ","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"  历史  ","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"HISTORY","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"  history  ","pack":"dnd5e"}
+{"canonical":"历史","kind":"resolve_skill","name":"  歷史  ","pack":"dnd5e"}
+{"canonical":"自然","kind":"resolve_skill","name":"  自然  ","pack":"dnd5e"}
+{"canonical":"自然","kind":"resolve_skill","name":"NATURE","pack":"dnd5e"}
+{"canonical":"自然","kind":"resolve_skill","name":"  nature  ","pack":"dnd5e"}
+{"canonical":"宗教","kind":"resolve_skill","name":"  宗教  ","pack":"dnd5e"}
+{"canonical":"宗教","kind":"resolve_skill","name":"RELIGION","pack":"dnd5e"}
+{"canonical":"宗教","kind":"resolve_skill","name":"  religion  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  察觉  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"PERCEPTION","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  perception  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"PERCEIVE","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  perceive  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  spot  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"NOTICE","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  notice  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  察覺  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  觉察  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  覺察  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  观察  ","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"  洞悉  ","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"INSIGHT","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"  insight  ","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"SENSE MOTIVE","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"  sense motive  ","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"  洞察  ","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"  察言觀色  ","pack":"dnd5e"}
+{"canonical":"洞悉","kind":"resolve_skill","name":"  察言观色  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  驯兽  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"ANIMAL HANDLING","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  animal handling  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"ANIMAL","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  animal  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  馴獸  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  驯养  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  馴養  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  動物馴服  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  動物馴養  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  动物驯服  ","pack":"dnd5e"}
+{"canonical":"驯兽","kind":"resolve_skill","name":"  动物驯养  ","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"  医药  ","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"MEDICINE","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"  medicine  ","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"MEDICAL","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"  medical  ","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"  醫藥  ","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"  医疗  ","pack":"dnd5e"}
+{"canonical":"医药","kind":"resolve_skill","name":"  醫療  ","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"  求生  ","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"SURVIVAL","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"  survival  ","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"SURVIVE","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"  survive  ","pack":"dnd5e"}
+{"canonical":"求生","kind":"resolve_skill","name":"  生存  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  游说  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"PERSUASION","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  persuasion  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"PERSUADE","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  persuade  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"DIPLOMACY","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  diplomacy  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  说服  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  话术  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  遊說  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  說服  ","pack":"dnd5e"}
+{"canonical":"游说","kind":"resolve_skill","name":"  話術  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  欺瞒  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"DECEPTION","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  deception  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"DECEIVE","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  deceive  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"BLUFF","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  bluff  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"LIE","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  lie  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  唬骗  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  欺诈  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  欺骗  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  诈骗  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  欺瞞  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  唬騙  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  欺詐  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  欺騙  ","pack":"dnd5e"}
+{"canonical":"欺瞒","kind":"resolve_skill","name":"  詐騙  ","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"  威吓  ","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"INTIMIDATION","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"  intimidation  ","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"INTIMIDATE","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"  intimidate  ","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"  恐吓  ","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"  威嚇  ","pack":"dnd5e"}
+{"canonical":"威吓","kind":"resolve_skill","name":"  恐嚇  ","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"  表演  ","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"PERFORMANCE","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"  performance  ","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"PERFORM","pack":"dnd5e"}
+{"canonical":"表演","kind":"resolve_skill","name":"  perform  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  等级  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"    ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"     ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"    侦查    ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  SPOT HIDDEN  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT_HIDDEN","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  Spot_Hidden  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT  HIDDEN","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  spot  hidden  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT\tHIDDEN","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  spot\thidden  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶：飞行器  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶:飞行器  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶（飞行器）  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶(飞行器)  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  艺术和手艺（表演）  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  艺术和手艺:表演  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  ＳＴＲ  ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"STR ","pack":"dnd5e"}
+{"canonical":"力量","kind":"resolve_skill","name":"  str   ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳTR","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  Ｓtr  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"SS","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  ß  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  İ  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"Ǆ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  ǅ  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"NOPE","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  nope  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  力 量  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  力量力量  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"LEVEL","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  level  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  先攻修正  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  速度  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  载重  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  负重  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"CLASS","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  class  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  职业  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"RACE","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  race  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  种族  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"UNKNOWN","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  unknown  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"  祖传菜刀  ","pack":"dnd5e"}
+{"canonical":"察觉","kind":"resolve_skill","name":"  SPOT  ","pack":"dnd5e"}
+{"canonical":null,"kind":"resolve_skill","name":"","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":" ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  侦查  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT HIDDEN","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"Spot_Hidden","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"spot  hidden","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"spot\thidden","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶：飞行器","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶:飞行器","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶（飞行器）","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶(飞行器)","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"艺术和手艺（表演）","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"艺术和手艺:表演","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳＴＲ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"str ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"Ｓtr","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"ß","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"İ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"ǅ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"nope","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"力 量","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"力量力量","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"strength","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"力量","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"Brawl","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"Strength","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"unknown","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"a","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"x","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"    ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"     ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"    侦查    ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  SPOT HIDDEN  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT_HIDDEN","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  Spot_Hidden  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT  HIDDEN","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  spot  hidden  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT\tHIDDEN","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  spot\thidden  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶：飞行器  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶:飞行器  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶（飞行器）  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶(飞行器)  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  艺术和手艺（表演）  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  艺术和手艺:表演  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  ＳＴＲ  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"STR ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  str   ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳTR","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  Ｓtr  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"SS","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  ß  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  İ  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"Ǆ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  ǅ  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"NOPE","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  nope  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  力 量  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  力量力量  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"STRENGTH","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  strength  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  力量  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"BRAWL","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  Brawl  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  Strength  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"UNKNOWN","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  unknown  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"A","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  a  ","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"X","pack":"wod"}
+{"canonical":null,"kind":"resolve_skill","name":"  x  ","pack":"wod"}
+{"canonical":"muscle","kind":"resolve_skill","name":"muscle","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"mus","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"肌力","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"Might","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"nerve","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"nrv","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"神经","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"wit","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"wits","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"机智","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"grit","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"gr","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"毅力","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"level","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"lvl","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"等级","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"athletics","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"athl","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"运动力","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"sport","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"bluff","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"bl","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"虚张","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"lore","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"知识面","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"lore master","pack":"oraclesynth"}
+{"canonical":"hp","kind":"resolve_skill","name":"hp","pack":"oraclesynth"}
+{"canonical":"hp","kind":"resolve_skill","name":"HP","pack":"oraclesynth"}
+{"canonical":"hp","kind":"resolve_skill","name":"生命","pack":"oraclesynth"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"hpmax","pack":"oraclesynth"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"HPMAX","pack":"oraclesynth"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"生命上限","pack":"oraclesynth"}
+{"canonical":"fate","kind":"resolve_skill","name":"fate","pack":"oraclesynth"}
+{"canonical":"fate","kind":"resolve_skill","name":"FATE","pack":"oraclesynth"}
+{"canonical":"fate","kind":"resolve_skill","name":"命运","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":" ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  侦查  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT HIDDEN","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"Spot_Hidden","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"spot  hidden","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"spot\thidden","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶：飞行器","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶:飞行器","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶（飞行器）","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"驾驶(飞行器)","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"艺术和手艺（表演）","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"艺术和手艺:表演","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳＴＲ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"str ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"Ｓtr","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"ß","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"İ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"ǅ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"nope","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"力 量","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"力量力量","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"prof","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"guard","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"band","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"muscle_mod","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"nerve_mod","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"wit_mod","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"class","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"klass","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"MUS","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"LORE","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"sneak","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"brawl","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"unknown","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"reach","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"fatemax","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"MUSCLE","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"  muscle  ","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"  mus  ","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"  肌力  ","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"MIGHT","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"  Might  ","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"NERVE","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"  nerve  ","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"NRV","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"  nrv  ","pack":"oraclesynth"}
+{"canonical":"nerve","kind":"resolve_skill","name":"  神经  ","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"WIT","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"  wit  ","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"WITS","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"  wits  ","pack":"oraclesynth"}
+{"canonical":"wit","kind":"resolve_skill","name":"  机智  ","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"GRIT","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"  grit  ","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"GR","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"  gr  ","pack":"oraclesynth"}
+{"canonical":"grit","kind":"resolve_skill","name":"  毅力  ","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"LEVEL","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"  level  ","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"LVL","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"  lvl  ","pack":"oraclesynth"}
+{"canonical":"level","kind":"resolve_skill","name":"  等级  ","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"ATHLETICS","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"  athletics  ","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"ATHL","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"  athl  ","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"  运动力  ","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"SPORT","pack":"oraclesynth"}
+{"canonical":"athletics","kind":"resolve_skill","name":"  sport  ","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"BLUFF","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"  bluff  ","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"BL","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"  bl  ","pack":"oraclesynth"}
+{"canonical":"bluff","kind":"resolve_skill","name":"  虚张  ","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"  lore  ","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"  知识面  ","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"LORE MASTER","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"  lore master  ","pack":"oraclesynth"}
+{"canonical":"hp","kind":"resolve_skill","name":"  hp  ","pack":"oraclesynth"}
+{"canonical":"hp","kind":"resolve_skill","name":"  HP  ","pack":"oraclesynth"}
+{"canonical":"hp","kind":"resolve_skill","name":"  生命  ","pack":"oraclesynth"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  hpmax  ","pack":"oraclesynth"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  HPMAX  ","pack":"oraclesynth"}
+{"canonical":"hpmax","kind":"resolve_skill","name":"  生命上限  ","pack":"oraclesynth"}
+{"canonical":"fate","kind":"resolve_skill","name":"  fate  ","pack":"oraclesynth"}
+{"canonical":"fate","kind":"resolve_skill","name":"  FATE  ","pack":"oraclesynth"}
+{"canonical":"fate","kind":"resolve_skill","name":"  命运  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"    ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"     ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"    侦查    ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  SPOT HIDDEN  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT_HIDDEN","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  Spot_Hidden  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT  HIDDEN","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  spot  hidden  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"SPOT\tHIDDEN","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  spot\thidden  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶：飞行器  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶:飞行器  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶（飞行器）  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  驾驶(飞行器)  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  艺术和手艺（表演）  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  艺术和手艺:表演  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  ＳＴＲ  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"STR ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  str   ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"ＳTR","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  Ｓtr  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"SS","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  ß  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  İ  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"Ǆ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  ǅ  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"NOPE","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  nope  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  力 量  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  力量力量  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"PROF","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  prof  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"GUARD","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  guard  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"BAND","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  band  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"MUSCLE_MOD","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  muscle_mod  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"NERVE_MOD","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  nerve_mod  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"WIT_MOD","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  wit_mod  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"CLASS","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  class  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"KLASS","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  klass  ","pack":"oraclesynth"}
+{"canonical":"muscle","kind":"resolve_skill","name":"  MUS  ","pack":"oraclesynth"}
+{"canonical":"lore","kind":"resolve_skill","name":"  LORE  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"SNEAK","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  sneak  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"BRAWL","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  brawl  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"UNKNOWN","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  unknown  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"REACH","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  reach  ","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"FATEMAX","pack":"oraclesynth"}
+{"canonical":null,"kind":"resolve_skill","name":"  fatemax  ","pack":"oraclesynth"}
+{"error":null,"kind":"load_rulepack","name":"coc","pack":"coc7"}
+{"error":null,"kind":"load_rulepack","name":"CoC","pack":"coc7"}
+{"error":null,"kind":"load_rulepack","name":"coc7","pack":"coc7"}
+{"error":null,"kind":"load_rulepack","name":" CoC7 ","pack":"coc7"}
+{"error":null,"kind":"load_rulepack","name":"call of cthulhu","pack":"coc7"}
+{"error":null,"kind":"load_rulepack","name":"Call Of Cthulhu","pack":"coc7"}
+{"error":null,"kind":"load_rulepack","name":"dnd","pack":"dnd5e"}
+{"error":null,"kind":"load_rulepack","name":"D&D5e","pack":"dnd5e"}
+{"error":null,"kind":"load_rulepack","name":"dnd5e","pack":"dnd5e"}
+{"error":null,"kind":"load_rulepack","name":"DND5E","pack":"dnd5e"}
+{"error":null,"kind":"load_rulepack","name":"wod","pack":"wod"}
+{"error":null,"kind":"load_rulepack","name":"World Of Darkness","pack":"wod"}
+{"error":null,"kind":"load_rulepack","name":"world_of_darkness","pack":"wod"}
+{"error":null,"kind":"load_rulepack","name":"oraclesynth","pack":"oraclesynth"}
+{"error":null,"kind":"load_rulepack","name":"oracle synth","pack":"oraclesynth"}
+{"error":{"class":"ValueError","message":"unknown rulepack: unknown"},"kind":"load_rulepack","name":"unknown","pack":null}
+{"error":{"class":"ValueError","message":"unknown rulepack: "},"kind":"load_rulepack","name":"","pack":null}
+{"error":{"class":"ValueError","message":"unknown rulepack: coc8"},"kind":"load_rulepack","name":"coc8","pack":null}
+{"error":{"class":"ValueError","message":"unknown rulepack: d&d"},"kind":"load_rulepack","name":"d&d","pack":null}
+{"error":{"class":"ValueError","message":"unknown rulepack: dnd 5e"},"kind":"load_rulepack","name":"dnd 5e","pack":null}
+{"ids":["coc7","dnd5e","wod"],"kind":"built_in_ids"}
+{"ids":["coc7","dnd5e","oraclepool","oraclescript","oraclesynth","wod"],"kind":"available_systems_contains"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":null,"system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"en","system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"zh","system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"zh-CN","system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"zh_TW","system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"fr","system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"ja","system":"coc7"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":null,"system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"en","system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"zh","system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"zh-CN","system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"zh_TW","system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"fr","system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP","mp":"MP","san":"SAN"},"locale":"ja","system":"CoC"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":null,"system":"dnd5e"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":"en","system":"dnd5e"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":"zh","system":"dnd5e"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":"zh-CN","system":"dnd5e"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":"zh_TW","system":"dnd5e"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":"fr","system":"dnd5e"}
+{"kind":"resource_label_map","labels":{"hp":"HP"},"locale":"ja","system":"dnd5e"}
+{"kind":"resource_label_map","labels":{},"locale":null,"system":"wod"}
+{"kind":"resource_label_map","labels":{},"locale":"en","system":"wod"}
+{"kind":"resource_label_map","labels":{},"locale":"zh","system":"wod"}
+{"kind":"resource_label_map","labels":{},"locale":"zh-CN","system":"wod"}
+{"kind":"resource_label_map","labels":{},"locale":"zh_TW","system":"wod"}
+{"kind":"resource_label_map","labels":{},"locale":"fr","system":"wod"}
+{"kind":"resource_label_map","labels":{},"locale":"ja","system":"wod"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"HP"},"locale":null,"system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"HP"},"locale":"en","system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"体力"},"locale":"zh","system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"体力"},"locale":"zh-CN","system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"体力"},"locale":"zh_TW","system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"HP"},"locale":"fr","system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{"fate":"Fate","hp":"体力値"},"locale":"ja","system":"oraclesynth"}
+{"kind":"resource_label_map","labels":{},"locale":null,"system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":"en","system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":"zh","system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":"zh-CN","system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":"zh_TW","system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":"fr","system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":"ja","system":"unknown"}
+{"kind":"resource_label_map","labels":{},"locale":null,"system":""}
+{"kind":"resource_label_map","labels":{},"locale":"en","system":""}
+{"kind":"resource_label_map","labels":{},"locale":"zh","system":""}
+{"kind":"resource_label_map","labels":{},"locale":"zh-CN","system":""}
+{"kind":"resource_label_map","labels":{},"locale":"zh_TW","system":""}
+{"kind":"resource_label_map","labels":{},"locale":"fr","system":""}
+{"kind":"resource_label_map","labels":{},"locale":"ja","system":""}

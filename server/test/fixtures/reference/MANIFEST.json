@@ -1,0 +1,125 @@
+{
+  "d20": "1.1.2",
+  "files": {
+    "dice_normalize.jsonl": {
+      "rows": 38,
+      "sha256": "419aa82bcfd89713e4de509ffd57cc103d61191a8da0a33809cecb31e9d7a622"
+    },
+    "dice_result_flags.jsonl": {
+      "rows": 2206,
+      "sha256": "36cd9576ef992365df45aec8a6ccf5d1e7f31d797db8f8360a5ad4e27877cb88"
+    },
+    "dice_vectors.jsonl.gz": {
+      "rows": 2150,
+      "sha256": "464c7785b16d077a4da299c38d28b6be4fe20d90d3ec04fce3e952330e974b66"
+    },
+    "rules_check_roll.jsonl.gz": {
+      "rows": 3420,
+      "sha256": "5a4c5aa5a494cb22b66ac9ce9903289c1dd034b464a64038bdccc8e2d3dc2018"
+    },
+    "rules_coc7_grid.jsonl.gz": {
+      "rows": 5999,
+      "sha256": "7d335581158690fdf119c1f8dc42050a915d4d9088a84c0e18a88e79ad92f967"
+    },
+    "rules_dnd5e_grid.jsonl": {
+      "rows": 1178,
+      "sha256": "06bd53288362efea8b5e3963192804eed56b0cd1742d3a5c092257bd0baf67d7"
+    },
+    "rules_interpret_cases.jsonl": {
+      "rows": 421,
+      "sha256": "9ba90ef94dd5267d9dd292988df629601fb6e36434bdbd3004222387888ff016"
+    },
+    "rules_luck.jsonl.gz": {
+      "rows": 5695,
+      "sha256": "482499e3cb2c5b5aee04e72335b2fb5c2167fe6a36c6e2412c13221c706c0860"
+    },
+    "rules_pack_meta.jsonl": {
+      "rows": 3,
+      "sha256": "250c018e3a14df09f9759109de2373f57c96124458faf48df99d92aefcd25aaf"
+    },
+    "rules_params.jsonl": {
+      "rows": 165,
+      "sha256": "9db0a30c89dab6da68b3b69806d52476a2af2c92ab3bb90b343c4aa695d58894"
+    },
+    "rules_script_lane.jsonl": {
+      "rows": 252,
+      "sha256": "099170309b9fccb5388e33238a82a314040088ac8a32dbc96bd2a5713fb1c764"
+    },
+    "rules_subsystems.jsonl.gz": {
+      "rows": 1337,
+      "sha256": "9b4dea9eeea7a23da85d7ceb4e3e4888bb1132540d71fc1ac4468c2fd20f9a30"
+    },
+    "rules_synthetic.jsonl.gz": {
+      "rows": 2198,
+      "sha256": "248860b4f45b96bbd19cf097aee2b632c3d0b5904401dc97674f1a1895f261b8"
+    },
+    "rules_wod_grid.jsonl": {
+      "rows": 20,
+      "sha256": "0daa888a85ddc69951c41f499494e04765a77facaa53c35d9ba7783a81f7defe"
+    },
+    "sheets_aliases.jsonl": {
+      "rows": 2544,
+      "sha256": "903d7628e98cac71e0d2c28b799a0d561c0d203fc5ad0b92259d4c7ec25d3888"
+    },
+    "sheets_cases.jsonl": {
+      "rows": 95,
+      "sha256": "2fed09faf9cef0d1877253ff8f82046351993fd98be809ca97dda06ccd2b3fbb"
+    },
+    "sheets_derived.jsonl": {
+      "rows": 1356,
+      "sha256": "47afe9b57b14706af635f22cfe58b9f276dbfca782ed143e45e14b00b4698de8"
+    },
+    "sheets_ops.jsonl": {
+      "rows": 474,
+      "sha256": "d9d63e2ab13d471424edb4925fbb84f820b2cdccde3b475a6f574b5076b31fe3"
+    },
+    "st_card_parse.jsonl": {
+      "rows": 63,
+      "sha256": "f7481c99e57ab4a59805afd65b6ef8dee646403f4da3306c196d38a4acfb8b0c"
+    },
+    "st_card_split.jsonl": {
+      "rows": 40,
+      "sha256": "3b4746f10a49b4f6ea40968675e8c203880707bcbfe76f553286d22f2eb2a837"
+    },
+    "st_decorators.jsonl": {
+      "rows": 15,
+      "sha256": "a0737db02b3d332e0e5514fa45dd814a0992d692ceee571b8eca41c65dfe11fb"
+    },
+    "st_ejs_full.jsonl": {
+      "rows": 54,
+      "sha256": "3d07fc09d91d6106b5a0e763ee2458a5f4ca82bb2d3451f275ba67edf7b71547"
+    },
+    "st_ejs_lite.jsonl": {
+      "rows": 54,
+      "sha256": "353dd2af73c53b82260279a8edd15147591f84a79d84ebc46c6c3ea7a6a01be5"
+    },
+    "st_macros.jsonl": {
+      "rows": 43,
+      "sha256": "8657b08fb15c8f9fab26cea60b8ddc37f01dadfa85d57272bf3f5fbd494e8737"
+    },
+    "st_mvu_initvar.jsonl": {
+      "rows": 39,
+      "sha256": "f44f76165f79892d3bb7d6e4d7e0b38f5cc96d8d56ff5254c588395d94b7aa57"
+    },
+    "st_mvu_tree.jsonl": {
+      "rows": 21,
+      "sha256": "12b8d9dfc299d4e3cac218db8adde32608b8ce5fabfea957386f509f3518705e"
+    },
+    "st_mvu_update.jsonl": {
+      "rows": 49,
+      "sha256": "431a031bedb46f9c5423b4894301fec55bef31c521b3f89714bfa42b83c2189f"
+    },
+    "st_worldbook_activation.jsonl": {
+      "rows": 72,
+      "sha256": "b82f19d795e426a9366ed2e7f003e032222a6b665256f757a712feea0cc6a280"
+    },
+    "st_worldbook_import.jsonl": {
+      "rows": 40,
+      "sha256": "af9e2bb68f013dc92d3e80b403ebc0d765a6df3cf963a2d36889233c108b4e17"
+    }
+  },
+  "frozen_paths_clean": true,
+  "git_commit": "74122e181c26dd367160daf0447109365f0e9b4a",
+  "python": "3.12.14",
+  "sha256_covers": "the uncompressed JSON-lines text (a .gz is hashed after decompression)"
+}

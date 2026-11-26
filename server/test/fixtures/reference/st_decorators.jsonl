@@ -1,0 +1,15 @@
+{"body":"Body line 1\nBody line 2","case":"decorators_if_and_flag","decorators":{"dont_activate":true,"if":"variables.stage === 2"},"input":{"text":"@@if variables.stage === 2\n@@dont_activate\nBody line 1\nBody line 2"},"note":"@@if expression + a flag decorator"}
+{"body":"email @@handle mid-line is not a decorator\nbody","case":"decorators_none","decorators":{},"input":{"text":"email @@handle mid-line is not a decorator\nbody"},"note":"no decorators: identity"}
+{"body":"body","case":"decorators_blank_between","decorators":{"activate":true,"if":"x > 1"},"input":{"text":"@@activate\n\n@@if x > 1\n\nbody"},"note":"blank lines between decorators are skipped once one was seen"}
+{"body":"\n@@if x\nbody","case":"decorators_blank_first_line","decorators":{},"input":{"text":"\n@@if x\nbody"},"note":"a blank FIRST line stops parsing (no decorators)"}
+{"body":"body","case":"decorators_if_without_arg","decorators":{"if":true},"input":{"text":"@@if\nbody"},"note":"@@if with no expression maps to True"}
+{"body":"body","case":"decorators_upper_case_name","decorators":{"if":"a == 1","render_after":true},"input":{"text":"@@IF a == 1\n@@Render_After\nbody"},"note":"decorator names are lower-cased"}
+{"body":"body","case":"decorators_indented","decorators":{"if":"a"},"input":{"text":"   @@if a\nbody"},"note":"leading whitespace on a decorator line is tolerated"}
+{"body":"@@render2\nbody","case":"decorators_digit_in_name","decorators":{},"input":{"text":"@@render2\nbody"},"note":"names are letters/underscore only: `@@render2` is not a decorator"}
+{"body":"body","case":"decorators_duplicate_last_wins","decorators":{"if":"b"},"input":{"text":"@@if a\n@@if b\nbody"},"note":"a repeated decorator: the last one wins"}
+{"body":"body\r\nmore","case":"decorators_crlf","decorators":{"if":"a"},"input":{"text":"@@if a\r\nbody\r\nmore"},"note":"CRLF lines: the decorator matches, the body keeps its \\r"}
+{"body":"","case":"decorators_only_decorators","decorators":{"initial_variables":true},"input":{"text":"@@initial_variables"},"note":"only decorator lines: empty body"}
+{"body":"body","case":"decorators_flag_with_arg","decorators":{"depth":true},"input":{"text":"@@depth 4\nbody"},"note":"a non-if decorator with an argument is still just True"}
+{"body":"body\n@@if a","case":"decorators_double_at_in_body","decorators":{},"input":{"text":"body\n@@if a"},"note":"decorator lines after the body starts are body text"}
+{"body":"body","case":"decorators_trailing_blank_after_decorators","decorators":{"if":"a"},"input":{"text":"@@if a\n\n\nbody"},"note":"blank lines after decorators are consumed before the body"}
+{"body":"body","case":"decorators_if_extra_spaces","decorators":{"if":"a  ==  1"},"input":{"text":"@@if    a  ==  1   \nbody"},"note":"@@if argument is trimmed"}

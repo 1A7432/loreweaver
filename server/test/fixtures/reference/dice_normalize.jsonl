@@ -1,0 +1,38 @@
+{"input":"3d6x5","output":"3d6*5"}
+{"input":"(2d6+6)x5","output":"(2d6+6)*5"}
+{"input":"4d6k3","output":"4d6kh3"}
+{"input":"4d6kh3","output":"4d6kh3"}
+{"input":"4d6kl3","output":"4d6kl3"}
+{"input":"3d6×5","output":"3d6*5"}
+{"input":"3d6 x 5","output":"3d6*5"}
+{"input":"3d6X5","output":"3d6X5"}
+{"input":"3d6 × 5","output":"3d6*5"}
+{"input":"2d20kh1","output":"2d20kh1"}
+{"input":"1d20mi5","output":"1d20mi5"}
+{"input":"1d20ma15","output":"1d20ma15"}
+{"input":"3d6rr1","output":"3d6rr1"}
+{"input":"2d6ro1","output":"2d6ro1"}
+{"input":"1d6e6","output":"1d6e6"}
+{"input":"5x5","output":"5*5"}
+{"input":"5x 5","output":"5*5"}
+{"input":"x5","output":"x5"}
+{"input":"5x","output":"5x"}
+{"input":"3d6x","output":"3d6x"}
+{"input":"(5)x(5)","output":"(5)*(5)"}
+{"input":"3d6xx5","output":"3d6xx5"}
+{"input":"4d6k3+1d6k2","output":"4d6kh3+1d6kh2"}
+{"input":"4d6k","output":"4d6k"}
+{"input":"4d6kh","output":"4d6kh"}
+{"input":"k3","output":"kh3"}
+{"input":"1d20","output":"1d20"}
+{"input":"","output":""}
+{"input":"abc x def","output":"abc x def"}
+{"input":"10x10x10","output":"10*10*10"}
+{"input":"2d6kh1k2","output":"2d6kh1kh2"}
+{"input":"1d%x5","output":"1d%x5"}
+{"input":"(1d4)x(1d4)","output":"(1d4)*(1d4)"}
+{"input":"3d6x5+2d4x2","output":"3d6*5+2d4*2"}
+{"input":"4d6k10","output":"4d6kh10"}
+{"input":"4d6k03","output":"4d6kh03"}
+{"input":"1d6 x5","output":"1d6*5"}
+{"input":"1d6x 5","output":"1d6*5"}
