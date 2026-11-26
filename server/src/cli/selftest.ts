@@ -1,6 +1,6 @@
 // `loreweaver selftest`: bring the whole line up inside this process and push one turn
 // through it — the database on disk, a module loaded from a file into a room worker,
-// a scripted model, and a client dialling in over iroh. It exists to prove a BUILT
+// the real turn engine over a scripted model, and a client dialling in over iroh. It exists to prove a BUILT
 // server works on the machine it was built for: the worker thread, the runtime loading
 // of a module's TypeScript and the native transport are exactly the parts a compiled
 // binary can lose.
@@ -17,11 +17,9 @@ import type { TurnEnvironment } from "../agent/turn/types.ts";
 import { DEFAULT_FOLD_SETTINGS } from "../core/chronicle/index.ts";
 import { builtInPacks, RulePackRegistry } from "../core/rulepacks/index.ts";
 import { builtInSkillRegistry, builtInSkills } from "../core/skills/index.ts";
-import { CommandRegistry } from "../gateway/commands/index.ts";
-import { Hub } from "../gateway/hub.ts";
 import type { RunKeeperTurn } from "../gateway/keeper.ts";
-import { LANES_OFF } from "../gateway/lanes.ts";
 import { REVIEW_OFF } from "../gateway/review.ts";
+import { loadSettings } from "../infra/config.ts";
 import { type Clock, systemClock } from "../infra/ids.ts";
 import { type LLMClient, ScriptedLLM } from "../infra/llm/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
@@ -29,6 +27,10 @@ import { spawnWorker } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";
 import { dial, IrohServer } from "../net/iroh.ts";
 import { Keystore } from "../net/keystore.ts";
+import { composeHub } from "./compose.ts";
+
+/** What the self-test's module injects, as the scripted model looks for it. */
+const INJECTION = /selftest module saw turn \d+/u;
 
 const MODULE_SOURCE = `
 import { defineModule } from "loreweaver/module";
@@ -118,24 +120,30 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
   const modulePath = join(dir, "module.ts");
   writeFileSync(modulePath, MODULE_SOURCE);
   const store = new Store(openDatabase(join(dir, "selftest.db")));
-  // No lane calls a model in the self-test; a scripted client stands behind every lane.
-  const llm = new ScriptedLLM([]);
+  // The REAL turn engine, composed as `serve` composes it, over a scripted model that
+  // answers with the module's injection when it finds it in the prompt: the reply proves
+  // the module ran in a worker and that what it injected reached the model.
+  const llm = new ScriptedLLM((messages) => {
+    for (const message of messages) {
+      const found = typeof message.content === "string" ? INJECTION.exec(message.content) : null;
+      if (found !== null) return found[0];
+    }
+    return "no module injection reached the prompt";
+  });
   const problems: string[] = [];
-  const hub = new Hub({
-    services: selftestServices(store, llm, systemClock, (_room, text) => {
+  const { hub } = composeHub({
+    // The after-turn lanes and the fold would each need answers of their own from the script.
+    settings: loadSettings({ TRPG_SCRIBE__ENABLED: "false", TRPG_DIRECTOR__ENABLED: "false", TRPG_CHRONICLE__ENABLED: "false" }),
+    store,
+    models: { keeper: llm, npc: llm, scribe: llm, director: llm, memory: llm },
+    contextWindow: 200_000,
+    clock: systemClock,
+    report: (_room, text) => {
       problems.push(text);
-    }),
-    env: selftestEnvironment(),
-    commands: (modules) => new CommandRegistry({ modules }),
-    runTurn: selftestTurn(),
-    recordPlayerAction: () => ({ ok: true }),
-    defaultLocale: "en",
-    review: REVIEW_OFF,
-    lanes: LANES_OFF,
-    kitFor: () => null,
+    },
     spawnWorker: () => spawnWorker(workerEntry),
     modulesFor: () => [modulePath],
-    workerTimeoutMs: 5000,
+    review: REVIEW_OFF,
   });
   const keystore = new Keystore();
   keystore.add("selftest-key", { room: "selftest", name: "Tester", role: "player" });

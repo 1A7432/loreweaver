@@ -332,6 +332,32 @@ describe("narrate now", () => {
     expect(b.keeper.calls[1]?.input.action).toBe(b.keeper.calls[0]?.input.action);
   });
 
+  test("no facts turn when a line is already waiting: that line's turn is next and carries the facts", async () => {
+    const b = setup();
+    const ada = b.join(KEYS.ada);
+    const gate = Promise.withResolvers<void>();
+    b.keeper.next(
+      async (call) => {
+        await gate.promise;
+        return marking(call);
+      },
+      marking,
+      marking,
+    );
+    ada.receive({ type: "input", rid: "1", text: "pull the lever" });
+    await Promise.resolve();
+    // Accepted, and numbered, while the first turn is still running.
+    ada.receive({ type: "input", rid: "2", text: "and then run" });
+    gate.resolve();
+    await b.settled();
+    expect(b.keeper.calls.map((call) => [call.input.work, call.input.text, call.context.turn])).toEqual([
+      ["action", "pull the lever", 1],
+      ["action", "and then run", 2],
+      // The second line asked too, and nothing waits behind it.
+      ["facts_turn", "", 3],
+    ]);
+  });
+
   test("off when the room switched it off", async () => {
     const b = setup();
     b.store.writer(ROOM).statePut(NARRATE_NOW_SETTING, false);

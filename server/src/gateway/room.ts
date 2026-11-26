@@ -180,6 +180,8 @@ export class Room {
   readonly #actions = new WeakMap<RoomContext, string>();
   /** Turns in flight: aborted when the room's generation moves under them. */
   readonly #inFlight = new Set<AbortController>();
+  /** Lines accepted whose Keeper turn has not started yet. */
+  #waiting = 0;
 
   constructor(id: string, host: RoomHost) {
     this.id = id;
@@ -265,7 +267,7 @@ export class Room {
     const id = parsed?.id ?? (splitCommand(text)?.word.includes("/") === true ? (splitCommand(text)?.word ?? null) : null);
     if (id === null) {
       const accepted = this.#accept(member, text, reply);
-      if (accepted !== null) void this.#lock.run(() => this.#turnFor(accepted));
+      if (accepted !== null) this.#queueTurn(accepted);
       return;
     }
     this.#dispatch(member, id, (context) => registry.input(context, text, member.locale), reply);
@@ -316,6 +318,15 @@ export class Room {
     return { member, writer, action, text };
   }
 
+  /** Queue an accepted line's Keeper turn behind the lock. */
+  #queueTurn(accepted: Accepted): void {
+    this.#waiting++;
+    void this.#lock.run(() => {
+      this.#waiting--;
+      return this.#turnFor(accepted);
+    });
+  }
+
   /** The Keeper turn of an accepted line; runs under the lock. */
   async #turnFor(accepted: Accepted): Promise<void> {
     // Undone, reset or replaced while the line waited: there is nothing to answer.
@@ -347,7 +358,7 @@ export class Room {
       const accepted = this.#accept(member, input.text, reply);
       if (accepted === null) return;
       if (locked) await this.#turnFor(accepted);
-      else void this.#lock.run(() => this.#turnFor(accepted));
+      else this.#queueTurn(accepted);
       return;
     }
     const outcome = input.outcome;
@@ -434,7 +445,6 @@ export class Room {
     } finally {
       this.#inFlight.delete(controller);
     }
-    for (const problem of result.problems) this.#report(`turn ${context.turn}: ${problem}`);
     const current = context.writer.current();
     if (current && result.status !== "stale") {
       try {
@@ -465,6 +475,10 @@ export class Room {
       else context.writer.statePut(NARRATE_NOW, decision.state);
     }
     if (!decision.open || this.#muted()) return;
+    // "Now" means "without waiting for the next player action". When a line is already
+    // waiting for the lock, its turn is next and reads the same pending facts: an extra turn
+    // would only run ahead of a line that was accepted — and numbered — before it.
+    if (this.#waiting > 0) return;
     const writer = store.beginTurn(this.id);
     const facts = this.#contextFor(context.who, writer, `${action}:facts`);
     await this.#keeperTurn(facts, { work: "facts_turn", action, text: "", speaker }, false);
