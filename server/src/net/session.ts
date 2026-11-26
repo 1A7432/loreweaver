@@ -156,6 +156,10 @@ export class Session {
       send: (out) => {
         this.#connection.send(out);
       },
+      disconnect: () => {
+        this.#ended = true;
+        this.#connection.close();
+      },
     };
     const meta = room.meta;
     this.#connection.send({
@@ -167,6 +171,7 @@ export class Session {
       features: [],
       epoch: meta.epoch,
       head: meta.head,
+      first: room.first,
     });
     // Same generation: send what was missed. Another generation (or a first visit): the
     // client holds nothing valid — the welcome's epoch tells it so — and it gets the newest
@@ -177,6 +182,9 @@ export class Session {
     // Replay and join happen in one uninterrupted stretch (the store is synchronous),
     // so no live event can land between two replayed ones or be missed.
     for (const event of room.eventsAfter(after, RESUME_LIMIT)) this.#connection.send(eventFrame(event));
+    // A turn in progress is not in the log; a member who connects in the middle of one is told.
+    const answering = room.answering;
+    if (answering !== null) this.#connection.send({ type: "signal", kind: "turn", data: { status: "busy", actor: answering } });
     room.join(member);
     this.#joined = { room, member };
   }

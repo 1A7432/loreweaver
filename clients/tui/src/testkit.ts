@@ -324,6 +324,7 @@ export class FakeServer {
         features: [],
         epoch: this.epoch,
         head: this.#seq,
+        first: this.events[0]?.seq ?? 0,
       })
       // As the server does: what was missed in the same generation, never more than the newest 200.
       const oldest = Math.max(0, this.#seq - 200)

@@ -15,7 +15,7 @@ import {
   type SessionOptions, PAGE_LIMIT } from "loreweaver-protocol/v3";
 
 import { Session as ServerSession } from "../../src/net/session.ts";
-import { KEYS, ROOM, RoomBench } from "../gateway/room_bench.ts";
+import { KEYS, reply, ROOM, RoomBench } from "../gateway/room_bench.ts";
 
 const benches: RoomBench[] = [];
 afterEach(async () => {
@@ -440,4 +440,74 @@ test("a page over the protocol's limit is refused, not cut to it", async () => {
   expect(over).toMatchObject({ ok: false, error: { code: "invalid_params" } });
   const within = await done(b, ada.session.call("log.page", { before: 10, limit: PAGE_LIMIT }));
   expect(within.ok).toBe(true);
+});
+
+// An import REPLACES the room: another log under another numbering. No event appended after
+// the imported history can tell a connected client that (the first version appended a
+// `reset`, which a client applies by clearing the very log it should load). The members'
+// connections are ended instead, and each comes back as after any dropped link.
+test("an import sends every member back to reconnect, and they come back holding the imported room", async () => {
+  const b = setup();
+  const ada = await join(b, KEYS.ada);
+  const root = await join(b, KEYS.root);
+  await done(b, ada.session.input("one"));
+  await done(b, ada.session.input("two"));
+  // An undo leaves a `rewind` marker in the log: the save then carries a marker of this life.
+  await done(b, root.session.runCommand("undo", {}));
+  const saved = await done(b, root.session.runCommand("save", { op: "export" }));
+  if (!saved.ok) throw new Error("export refused");
+  const before = serverLog(b).length;
+  expect(b.store.eventsAfter(ROOM, 0, 10_000).some((event) => event.kind === "rewind")).toBe(true);
+  await done(b, ada.session.input("after the save"));
+
+  // The admin who imports is answered first; then every member's link goes.
+  expect(await done(b, root.session.runCommand("save", { op: "import", bundle: saved.data }))).toMatchObject({ ok: true });
+  await settle(b);
+  for (const player of [ada, root]) {
+    expect(player.session.status).toBe("offline");
+    expect(player.session.canRedial).toBe(true);
+  }
+
+  // The imported log: the saved events renumbered after everything this room ever handed
+  // out, and WITHOUT the markers of its earlier life.
+  const stored = b.store.eventsAfter(ROOM, 0, 10_000);
+  expect(stored.some((event) => event.kind === "rewind" || event.kind === "reset")).toBe(false);
+  expect(stored.length).toBe(before - 1);
+
+  for (const player of [ada, root]) {
+    player.connect();
+    await settle(b);
+    const snapshot = player.session.getSnapshot();
+    expect(snapshot.status).toBe("online");
+    expect(snapshot.events as unknown[]).toEqual(serverLog(b));
+    // `head` is far above the number of events held; `first` is how the client knows it has them all.
+    expect(snapshot.complete).toBe(true);
+    expect(snapshot.welcome?.first).toBe(stored[0]?.seq);
+  }
+  expect(narratives(ada).map(([, text]) => text)).toEqual(["one", "Reply 1"]);
+});
+
+test("a member who connects in the middle of a turn is told one is running; the turn says busy once", async () => {
+  const b = setup();
+  const ada = await join(b, KEYS.ada);
+  const hold = Promise.withResolvers<void>();
+  b.keeper.next(async (call) => {
+    await hold.promise;
+    return reply(call, "at last");
+  });
+  const line = ada.session.input("a long one");
+  // The turn is held, and with it the room's lock: wait on the clock, not on the room.
+  await Bun.sleep(10);
+  expect(ada.session.getSnapshot().turn).toMatchObject({ status: "busy", actor: "Ada" });
+
+  const late = new Player(b, KEYS.bao);
+  late.connect();
+  await Bun.sleep(10);
+  expect(late.session.getSnapshot().turn).toMatchObject({ status: "busy", actor: "Ada" });
+
+  hold.resolve();
+  await done(b, line);
+  expect(late.session.getSnapshot().turn).toMatchObject({ status: "idle" });
+  const busy = (ada.received[0] ?? []).filter((frame) => frame.type === "signal" && frame.kind === "turn" && frame.data.status === "busy");
+  expect(busy.length).toBe(1);
 });

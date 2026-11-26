@@ -13,6 +13,7 @@ const welcome = {
   features: [],
   epoch: 1,
   head: 0,
+  first: 0,
 };
 
 const narrative = { type: "event", seq: 1, id: "e1", ts: 1, kind: "narrative", turn: 1, data: { speaker: "kp", text: "Hi", format: "markdown" } };

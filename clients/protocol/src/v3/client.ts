@@ -577,7 +577,9 @@ export class Session {
     // afresh. So is one that claims more than the room ever handed out.
     if (this.#epoch !== null && (frame.epoch !== this.#epoch || frame.head < this.#lastSeq)) this.#discardLog();
     if (this.#epoch === null || (this.#events.length === 0 && this.#lastSeq === 0)) {
-      this.#complete = frame.head <= RESUME_LIMIT;
+      // A first visit is sent the events numbered above `head - RESUME_LIMIT`: that is the
+      // whole log when the room's oldest entry is among them, or when it has none.
+      this.#complete = frame.first === 0 || frame.first > frame.head - RESUME_LIMIT;
     } else if (frame.head - this.#lastSeq > RESUME_LIMIT) {
       // Only the newest stretch is replayed: what lies between is missing.
       const before = frame.head - RESUME_LIMIT + 1;

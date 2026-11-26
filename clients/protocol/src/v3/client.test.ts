@@ -53,8 +53,9 @@ function make(extra: Partial<SessionOptions> = {}): { session: Session; clock: M
   return { session, clock };
 }
 
-function welcome(epoch = 1, head = 0, role = "player"): Record<string, unknown> {
-  return { type: "welcome", protocol: "3.0", server: { name: "lw", version: "3" }, room: { id: "table", locale: "en" }, you: { id: "m1", name: "Ada", role }, features: [], epoch, head };
+/** A welcome of a room whose log, when it has one, starts at 1 (`first`): nothing was ever reset away. */
+function welcome(epoch = 1, head = 0, role = "player", first = head === 0 ? 0 : 1): Record<string, unknown> {
+  return { type: "welcome", protocol: "3.0", server: { name: "lw", version: "3" }, room: { id: "table", locale: "en" }, you: { id: "m1", name: "Ada", role }, features: [], epoch, head, first };
 }
 
 function narrative(seq: number, id = `e${seq}`, text = `line ${seq}`): EventFrame {
@@ -509,4 +510,18 @@ test("a superseded attachment is deaf", () => {
 
 test("stripControlChars is re-exported from the v3 entry", () => {
   expect(stripControlChars("a\x1b]0;x\x07b")).toBe("a]0;xb");
+});
+
+test("after a reset the room's head stays high, but a first visit knows from `first` that it holds the whole log", () => {
+  // 900 events were handed out and reset away; the log now holds two, numbered 901 and 902.
+  const fresh = make();
+  fresh.session.attach(new FakeLink());
+  fresh.session.receive(welcome(3, 902, "player", 901));
+  expect(fresh.session.getSnapshot().complete).toBe(true);
+
+  // The same head with history reaching back before the replayed stretch: not complete.
+  const other = make();
+  other.session.attach(new FakeLink());
+  other.session.receive(welcome(3, 902, "player", 10));
+  expect(other.session.getSnapshot().complete).toBe(false);
 });

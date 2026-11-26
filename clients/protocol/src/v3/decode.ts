@@ -369,7 +369,8 @@ function welcome(raw: Raw): WelcomeFrame | null {
     !oneOf(you.role, ROLES) ||
     !shortList(raw.features) ||
     !int(raw.epoch) ||
-    !count(raw.head)
+    !count(raw.head) ||
+    !count(raw.first)
   ) {
     return null;
   }
@@ -382,6 +383,7 @@ function welcome(raw: Raw): WelcomeFrame | null {
     features: [...raw.features],
     epoch: raw.epoch,
     head: raw.head,
+    first: raw.first,
   };
 }
 

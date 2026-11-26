@@ -113,7 +113,7 @@ Server to client:
 
 | `type` | fields | purpose |
 |---|---|---|
-| `welcome` | `protocol`, `server {name, version}`, `room {id, locale}`, `you {id, name, role}`, `features`, `epoch`, `head` | The answer to `hello`. |
+| `welcome` | `protocol`, `server {name, version}`, `room {id, locale}`, `you {id, name, role}`, `features`, `epoch`, `head`, `first` | The answer to `hello`. |
 | `event` | `seq`, `id`, `ts`, `kind`, `turn?`, `data` | One entry of the room's log, to every member, in `seq` order. |
 | `signal` | `kind`, `data` | Ephemeral: never logged, never replayed. |
 | `view` | `name`, `rev`, `at`, `data` | The current value of a view this connection subscribed to. |
@@ -161,7 +161,7 @@ On success the server sends, in this order and with nothing in between:
 3. from then on, live traffic.
 
 ```json
-{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2}
+{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2,"first":1}
 ```
 
 | field | meaning |
@@ -174,11 +174,13 @@ On success the server sends, in this order and with nothing in between:
 | `features` | What the server offers beyond the protocol. 3.0 servers send `[]`. |
 | `epoch` | The room's generation now. |
 | `head` | The highest `seq` the room has handed out. |
+| `first` | The `seq` of the OLDEST event the room still holds (0 when its log is empty). `head` never goes back — not after a reset, not after an undo — so it does not say how much history exists; `first` does. |
 
 Replay and join happen in one uninterrupted step on the server, so no live event can fall
-between two replayed ones or be missed. The replay carries events only: no signals and no
-views. A client that reconnects during a Keeper turn does not learn that a turn is running
-until the next `turn` signal.
+between two replayed ones or be missed. The replay carries events and no views. When a Keeper
+turn is running at that moment the server follows the replay with one `turn` signal
+(`busy`, with the actor), so a client that connects in the middle of a turn knows; when none
+is running nothing is sent, and a client starts in the idle state.
 
 ### 4.3 After the welcome
 
@@ -429,7 +431,12 @@ schema its module declared.
   scope is `reset_scope_mismatch`.
 - **`save`** (admin): `{"op":"export"}` answers the whole room as a bundle in `data`, to the
   caller alone (it holds every secret of the room). `{"op":"import","bundle":{…}}` replaces the
-  room with a bundle; the table receives a `reset` event with scope `all`.
+  room with a bundle. An import replaces the room — another log under another numbering —
+  so no event announces it: after answering the admin, the server ENDS the connection of every
+  member of the room (no `error` frame; the link simply closes). Each client redials as after
+  any dropped link; the `welcome` then names a new `epoch`, the client discards the log it
+  held, and the replay hands it the room as it now is. A bundle's own `rewind` and `reset`
+  events are not imported: they are markers of the room's earlier life.
 
 ### 6.8 The engine's commands
 
@@ -551,7 +558,8 @@ The reference client (`client.ts`) does this, and a client that keeps a log shou
 
 1. **On `welcome`:** if you hold a log built under another epoch, or one whose newest `seq` is
    above `welcome.head`, discard it. If you hold none, the log is complete when
-   `head ≤ 200`. If you hold one and `head − lastSeq > 200`, record a gap
+   `first` is 0 (the room has no events) or `first > head − 200` (its oldest event is within
+   the replayed stretch). If you hold one and `head − lastSeq > 200`, record a gap
    `(lastSeq, head − 199)`.
 2. **On each event:** insert it by `seq`, ignoring a `seq` you already hold. Apply `rewind` and
    `reset` as described below. Remember the highest `seq` seen, **including events of kinds you
@@ -723,7 +731,7 @@ Streaming text of the Keeper's reply.
 
 `busy` means the Keeper is working on a turn; `actor` is the name of whoever's line it answers.
 `idle` means it finished (replied, failed or was cancelled). Treat `busy` as a state, not an
-event: it may be sent more than once for one turn. The protocol also defines two optional
+event. A member who connects while a turn is running is sent `busy` right after the replay. The protocol also defines two optional
 `busy` fields, `activity` (`reading`\|`dice`\|`cast`\|`bookkeeping`, presentation only: an
 unknown value is ignored) and `round` (an integer); the 3.0 server does not send them.
 
@@ -1099,7 +1107,7 @@ said something and the Keeper answered.
 this is the whole log).
 
 ```json
-{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2}
+{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2,"first":1}
 {"type":"event","seq":1,"id":"2c1f8e7a-6b5d-4c3e-9f2a-1b0c9d8e7f6a","ts":1764240000001,"kind":"narrative","turn":1,"data":{"speaker":"player","name":"Bao","member":"m:b40a5aaa35ea","text":"I wait by the quay.","format":"plain"}}
 {"type":"event","seq":2,"id":"7d6e5f4a-3b2c-4d1e-8f9a-0b1c2d3e4f5a","ts":1764240002410,"kind":"narrative","turn":1,"data":{"speaker":"kp","text":"The fog thickens.","format":"markdown"}}
 ```

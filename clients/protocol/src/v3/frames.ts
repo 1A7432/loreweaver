@@ -60,6 +60,12 @@ export interface WelcomeFrame {
   epoch: number;
   /** The newest log entry's `seq` (0 for an empty log). */
   head: number;
+  /**
+   * The OLDEST log entry the room still holds (0 for an empty log). `head` never goes back —
+   * not after a reset, not after an undo — so it cannot say how much history there is;
+   * this can: a client holds the whole log once its oldest entry is this one.
+   */
+  first: number;
 }
 
 export interface NarrativeData {

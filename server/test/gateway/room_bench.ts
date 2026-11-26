@@ -92,6 +92,8 @@ export class Keeper {
   readonly run = async (context: RoomContext, input: TurnInput, ports: TurnPorts): Promise<TurnResult> => {
     const call = { context, input, ports };
     this.calls.push(call);
+    // As the engine's first step does: one `busy` per turn, the engine's (the room sends none).
+    ports.signal("turn", { status: "busy", actor: input.speaker });
     const script = this.#scripts.shift();
     return script === undefined ? reply(call, `Reply ${this.calls.length}`) : script(call);
   };

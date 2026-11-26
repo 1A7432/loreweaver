@@ -100,6 +100,11 @@ export interface Member {
   /** The member's own language: results and views addressed to them are in it. */
   readonly locale: string;
   send(frame: ServerFrame): void;
+  /**
+   * End this connection without ending the member's session for good: the client comes
+   * back as after any dropped link. Used when the room was REPLACED under it (an import).
+   */
+  disconnect?(): void;
 }
 
 /**
@@ -189,6 +194,8 @@ export class Room {
   readonly #inFlight = new Set<AbortController>();
   /** Lines accepted whose Keeper turn has not started yet. */
   #waiting = 0;
+  /** Whose line the Keeper is answering right now; null between turns. */
+  #answering: string | null = null;
 
   constructor(id: string, host: RoomHost) {
     this.id = id;
@@ -224,6 +231,16 @@ export class Room {
   reviewFactFor(context: RoomContext): TextReview {
     const unfiltered = this.#unfiltered();
     return (text) => reviewFact(this.#host.review, { unfiltered }, text, context.locale);
+  }
+
+  /** The oldest event number the log still holds; 0 when it is empty. */
+  get first(): number {
+    return this.#host.services.store.firstSeq(this.id);
+  }
+
+  /** Whose line the Keeper is answering right now, or null: what a member joining mid-turn is told. */
+  get answering(): string | null {
+    return this.#answering;
   }
 
   eventsAfter(after: number, limit: number): StoredEvent[] {
@@ -376,6 +393,8 @@ export class Room {
     if (outcome.lifecycle !== undefined) {
       await this.#afterLifecycle(outcome);
       reply(this.#answer(outcome));
+      // After the answer, so the admin who imported hears that it worked before the link goes.
+      if (outcome.lifecycle.kind === "import") for (const each of [...this.#members.values()]) each.disconnect?.();
       return;
     }
     const published = this.#publishOutcome(writer, outcome);
@@ -442,13 +461,19 @@ export class Room {
     // Model requests of turns of the old generation can stop now: nothing they produce lands.
     for (const controller of this.#inFlight) controller.abort();
     const fresh = this.#host.services.store.writer(this.id);
-    const events: readonly CommandEvent[] =
-      // An import announces itself as a reset of everything: the clients' copy of the log is void.
-      lifecycle.kind === "import" && outcome.events.length === 0 ? [{ kind: "reset", data: { scope: "all", epoch: lifecycle.epoch } }] : outcome.events;
-    this.#publishOutcome(fresh, { ...outcome, events });
+    this.#publishOutcome(fresh, outcome);
     this.#moduleViews = null;
     this.#moduleClock = null;
     this.#host.reloadWorker(this.id);
+    if (lifecycle.kind === "import") {
+      // The room was REPLACED: another log, another numbering. No event can say that to a
+      // client holding the old one (an appended `reset` would follow the imported history
+      // and clear it). Each member's connection is ended instead, and they come back as
+      // after any dropped link: the welcome's new generation makes the client discard what
+      // it held, and the replay hands it the room as it is now. (The caller does it, after
+      // answering the admin who asked.)
+      return;
+    }
     await this.refreshViews();
   }
 
@@ -457,7 +482,9 @@ export class Room {
   async #keeperTurn(context: RoomContext, input: Omit<TurnInput, "signal">, decide = true): Promise<void> {
     const controller = new AbortController();
     this.#inFlight.add(controller);
-    this.#signal(context.writer, "turn", { status: "busy", actor: input.speaker });
+    // The engine sends `busy` itself as its first step (one per turn, not two); the room
+    // remembers who is being answered, for a member who connects mid-turn.
+    this.#answering = input.speaker;
     let result: TurnResult;
     try {
       result = await runAsWork(context.writer, () => this.#host.runTurn(context, { ...input, signal: controller.signal }, this.#ports(context), this.#host.env));
@@ -470,6 +497,7 @@ export class Room {
       }
     } finally {
       this.#inFlight.delete(controller);
+      this.#answering = null;
     }
     const current = context.writer.current();
     if (current && result.status !== "stale") {

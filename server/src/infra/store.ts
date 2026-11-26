@@ -78,6 +78,8 @@ import type { Database, SqlValue, Statement } from "./runtime/sqlite.ts";
 
 /** How many turns back an undo may reach unless the operator sets otherwise. */
 export const DEFAULT_UNDO_DEPTH = 4;
+/** Event kinds that announce a change of generation; they do not travel in an import. */
+const GENERATION_MARKERS: ReadonlySet<string> = new Set(["rewind", "reset"]);
 
 export interface RoomMeta {
   readonly epoch: number;
@@ -305,6 +307,7 @@ function prepare(db: Database) {
     cutLaterTurns: q("DELETE FROM events WHERE room = ? AND turn > ?"),
     cutTurnlessAfter: q("DELETE FROM events WHERE room = ? AND turn IS NULL AND seq > ?"),
     seqsAfter: q<{ seq: number }>("SELECT seq FROM events WHERE room = ? AND seq > ? ORDER BY seq ASC"),
+    firstSeq: q<{ seq: number | null }>("SELECT MIN(seq) AS seq FROM events WHERE room = ?"),
     eventsDeleteRoom: q("DELETE FROM events WHERE room = ?"),
     docGet: q<DocumentRow>(`SELECT ${docColumns} FROM documents WHERE room = ? AND type = ? AND id = ?`),
     docList: q<DocumentRow>(`SELECT ${docColumns} FROM documents WHERE room = ? ORDER BY type ASC, seq ASC`),
@@ -395,6 +398,11 @@ export class Store {
   undoFloor(room: string): number {
     const record = this.#record(room);
     return Math.max(record.floor, record.turn - this.#depth);
+  }
+
+  /** The oldest event number the room's log still holds; 0 when it is empty. */
+  firstSeq(room: string): number {
+    return this.#q.firstSeq.get(room)?.seq ?? 0;
   }
 
   /** Up to `limit` events after `after`, oldest first. */
@@ -653,6 +661,10 @@ export class Store {
       for (const entry of parsed.modules) this.#q.modulePut.run(room, entry.module, entry.snapshot);
       let head = record.head;
       for (const event of parsed.events) {
+        // A bundle's `rewind` and `reset` entries are markers of the room's EARLIER life:
+        // they name event numbers of a numbering this import replaces, and a client replaying
+        // one would cut its log by them. What they did is already in the bundle's log.
+        if (GENERATION_MARKERS.has(event.kind)) continue;
         head += 1;
         this.#q.eventInsert.run(room, head, event.id, event.ts, event.kind, event.turn ?? null, JSON.stringify(event.data));
       }
