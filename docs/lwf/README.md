@@ -23,7 +23,7 @@ and a format with several is a standard.
 | [formats/cards.md](formats/cards.md) | SillyTavern V2/V3 cards, the native `*.lorecard.json` bundle, the world/character split (拆卡), lore overlays, information isolation | **2.0 (stable)** |
 | [formats/rulepacks.md](formats/rulepacks.md) | Rule systems as data: check resolution, sheets, derived stats, subsystems, the rules-script lane, `extends:` | **2.0 (stable)** |
 | [formats/skills-hooks.md](formats/skills-hooks.md) | `SKILL.md` skills, the `hooks.js` event API (2.x only: a 3.0 pack's `hooks.js` is not run), templates and macros | **2.0 (stable)** |
-| [formats/panels.md](formats/panels.md) | Module UI panels: `ui/panels.yaml`, templates, the panel wire contract, the client sandbox | **1.0 (stable)** |
+| [formats/panels.md](formats/panels.md) | Panels: `ui/panels.yaml`, templates bound to views, pages and their fallbacks, instantiation, the client sandbox | **3.0 (draft)** — supersedes 1.0 |
 | Wire protocol | Client↔server frames. A constituent standard whose canonical home is the engine's [`docs/protocol.md`](../protocol.md); types on npm as [`loreweaver-protocol`](https://www.npmjs.com/package/loreweaver-protocol) | **2.5 (stable)** |
 
 LWF 1.0 (2026-07-30) was a draft that was never published. 2.0 supersedes it; see

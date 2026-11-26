@@ -59,7 +59,7 @@ describe("RoomViews over the real built-ins", () => {
     const room = seededRoom();
     const views = new RoomViews();
     views.open("c1", room.viewer(EVE));
-    expect(views.list("c1").map((listing) => listing.name)).toEqual(["me", "party", "scene", "variables", "characters", "commands", "room", "usage", "packs"]);
+    expect(views.list("c1").map((listing) => listing.name)).toEqual(["me", "party", "scene", "variables", "characters", "commands", "room", "usage", "packs", "panels"]);
     expect(views.list("c1").every((listing) => typeof listing.schema === "object")).toBe(true);
   });
 

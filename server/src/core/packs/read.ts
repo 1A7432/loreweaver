@@ -21,6 +21,9 @@ import { AUDIO_MIMES, DEFAULT_MEDIA_LIMITS, IMAGE_MIMES, isAudioMime, isImageMim
 import { matchesSignature } from "../../infra/media/signatures.ts";
 import { normalisedPath } from "../../infra/zip.ts";
 import { CardError, MAX_LORECARD_FILE_BYTES, parseCard, splitCard, type CardMachinery } from "../card/index.ts";
+import { MAX_PAGE_BYTES, MAX_PANELS_PER_PACK } from "loreweaver-protocol/v3";
+
+import { MAX_PANELS_FILE_BYTES, parsePanels, type PanelSpec } from "../panels/index.ts";
 import { parsePresentationKit, type KitProblemCode, type PresentationKit } from "../presentation/kit.ts";
 import { builtInBase, compileRulePack, RulePackError, type RulePack } from "../rulepacks/index.ts";
 import { parseSkillDirectory, type Skill, type SkillWarning } from "../skills/index.ts";
@@ -111,6 +114,15 @@ export interface PackKit extends PackFile {
   readonly kit: PresentationKit;
 }
 
+/** One panel a pack ships: as its panels file declares it, and its page's HTML file. */
+export interface PackPanel {
+  /** The panels file it is declared in. */
+  readonly file: string;
+  readonly spec: PanelSpec;
+  /** A page panel's HTML; null for a template. */
+  readonly page: PackFile | null;
+}
+
 export type IgnoredReason =
   /** A 2.x `hooks.js`: 3.0 does not run pack scripts outside modules. */
   | "hooks_js"
@@ -131,6 +143,8 @@ export interface Pack {
   readonly skills: readonly PackSkill[];
   readonly cards: readonly PackCard[];
   readonly presentation: PackKit | null;
+  /** Its panels, in file order then declaration order. */
+  readonly panels: readonly PackPanel[];
   /** Declared assets, then the kit's pictures and sounds the manifest did not list. */
   readonly assets: readonly PackAsset[];
   /** Every file the pack installs, `pack.yaml` first, then by path. */
@@ -168,6 +182,17 @@ export type PackCode =
   | "kit_asset_missing"
   /** A kit `ref` that is not an image, or a cue `asset` that is not a sound. */
   | "kit_asset_type"
+  /** A panels file that does not parse (`detail`: its problem code and field). */
+  | "panels_invalid"
+  | "panels_too_large"
+  /** Two panels of one id across the pack's panels files, or more than 16 in all. */
+  | "panels_duplicate"
+  | "panels_too_many"
+  /** A picture a panel names is not in the pack, or is not an image. */
+  | "panel_asset_missing"
+  | "panel_asset_type"
+  /** A page's HTML over its size limit. */
+  | "page_too_large"
   /** An asset whose extension is not an image or sound type. */
   | "asset_type"
   /** An asset whose declared media type differs from its extension's. */
@@ -389,20 +414,66 @@ export function readPack(entries: readonly PackEntry[]): PackRead {
     }
   }
 
-  // Assets: the declared ones, then the kit's that the manifest did not list.
+  // Panels: each file parses; ids are unique across the pack; a page's HTML is read and
+  // digested; the pictures panels name join the assets like the kit's.
+  const panels: PackPanel[] = [];
+  const panelImages = new Set<string>();
+  const panelIds = new Set<string>();
+  for (const file of manifest.panels) {
+    const bytes = take(file);
+    if (bytes === undefined) continue;
+    if (bytes.length > MAX_PANELS_FILE_BYTES) {
+      problems.push(problem("panels_too_large", file));
+      continue;
+    }
+    const text = textOf(file, bytes);
+    if (text === null) continue;
+    const parsedPanels = parsePanels(text);
+    if (!parsedPanels.ok) {
+      for (const item of parsedPanels.problems) problems.push(problem("panels_invalid", file, `${item.code}@${item.path}${item.detail === undefined ? "" : `:${item.detail}`}`));
+      continue;
+    }
+    for (const spec of parsedPanels.panels) {
+      if (panelIds.has(spec.id)) {
+        problems.push(problem("panels_duplicate", file, spec.id));
+        continue;
+      }
+      panelIds.add(spec.id);
+      for (const image of spec.images) {
+        if (kitAssets.get(image) === "audio") problems.push(problem("panel_asset_type", image));
+        else if (!kitAssets.has(image)) panelImages.add(image);
+      }
+      let page: PackFile | null = null;
+      if (spec.entry !== null) {
+        const html = take(spec.entry);
+        if (html === undefined) continue;
+        if (html.length === 0 || html.length > MAX_PAGE_BYTES) {
+          problems.push(problem("page_too_large", spec.entry));
+          continue;
+        }
+        if (textOf(spec.entry, html) === null) continue;
+        page = fileOf(spec.entry, html);
+      }
+      panels.push({ file, spec, page });
+    }
+  }
+  if (panelIds.size > MAX_PANELS_PER_PACK) problems.push(problem("panels_too_many", manifest.panels[0] ?? MANIFEST_FILE));
+
+  // Assets: the declared ones, then the kit's and the panels' that the manifest did not list.
   const assets: PackAsset[] = [];
   const declared = new Map(manifest.assets.map((asset) => [asset.path, asset]));
-  const assetPaths = [...manifest.assets.map((asset) => asset.path), ...[...kitAssets.keys()].filter((path) => !declared.has(path))];
+  const assetPaths = [...manifest.assets.map((asset) => asset.path), ...[...kitAssets.keys(), ...panelImages].filter((path) => !declared.has(path))];
   for (const path of assetPaths) {
     const record = declared.get(path);
-    const wanted = kitAssets.get(path);
+    const wanted = kitAssets.get(path) ?? (panelImages.has(path) ? "image" : undefined);
+    const byPanel = !kitAssets.has(path) && panelImages.has(path);
     if (!byPath.has(path)) {
-      problems.push(problem(record === undefined ? "kit_asset_missing" : "missing_file", path));
+      problems.push(problem(record !== undefined ? "missing_file" : byPanel ? "panel_asset_missing" : "kit_asset_missing", path));
       continue;
     }
     const mime = assetMime(path);
     if (mime === null || !(isImageMime(mime) || isAudioMime(mime))) {
-      problems.push(problem(wanted === undefined ? "asset_type" : "kit_asset_type", path));
+      problems.push(problem(wanted === undefined ? "asset_type" : byPanel ? "panel_asset_type" : "kit_asset_type", path));
       continue;
     }
     if (record?.mime !== null && record?.mime !== undefined && record.mime !== mime) {
@@ -410,7 +481,7 @@ export function readPack(entries: readonly PackEntry[]): PackRead {
       continue;
     }
     if ((wanted === "image" && !isImageMime(mime)) || (wanted === "audio" && !isAudioMime(mime))) {
-      problems.push(problem("kit_asset_type", path, mime));
+      problems.push(problem(byPanel ? "panel_asset_type" : "kit_asset_type", path, mime));
       continue;
     }
     const bytes = take(path) as Uint8Array;
@@ -444,5 +515,5 @@ export function readPack(entries: readonly PackEntry[]): PackRead {
   if (problems.length > 0) return { ok: false, problems };
   const [manifestFile, ...rest] = files;
   const sortedFiles = [manifestFile as PackFile, ...rest.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))];
-  return { ok: true, pack: { manifest, modules, ruleSystems, skills, cards, presentation, assets, files: sortedFiles, ignored, skillWarnings } };
+  return { ok: true, pack: { manifest, modules, ruleSystems, skills, cards, presentation, panels, assets, files: sortedFiles, ignored, skillWarnings } };
 }

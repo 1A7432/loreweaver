@@ -4,7 +4,9 @@ import { describe, expect, test } from "bun:test";
 
 import { readPack, trustCard, type PackProblem } from "../../src/core/packs/index.ts";
 import { jsonFile, plainCard, worldCard } from "../gateway/card_files.ts";
-import { KIT_YAML, manifestYaml, packEntries, text } from "./fixture.ts";
+import { MAX_PAGE_BYTES } from "loreweaver-protocol/v3";
+
+import { KIT_YAML, manifestYaml, packEntries, PAGE_HTML, PANELS_YAML, text } from "./fixture.ts";
 
 function problems(entries: Parameters<typeof readPack>[0]): PackProblem[] {
   const read = readPack(entries);
@@ -146,4 +148,51 @@ test("the trust card says what installing means", () => {
   expect(card.files.count).toBe(10);
   // Plain data: it survives JSON unchanged.
   expect(JSON.parse(JSON.stringify(card))).toEqual(card);
+});
+
+describe("panels", () => {
+  const WITH_PANELS = manifestYaml({ panels: true });
+
+  test("a template panel and a page: parsed, the page read and digested, the chart an asset", () => {
+    const read = readPack(packEntries({}, WITH_PANELS));
+    if (!read.ok) throw new Error(JSON.stringify(read.problems));
+    expect(read.pack.panels.map((panel) => [panel.file, panel.spec.id, panel.spec.kind, panel.page?.path ?? null])).toEqual([
+      ["ui/panels.yaml", "tide", "template", null],
+      ["ui/panels.yaml", "ledger", "template", null],
+      ["ui/panels.yaml", "chart", "page", "ui/chart.html"],
+      ["ui/panels.yaml", "notes", "page", "ui/notes.html"],
+    ]);
+    expect(read.pack.panels[2]?.page?.size).toBe(PAGE_HTML.length);
+    // The picture a panel names joins the assets, listed or not.
+    expect(read.pack.assets.map((asset) => asset.path)).toContain("art/chart.png");
+    expect(read.pack.files.map((file) => file.path)).toEqual(expect.arrayContaining(["ui/panels.yaml", "ui/chart.html", "art/chart.png"]));
+    const card = trustCard(read.pack);
+    expect(card.panels).toEqual([
+      { id: "tide", kind: "template", audience: "all", views: ["me", "tally/tide"], page: null },
+      { id: "ledger", kind: "template", audience: "admin", views: ["variables"], page: null },
+      { id: "chart", kind: "page", audience: "all", views: ["tally/tide"], page: { path: "ui/chart.html", bytes: PAGE_HTML.length, sha256: read.pack.panels[2]?.page?.sha256 ?? "" } },
+      { id: "notes", kind: "page", audience: "admin", views: ["variables"], page: expect.objectContaining({ path: "ui/notes.html" }) },
+    ]);
+  });
+
+  test("refusals: a file that does not parse, a missing page or picture, a picture that is not one, a page too large", () => {
+    const codes = (replace: Readonly<Record<string, Uint8Array | null>>, manifest = WITH_PANELS) => problems(packEntries(replace, manifest)).map((item) => `${item.code}@${item.path}${item.detail === undefined ? "" : `:${item.detail}`}`);
+    expect(codes({ "ui/panels.yaml": text("panels:\n  - { id: p, title: P, slot: floor, blocks: [{ kind: divider }] }\n") })).toEqual(["panels_invalid@ui/panels.yaml:bad_field@panels.0.slot"]);
+    expect(codes({ "ui/chart.html": null })).toEqual(["missing_file@ui/chart.html"]);
+    expect(codes({ "art/chart.png": null })).toEqual(["panel_asset_missing@art/chart.png"]);
+    expect(codes({ "art/chart.png": text("not a png") })).toEqual(["asset_bad_signature@art/chart.png:image/png"]);
+    expect(codes({ "ui/chart.html": new Uint8Array(MAX_PAGE_BYTES + 1) })).toEqual(["page_too_large@ui/chart.html"]);
+    expect(codes({ "ui/panels.yaml": text(PANELS_YAML.replace("src: art/chart.png", "src: sound/bell.ogg")) })).toEqual(["panel_asset_type@sound/bell.ogg"]);
+    expect(codes({ "ui/panels.yaml": null })).toEqual(["missing_file@ui/panels.yaml"]);
+  });
+
+  test("ids are unique across the pack's panels files", () => {
+    const manifest = WITH_PANELS.replace("panels: [ui/panels.yaml]", "panels: [ui/panels.yaml, ui/more.yaml]");
+    const more = "panels:\n  - { id: tide, title: Again, slot: tray, blocks: [{ kind: divider }] }\n";
+    expect(problems(packEntries({ "ui/more.yaml": text(more) }, manifest))).toEqual([{ code: "panels_duplicate", path: "ui/more.yaml", detail: "tide" }]);
+  });
+
+  test("a page's HTML that the manifest does not name is not refused as a script, and a page's script file is", () => {
+    expect(problems(packEntries({ "ui/chart.js": text("x") }, WITH_PANELS))).toEqual([{ code: "undeclared_script", path: "ui/chart.js" }]);
+  });
 });

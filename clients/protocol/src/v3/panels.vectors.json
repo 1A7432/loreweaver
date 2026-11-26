@@ -1,0 +1,8105 @@
+{
+ "_comment": [
+  "Shared vectors for panel template instantiation (protocol 3.0, docs/lwf/formats/panels.md).",
+  "Each case: `template` ({views, blocks}) instantiated against `views` (each view's data by view name)",
+  "must deep-equal `expect`. Every client implementation runs this table: `instantiate` in",
+  "loreweaver-protocol/v3 does (panels.test.ts), and the server checks its condition evaluator",
+  "against the same rows (server/test/core/panels_conditions.test.ts)."
+ ],
+ "cases": [
+  {
+   "id": "divider",
+   "why": "nothing to resolve, nothing to hide: a divider always survives",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "divider"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "divider"
+    }
+   ]
+  },
+  {
+   "id": "meter-binds-scalars",
+   "why": "the ordinary bound gauge: value and bounds read from a built-in view",
+   "template": {
+    "views": [
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "meter",
+      "label": "HP",
+      "value": {
+       "$view": "me.character.resources.hp.value"
+      },
+      "min": 0,
+      "max": {
+       "$view": "me.character.resources.hp.max"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "meter",
+     "label": "HP",
+     "value": 9,
+     "min": 0,
+     "max": 12
+    }
+   ]
+  },
+  {
+   "id": "module-view-binding",
+   "why": "a module view is read under the handle the panel declared for it",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "meter",
+      "label": "Tide",
+      "value": {
+       "$view": "tide.level"
+      },
+      "min": 0,
+      "max": {
+       "$view": "tide.max"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Phase",
+      "value": {
+       "$view": "tide.phase"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "meter",
+     "label": "Tide",
+     "value": 4,
+     "min": 0,
+     "max": 8
+    },
+    {
+     "kind": "stat",
+     "label": "Phase",
+     "value": "ebb"
+    }
+   ]
+  },
+  {
+   "id": "missing-view-drops-the-block",
+   "why": "a view the client does not hold is absent: the block bound to it is not drawn, its neighbours are",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Phase",
+      "value": {
+       "$view": "tide.phase"
+      }
+     },
+     {
+      "kind": "text",
+      "text": "The harbor."
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "The harbor."
+    }
+   ]
+  },
+  {
+   "id": "missing-path-drops-the-block",
+   "why": "a path that names nothing in the view is a miss, and a miss in a required field drops the block",
+   "template": {
+    "views": [
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Luck",
+      "value": {
+       "$view": "me.character.resources.luck.value"
+      }
+     },
+     {
+      "kind": "divider"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "divider"
+    }
+   ]
+  },
+  {
+   "id": "undeclared-handle-is-a-miss",
+   "why": "a path may only start with a handle the template declares",
+   "template": {
+    "views": [
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Phase",
+      "value": {
+       "$view": "tide.phase"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "nested-path-and-index",
+   "why": "records by property, lists by index or by key — `id`, then `key`",
+   "template": {
+    "views": [
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "First",
+      "value": {
+       "$view": "me.character.resources.0.label"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Str",
+      "value": {
+       "$view": "me.character.attributes.STR.value"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "力量",
+      "value": {
+       "$view": "me.character.attributes.力量.value"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Status",
+      "value": {
+       "$view": "me.character.status.0"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "First",
+     "value": "HP"
+    },
+    {
+     "kind": "stat",
+     "label": "Str",
+     "value": 50
+    },
+    {
+     "kind": "stat",
+     "label": "力量",
+     "value": 60
+    },
+    {
+     "kind": "stat",
+     "label": "Status",
+     "value": "poisoned"
+    }
+   ]
+  },
+  {
+   "id": "index-past-the-end-is-a-miss",
+   "why": "an index the list does not reach resolves to nothing",
+   "template": {
+    "views": [
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Third",
+      "value": {
+       "$view": "me.character.resources.2.label"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "a-record-is-not-a-value",
+   "why": "a field bound to a list or a record has nothing to show",
+   "template": {
+    "views": [
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Char",
+      "value": {
+       "$view": "me.character"
+      }
+     },
+     {
+      "kind": "text",
+      "text": {
+       "$view": "me.character.status"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "meter-max-not-greater-than-min",
+   "why": "a zero-width gauge cannot be drawn, so it is not sent",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "meter",
+      "label": "X",
+      "value": 1,
+      "min": 5,
+      "max": 5
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "meter-value-that-is-not-a-number",
+   "why": "a gauge bound to text resolves to nothing, never to a guess",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "meter",
+      "label": "X",
+      "value": {
+       "$view": "tide.phase"
+      },
+      "min": 0,
+      "max": 10
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "stat-keeps-its-type",
+   "why": "a stat's value keeps its TYPE: 7 is not '7' and true is not 'true'",
+   "template": {
+    "views": [
+     {
+      "as": "vars",
+      "view": "variables"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Dread",
+      "value": {
+       "$view": "vars.module.dread.value"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Lamp",
+      "value": {
+       "$view": "vars.module.lamp.value"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Mood",
+      "value": {
+       "$view": "vars.module.mood.valueLabel"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "Dread",
+     "value": 3
+    },
+    {
+     "kind": "stat",
+     "label": "Lamp",
+     "value": true
+    },
+    {
+     "kind": "stat",
+     "label": "Mood",
+     "value": "Calm"
+    }
+   ]
+  },
+  {
+   "id": "text-stringifies-numbers-and-booleans",
+   "why": "JavaScript's String(): one number type and lowercase booleans",
+   "template": {
+    "views": [
+     {
+      "as": "vars",
+      "view": "variables"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": {
+       "$view": "vars.module.dread.value"
+      }
+     },
+     {
+      "kind": "text",
+      "text": {
+       "$view": "vars.module.lamp.value"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "3"
+    },
+    {
+     "kind": "text",
+     "text": "true"
+    }
+   ]
+  },
+  {
+   "id": "stat-label-miss-drops-the-block",
+   "why": "a label is required — a stat with a value and no name says nothing",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": {
+       "$view": "tide.nothing"
+      },
+      "value": 1
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "badge-carries-a-valid-tone",
+   "why": "the happy path for the optional enum, bound",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "badge",
+      "label": "Storm",
+      "tone": "danger"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "badge",
+     "label": "Storm",
+     "tone": "danger"
+    }
+   ]
+  },
+  {
+   "id": "badge-invalid-tone-strips-the-tone-not-the-badge",
+   "why": "optional enums: drop the field, keep the block",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "badge",
+      "label": "Ebb",
+      "tone": {
+       "$view": "tide.phase"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "badge",
+     "label": "Ebb"
+    }
+   ]
+  },
+  {
+   "id": "text-style-passes-through",
+   "why": "`style` is authored, not bound",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "Hush.",
+      "style": "quote"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "Hush.",
+     "style": "quote"
+    }
+   ]
+  },
+  {
+   "id": "image-happy-path",
+   "why": "content-addressed; caption and alt are ordinary text fields",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "image",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mime": "image/png",
+      "size": 10,
+      "caption": {
+       "$view": "tide.phase"
+      },
+      "alt": "Harbor"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "image",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "mime": "image/png",
+     "size": 10,
+     "caption": "ebb",
+     "alt": "Harbor"
+    }
+   ]
+  },
+  {
+   "id": "image-without-a-hash-is-dropped",
+   "why": "a hashless picture would be a dead fetch",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "image",
+      "caption": "x"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "image-caption-miss-drops-the-caption",
+   "why": "caption/alt are optional: the picture still ships",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "image",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "caption": {
+       "$view": "tide.nothing"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "image",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ]
+  },
+  {
+   "id": "choices-happy-path",
+   "why": "each option runs a command, as the viewer, with its arguments",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "choices",
+      "prompt": "Sail?",
+      "options": [
+       {
+        "id": "go",
+        "label": "Cast off",
+        "command": "harbor/sail",
+        "args": {
+         "boat": "gull"
+        }
+       },
+       {
+        "id": "wait",
+        "label": {
+         "$view": "tide.phase"
+        },
+        "command": "harbor/wait"
+       }
+      ]
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "choices",
+     "prompt": "Sail?",
+     "options": [
+      {
+       "id": "go",
+       "label": "Cast off",
+       "command": "harbor/sail",
+       "args": {
+        "boat": "gull"
+       }
+      },
+      {
+       "id": "wait",
+       "label": "ebb",
+       "command": "harbor/wait"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "choices-drops-an-unusable-option-not-the-block",
+   "why": "an option whose label misses, or with no command, goes alone",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "choices",
+      "options": [
+       {
+        "id": "a",
+        "label": {
+         "$view": "tide.nothing"
+        },
+        "command": "x"
+       },
+       {
+        "id": "b",
+        "label": "B"
+       },
+       {
+        "id": "c",
+        "label": "C",
+        "command": "y"
+       }
+      ]
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "choices",
+     "options": [
+      {
+       "id": "c",
+       "label": "C",
+       "command": "y"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "choices-with-no-usable-option-is-dropped",
+   "why": "an empty chooser is worse than no chooser",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "choices",
+      "prompt": "?",
+      "options": [
+       {
+        "id": "a",
+        "label": {
+         "$view": "tide.nothing"
+        },
+        "command": "x"
+       }
+      ]
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "performance-kinds-happy-path",
+   "why": "the four performance templates with every field",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "letter",
+      "body": "Come.",
+      "from": "M.",
+      "to": "A.",
+      "date": {
+       "$view": "tide.phase"
+      }
+     },
+     {
+      "kind": "clipping",
+      "headline": "FIRE",
+      "body": "Mill burns.",
+      "source": "Gazette",
+      "date": "1923"
+     },
+     {
+      "kind": "title_card",
+      "title": "Act II",
+      "subtitle": "The Stacks",
+      "act": "II"
+     },
+     {
+      "kind": "map_pin",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "label": "Quay",
+      "x": {
+       "$view": "tide.x"
+      },
+      "y": 0.5,
+      "note": "here"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "letter",
+     "body": "Come.",
+     "from": "M.",
+     "to": "A.",
+     "date": "ebb"
+    },
+    {
+     "kind": "clipping",
+     "headline": "FIRE",
+     "body": "Mill burns.",
+     "source": "Gazette",
+     "date": "1923"
+    },
+    {
+     "kind": "title_card",
+     "title": "Act II",
+     "subtitle": "The Stacks",
+     "act": "II"
+    },
+    {
+     "kind": "map_pin",
+     "label": "Quay",
+     "note": "here",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "x": 0.25,
+     "y": 0.5
+    }
+   ]
+  },
+  {
+   "id": "performance-required-field-miss-drops-the-block",
+   "why": "a letter with no body is not a letter",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "letter",
+      "body": {
+       "$view": "tide.nothing"
+      },
+      "from": "M."
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "performance-optional-field-miss-drops-the-field",
+   "why": "the block still performs, one line shorter",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "title_card",
+      "title": "Act",
+      "subtitle": {
+       "$view": "tide.nothing"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "title_card",
+     "title": "Act"
+    }
+   ]
+  },
+  {
+   "id": "map-pin-clamps-its-coordinates",
+   "why": "fractions of the map's own box: a pin outside it is clamped, not dropped",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "map_pin",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "label": "Far",
+      "x": -2,
+      "y": {
+       "$view": "tide.y"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "map_pin",
+     "label": "Far",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "x": 0,
+     "y": 1
+    }
+   ]
+  },
+  {
+   "id": "map-pin-without-a-coordinate-is-dropped",
+   "why": "a pin with nowhere to sit is not a pin",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "map_pin",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "label": "Nowhere",
+      "x": {
+       "$view": "tide.phase"
+      },
+      "y": 0
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "hidden-element-is-absent-to-a-path",
+   "why": "an admin's view flags what players do not see; a panel cannot read it, by key or by index",
+   "template": {
+    "views": [
+     {
+      "as": "vars",
+      "view": "variables"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "Doom",
+      "value": {
+       "$view": "vars.module.doom.value"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Fourth",
+      "value": {
+       "$view": "vars.module.3.value"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "Third",
+      "value": {
+       "$view": "vars.module.2.label"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "Third",
+     "value": "Lamp"
+    }
+   ]
+  },
+  {
+   "id": "hidden-element-is-never-a-repeat-instance",
+   "why": "the same rule from the other side: hidden elements are removed before anything",
+   "template": {
+    "views": [
+     {
+      "as": "vars",
+      "view": "variables"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "vars.tree",
+       "as": "leaf",
+       "block": {
+        "kind": "text",
+        "text": {
+         "$view": "leaf.path"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "mvu.party.0.hp"
+    },
+    {
+     "kind": "text",
+     "text": "mvu.party.1.hp"
+    },
+    {
+     "kind": "text",
+     "text": "weather"
+    },
+    {
+     "kind": "text",
+     "text": "flags"
+    }
+   ]
+  },
+  {
+   "id": "repeat-binds-the-element",
+   "why": "the element is read under the repeat's `as` handle",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "tide.boats",
+       "as": "item",
+       "block": {
+        "kind": "stat",
+        "label": {
+         "$view": "item.name"
+        },
+        "value": {
+         "$view": "item.crew"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "Gull",
+     "value": 3
+    },
+    {
+     "kind": "stat",
+     "label": "Heron",
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": "repeat-reads-other-views-too",
+   "why": "inside a repeat the declared handles stay in scope",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     },
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "me.character.resources",
+       "as": "r",
+       "block": {
+        "kind": "meter",
+        "label": {
+         "$view": "r.label"
+        },
+        "value": {
+         "$view": "r.value"
+        },
+        "min": 0,
+        "max": {
+         "$view": "r.max"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "meter",
+     "label": "HP",
+     "value": 9,
+     "min": 0,
+     "max": 12
+    },
+    {
+     "kind": "meter",
+     "label": "Sanity",
+     "value": 50,
+     "min": 0,
+     "max": 99
+    }
+   ]
+  },
+  {
+   "id": "repeat-prefix-filters-by-key",
+   "why": "`prefix` keeps the elements whose key starts with it — the way to walk one branch of the variable tree",
+   "template": {
+    "views": [
+     {
+      "as": "vars",
+      "view": "variables"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "vars.tree",
+       "as": "leaf",
+       "prefix": "mvu.party.",
+       "block": {
+        "kind": "stat",
+        "label": {
+         "$view": "leaf.path"
+        },
+        "value": {
+         "$view": "leaf.value"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "mvu.party.0.hp",
+     "value": 7
+    },
+    {
+     "kind": "stat",
+     "label": "mvu.party.1.hp",
+     "value": 4
+    }
+   ]
+  },
+  {
+   "id": "repeat-caps-its-instances",
+   "why": "MAX_REPEAT_INSTANCES is 32: 35 elements expand to exactly 32, in order",
+   "template": {
+    "views": [
+     {
+      "as": "l",
+      "view": "harbor/list"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "l.items",
+       "as": "item",
+       "block": {
+        "kind": "stat",
+        "label": {
+         "$view": "item.id"
+        },
+        "value": {
+         "$view": "item.n"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "harbor/list": {
+     "items": [
+      {
+       "id": "i00",
+       "n": 0
+      },
+      {
+       "id": "i01",
+       "n": 1
+      },
+      {
+       "id": "i02",
+       "n": 2
+      },
+      {
+       "id": "i03",
+       "n": 3
+      },
+      {
+       "id": "i04",
+       "n": 4
+      },
+      {
+       "id": "i05",
+       "n": 5
+      },
+      {
+       "id": "i06",
+       "n": 6
+      },
+      {
+       "id": "i07",
+       "n": 7
+      },
+      {
+       "id": "i08",
+       "n": 8
+      },
+      {
+       "id": "i09",
+       "n": 9
+      },
+      {
+       "id": "i10",
+       "n": 10
+      },
+      {
+       "id": "i11",
+       "n": 11
+      },
+      {
+       "id": "i12",
+       "n": 12
+      },
+      {
+       "id": "i13",
+       "n": 13
+      },
+      {
+       "id": "i14",
+       "n": 14
+      },
+      {
+       "id": "i15",
+       "n": 15
+      },
+      {
+       "id": "i16",
+       "n": 16
+      },
+      {
+       "id": "i17",
+       "n": 17
+      },
+      {
+       "id": "i18",
+       "n": 18
+      },
+      {
+       "id": "i19",
+       "n": 19
+      },
+      {
+       "id": "i20",
+       "n": 20
+      },
+      {
+       "id": "i21",
+       "n": 21
+      },
+      {
+       "id": "i22",
+       "n": 22
+      },
+      {
+       "id": "i23",
+       "n": 23
+      },
+      {
+       "id": "i24",
+       "n": 24
+      },
+      {
+       "id": "i25",
+       "n": 25
+      },
+      {
+       "id": "i26",
+       "n": 26
+      },
+      {
+       "id": "i27",
+       "n": 27
+      },
+      {
+       "id": "i28",
+       "n": 28
+      },
+      {
+       "id": "i29",
+       "n": 29
+      },
+      {
+       "id": "i30",
+       "n": 30
+      },
+      {
+       "id": "i31",
+       "n": 31
+      },
+      {
+       "id": "i32",
+       "n": 32
+      },
+      {
+       "id": "i33",
+       "n": 33
+      },
+      {
+       "id": "i34",
+       "n": 34
+      }
+     ],
+     "mixed": [
+      {
+       "id": "x0"
+      },
+      {
+       "id": "x1"
+      },
+      {
+       "id": "x2"
+      },
+      {
+       "id": "x3"
+      },
+      {
+       "id": "x4"
+      },
+      {
+       "id": "x5"
+      },
+      {
+       "id": "x6"
+      },
+      {
+       "id": "x7"
+      },
+      {
+       "id": "x8"
+      },
+      {
+       "id": "x9"
+      },
+      {
+       "id": "x10"
+      },
+      {
+       "id": "x11"
+      },
+      {
+       "id": "x12"
+      },
+      {
+       "id": "x13"
+      },
+      {
+       "id": "x14"
+      },
+      {
+       "id": "x15"
+      },
+      {
+       "id": "x16"
+      },
+      {
+       "id": "x17"
+      },
+      {
+       "id": "x18"
+      },
+      {
+       "id": "x19"
+      },
+      {
+       "id": "x20"
+      },
+      {
+       "id": "x21"
+      },
+      {
+       "id": "x22"
+      },
+      {
+       "id": "x23"
+      },
+      {
+       "id": "x24"
+      },
+      {
+       "id": "x25"
+      },
+      {
+       "id": "x26"
+      },
+      {
+       "id": "x27"
+      },
+      {
+       "id": "x28"
+      },
+      {
+       "id": "x29"
+      },
+      {
+       "id": "x30"
+      },
+      {
+       "id": "x31"
+      },
+      {
+       "id": "x32"
+      },
+      {
+       "id": "x33"
+      },
+      {
+       "id": "x34"
+      },
+      {
+       "id": "x35"
+      },
+      {
+       "id": "x36"
+      },
+      {
+       "id": "x37"
+      },
+      {
+       "id": "x38"
+      },
+      {
+       "id": "x39"
+      },
+      {
+       "id": "y0",
+       "n": 0
+      },
+      {
+       "id": "y1",
+       "n": 1
+      },
+      {
+       "id": "y2",
+       "n": 2
+      }
+     ]
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "i00",
+     "value": 0
+    },
+    {
+     "kind": "stat",
+     "label": "i01",
+     "value": 1
+    },
+    {
+     "kind": "stat",
+     "label": "i02",
+     "value": 2
+    },
+    {
+     "kind": "stat",
+     "label": "i03",
+     "value": 3
+    },
+    {
+     "kind": "stat",
+     "label": "i04",
+     "value": 4
+    },
+    {
+     "kind": "stat",
+     "label": "i05",
+     "value": 5
+    },
+    {
+     "kind": "stat",
+     "label": "i06",
+     "value": 6
+    },
+    {
+     "kind": "stat",
+     "label": "i07",
+     "value": 7
+    },
+    {
+     "kind": "stat",
+     "label": "i08",
+     "value": 8
+    },
+    {
+     "kind": "stat",
+     "label": "i09",
+     "value": 9
+    },
+    {
+     "kind": "stat",
+     "label": "i10",
+     "value": 10
+    },
+    {
+     "kind": "stat",
+     "label": "i11",
+     "value": 11
+    },
+    {
+     "kind": "stat",
+     "label": "i12",
+     "value": 12
+    },
+    {
+     "kind": "stat",
+     "label": "i13",
+     "value": 13
+    },
+    {
+     "kind": "stat",
+     "label": "i14",
+     "value": 14
+    },
+    {
+     "kind": "stat",
+     "label": "i15",
+     "value": 15
+    },
+    {
+     "kind": "stat",
+     "label": "i16",
+     "value": 16
+    },
+    {
+     "kind": "stat",
+     "label": "i17",
+     "value": 17
+    },
+    {
+     "kind": "stat",
+     "label": "i18",
+     "value": 18
+    },
+    {
+     "kind": "stat",
+     "label": "i19",
+     "value": 19
+    },
+    {
+     "kind": "stat",
+     "label": "i20",
+     "value": 20
+    },
+    {
+     "kind": "stat",
+     "label": "i21",
+     "value": 21
+    },
+    {
+     "kind": "stat",
+     "label": "i22",
+     "value": 22
+    },
+    {
+     "kind": "stat",
+     "label": "i23",
+     "value": 23
+    },
+    {
+     "kind": "stat",
+     "label": "i24",
+     "value": 24
+    },
+    {
+     "kind": "stat",
+     "label": "i25",
+     "value": 25
+    },
+    {
+     "kind": "stat",
+     "label": "i26",
+     "value": 26
+    },
+    {
+     "kind": "stat",
+     "label": "i27",
+     "value": 27
+    },
+    {
+     "kind": "stat",
+     "label": "i28",
+     "value": 28
+    },
+    {
+     "kind": "stat",
+     "label": "i29",
+     "value": 29
+    },
+    {
+     "kind": "stat",
+     "label": "i30",
+     "value": 30
+    },
+    {
+     "kind": "stat",
+     "label": "i31",
+     "value": 31
+    }
+   ]
+  },
+  {
+   "id": "repeat-filters-before-it-caps",
+   "why": "the cap is on instances after the prefix filter, not on how deep a match sits",
+   "template": {
+    "views": [
+     {
+      "as": "l",
+      "view": "harbor/list"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "l.mixed",
+       "as": "item",
+       "prefix": "y",
+       "block": {
+        "kind": "stat",
+        "label": {
+         "$view": "item.id"
+        },
+        "value": {
+         "$view": "item.n"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "harbor/list": {
+     "items": [
+      {
+       "id": "i00",
+       "n": 0
+      },
+      {
+       "id": "i01",
+       "n": 1
+      },
+      {
+       "id": "i02",
+       "n": 2
+      },
+      {
+       "id": "i03",
+       "n": 3
+      },
+      {
+       "id": "i04",
+       "n": 4
+      },
+      {
+       "id": "i05",
+       "n": 5
+      },
+      {
+       "id": "i06",
+       "n": 6
+      },
+      {
+       "id": "i07",
+       "n": 7
+      },
+      {
+       "id": "i08",
+       "n": 8
+      },
+      {
+       "id": "i09",
+       "n": 9
+      },
+      {
+       "id": "i10",
+       "n": 10
+      },
+      {
+       "id": "i11",
+       "n": 11
+      },
+      {
+       "id": "i12",
+       "n": 12
+      },
+      {
+       "id": "i13",
+       "n": 13
+      },
+      {
+       "id": "i14",
+       "n": 14
+      },
+      {
+       "id": "i15",
+       "n": 15
+      },
+      {
+       "id": "i16",
+       "n": 16
+      },
+      {
+       "id": "i17",
+       "n": 17
+      },
+      {
+       "id": "i18",
+       "n": 18
+      },
+      {
+       "id": "i19",
+       "n": 19
+      },
+      {
+       "id": "i20",
+       "n": 20
+      },
+      {
+       "id": "i21",
+       "n": 21
+      },
+      {
+       "id": "i22",
+       "n": 22
+      },
+      {
+       "id": "i23",
+       "n": 23
+      },
+      {
+       "id": "i24",
+       "n": 24
+      },
+      {
+       "id": "i25",
+       "n": 25
+      },
+      {
+       "id": "i26",
+       "n": 26
+      },
+      {
+       "id": "i27",
+       "n": 27
+      },
+      {
+       "id": "i28",
+       "n": 28
+      },
+      {
+       "id": "i29",
+       "n": 29
+      },
+      {
+       "id": "i30",
+       "n": 30
+      },
+      {
+       "id": "i31",
+       "n": 31
+      },
+      {
+       "id": "i32",
+       "n": 32
+      },
+      {
+       "id": "i33",
+       "n": 33
+      },
+      {
+       "id": "i34",
+       "n": 34
+      }
+     ],
+     "mixed": [
+      {
+       "id": "x0"
+      },
+      {
+       "id": "x1"
+      },
+      {
+       "id": "x2"
+      },
+      {
+       "id": "x3"
+      },
+      {
+       "id": "x4"
+      },
+      {
+       "id": "x5"
+      },
+      {
+       "id": "x6"
+      },
+      {
+       "id": "x7"
+      },
+      {
+       "id": "x8"
+      },
+      {
+       "id": "x9"
+      },
+      {
+       "id": "x10"
+      },
+      {
+       "id": "x11"
+      },
+      {
+       "id": "x12"
+      },
+      {
+       "id": "x13"
+      },
+      {
+       "id": "x14"
+      },
+      {
+       "id": "x15"
+      },
+      {
+       "id": "x16"
+      },
+      {
+       "id": "x17"
+      },
+      {
+       "id": "x18"
+      },
+      {
+       "id": "x19"
+      },
+      {
+       "id": "x20"
+      },
+      {
+       "id": "x21"
+      },
+      {
+       "id": "x22"
+      },
+      {
+       "id": "x23"
+      },
+      {
+       "id": "x24"
+      },
+      {
+       "id": "x25"
+      },
+      {
+       "id": "x26"
+      },
+      {
+       "id": "x27"
+      },
+      {
+       "id": "x28"
+      },
+      {
+       "id": "x29"
+      },
+      {
+       "id": "x30"
+      },
+      {
+       "id": "x31"
+      },
+      {
+       "id": "x32"
+      },
+      {
+       "id": "x33"
+      },
+      {
+       "id": "x34"
+      },
+      {
+       "id": "x35"
+      },
+      {
+       "id": "x36"
+      },
+      {
+       "id": "x37"
+      },
+      {
+       "id": "x38"
+      },
+      {
+       "id": "x39"
+      },
+      {
+       "id": "y0",
+       "n": 0
+      },
+      {
+       "id": "y1",
+       "n": 1
+      },
+      {
+       "id": "y2",
+       "n": 2
+      }
+     ]
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "y0",
+     "value": 0
+    },
+    {
+     "kind": "stat",
+     "label": "y1",
+     "value": 1
+    },
+    {
+     "kind": "stat",
+     "label": "y2",
+     "value": 2
+    }
+   ]
+  },
+  {
+   "id": "repeat-over-what-is-not-a-list",
+   "why": "a repeat over a record or a scalar expands to nothing",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "tide.level",
+       "as": "item",
+       "block": {
+        "kind": "divider"
+       }
+      }
+     },
+     {
+      "repeat": {
+       "each": "tide",
+       "as": "item",
+       "block": {
+        "kind": "divider"
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "repeat-does-not-nest",
+   "why": "a repeat inside a repeat resolves to nothing at all — the build refuses it too",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "tide.boats",
+       "as": "item",
+       "block": {
+        "repeat": {
+         "each": "tide.boats",
+         "as": "b",
+         "block": {
+          "kind": "divider"
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "repeat-carries-its-own-visible-when",
+   "why": "the author gating the WHOLE list: false hides every instance",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "tide.boats",
+       "as": "item",
+       "block": {
+        "kind": "text",
+        "text": {
+         "$view": "item.name"
+        }
+       }
+      },
+      "visible_when": "tide.level > 5"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "repeat-inner-visible-when-reads-the-element",
+   "why": "a gate on the inner block decides each instance on its own",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "repeat": {
+       "each": "tide.boats",
+       "as": "item",
+       "block": {
+        "kind": "text",
+        "text": {
+         "$view": "item.name"
+        },
+        "visible_when": "item.crew > 0"
+       }
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "Gull"
+    }
+   ]
+  },
+  {
+   "id": "visible-when-true-and-false",
+   "why": "the value gate a missing binding cannot express",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "Rising",
+      "visible_when": "tide.level >= 4"
+     },
+     {
+      "kind": "text",
+      "text": "Flood",
+      "visible_when": "tide.level >= 8"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "Rising"
+    }
+   ]
+  },
+  {
+   "id": "visible-when-undecidable-hides",
+   "why": "ordering text against a number is an error; an error HIDES, never shows",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "A",
+      "visible_when": "tide.phase > 3"
+     },
+     {
+      "kind": "text",
+      "text": "B",
+      "visible_when": "tide.level >"
+     },
+     {
+      "kind": "text",
+      "text": "C",
+      "visible_when": "tide.nothing > 3"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "visible-when-that-is-not-a-condition-hides",
+   "why": "the build refuses an empty or non-text condition; a hand-made one hides",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "A",
+      "visible_when": ""
+     },
+     {
+      "kind": "text",
+      "text": "B",
+      "visible_when": 1
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "visible-when-on-a-missing-view",
+   "why": "a view not held reads as null: a gate against it is undecidable or false, never shown by accident",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "A",
+      "visible_when": "tide.level > 1"
+     },
+     {
+      "kind": "text",
+      "text": "B",
+      "visible_when": "!tide"
+     }
+    ]
+   },
+   "views": {},
+   "expect": [
+    {
+     "kind": "text",
+     "text": "B"
+    }
+   ]
+  },
+  {
+   "id": "visible-when-reads-lists-and-records-as-non-empty",
+   "why": "a condition sees scalars only: a list or record is whether it holds anything",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     },
+     {
+      "as": "me",
+      "view": "me"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "boats",
+      "visible_when": "tide.boats"
+     },
+     {
+      "kind": "text",
+      "text": "notes",
+      "visible_when": "tide.notes"
+     },
+     {
+      "kind": "text",
+      "text": "char",
+      "visible_when": "me.character && me.character.status"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "boats"
+    },
+    {
+     "kind": "text",
+     "text": "char"
+    }
+   ]
+  },
+  {
+   "id": "visible-when-a-hidden-element-reads-null",
+   "why": "a condition cannot see a hidden element either",
+   "template": {
+    "views": [
+     {
+      "as": "vars",
+      "view": "variables"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "text",
+      "text": "doom",
+      "visible_when": "vars.module.doom.value == 'SECRET'"
+     },
+     {
+      "kind": "text",
+      "text": "no doom",
+      "visible_when": "vars.module.doom == null"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "text",
+     "text": "no doom"
+    }
+   ]
+  },
+  {
+   "id": "binding-path-past-its-depth-is-a-miss",
+   "why": "MAX_BINDING_PATH_DEPTH is 8 parts",
+   "template": {
+    "views": [
+     {
+      "as": "d",
+      "view": "harbor/deep"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "7",
+      "value": {
+       "$view": "d.a.b.c.d.e.f.g"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "8",
+      "value": {
+       "$view": "d.a.b.c.d.e.f.g.h"
+      }
+     }
+    ]
+   },
+   "views": {
+    "harbor/deep": {
+     "a": {
+      "b": {
+       "c": {
+        "d": {
+         "e": {
+          "f": {
+           "g": "g",
+           "x": {
+            "h": 1
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "expect": [
+    {
+     "kind": "stat",
+     "label": "7",
+     "value": "g"
+    }
+   ]
+  },
+  {
+   "id": "binding-path-outside-the-grammar-is-a-miss",
+   "why": "no empty segment, no leading zero, no inherited property",
+   "template": {
+    "views": [
+     {
+      "as": "tide",
+      "view": "harbor/tide"
+     }
+    ],
+    "blocks": [
+     {
+      "kind": "stat",
+      "label": "a",
+      "value": {
+       "$view": "tide..level"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "b",
+      "value": {
+       "$view": "tide.boats.01.name"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "c",
+      "value": {
+       "$view": "tide.constructor"
+      }
+     },
+     {
+      "kind": "stat",
+      "label": "d",
+      "value": {
+       "$view": "Tide.level"
+      }
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "template-over-a-cap-shows-nothing",
+   "why": "MAX_PANEL_BLOCKS is 32: a template of 33 blocks is refused whole, never cut",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     },
+     {
+      "kind": "divider"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": []
+  },
+  {
+   "id": "unknown-kind-is-dropped",
+   "why": "a block kind this version does not know is not drawn",
+   "template": {
+    "views": [],
+    "blocks": [
+     {
+      "kind": "hologram",
+      "text": "x"
+     },
+     {
+      "kind": "divider"
+     }
+    ]
+   },
+   "views": {
+    "me": {
+     "member": {
+      "id": "m1",
+      "name": "Ada",
+      "role": "player",
+      "roleLabel": "Player"
+     },
+     "character": {
+      "id": "pc-ada",
+      "name": "Ada Lovelace",
+      "pack": "coc7",
+      "status": [
+       "poisoned"
+      ],
+      "resources": [
+       {
+        "id": "hp",
+        "label": "HP",
+        "value": 9,
+        "max": 12
+       },
+       {
+        "id": "san",
+        "label": "Sanity",
+        "value": 50,
+        "max": 99
+       }
+      ],
+      "attributes": [
+       {
+        "key": "STR",
+        "label": "STR",
+        "value": 50
+       },
+       {
+        "key": "力量",
+        "label": "力量",
+        "value": 60
+       }
+      ],
+      "skills": []
+     }
+    },
+    "variables": {
+     "module": [
+      {
+       "id": "dread",
+       "kind": "number",
+       "label": "Dread",
+       "value": 3,
+       "min": 0,
+       "max": 10
+      },
+      {
+       "id": "mood",
+       "kind": "enum",
+       "label": "Mood",
+       "value": "calm",
+       "valueLabel": "Calm",
+       "options": [
+        "calm",
+        "tense"
+       ]
+      },
+      {
+       "id": "lamp",
+       "kind": "bool",
+       "label": "Lamp",
+       "value": true
+      },
+      {
+       "id": "doom",
+       "kind": "text",
+       "label": "Doom",
+       "value": "SECRET",
+       "hidden": true
+      }
+     ],
+     "tree": [
+      {
+       "path": "mvu.party.0.hp",
+       "value": 7
+      },
+      {
+       "path": "mvu.party.1.hp",
+       "value": 4
+      },
+      {
+       "path": "mvu.plot",
+       "value": "HIDDEN-PLOT",
+       "hidden": true
+      },
+      {
+       "path": "weather",
+       "value": "fog"
+      },
+      {
+       "path": "flags",
+       "value": [
+        1,
+        2
+       ]
+      }
+     ]
+    },
+    "harbor/tide": {
+     "level": 4,
+     "max": 8,
+     "phase": "ebb",
+     "boats": [
+      {
+       "id": "gull",
+       "name": "Gull",
+       "crew": 3
+      },
+      {
+       "id": "heron",
+       "name": "Heron",
+       "crew": 0
+      }
+     ],
+     "notes": [],
+     "x": 0.25,
+     "y": 1.7
+    }
+   },
+   "expect": [
+    {
+     "kind": "divider"
+    }
+   ]
+  }
+ ]
+}

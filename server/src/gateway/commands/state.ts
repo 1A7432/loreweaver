@@ -36,3 +36,17 @@ export const ROOM_PACKS = jsonStateKey(
   { reset: "never", because: ROOM_SETTING },
   (value): value is string[] => Array.isArray(value) && value.length <= MAX_ENABLED_PACKS && value.every((item) => typeof item === "string" && PACK_ID.test(item)) && new Set(value).size === value.length,
 );
+
+/** At most this many panels switched off in a room: every panel of every enabled pack. */
+export const MAX_PANELS_OFF = MAX_ENABLED_PACKS * 16;
+const PANEL_WIRE_ID = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/u;
+
+/**
+ * The panels the admin switched off in this room, by `<pack>/<panel>`. A panel of an enabled
+ * pack is on unless listed here. A room setting, like the enabled packs it qualifies.
+ */
+export const ROOM_PANELS_OFF = jsonStateKey(
+  "room.panels_off",
+  { reset: "never", because: ROOM_SETTING },
+  (value): value is string[] => Array.isArray(value) && value.length <= MAX_PANELS_OFF && value.every((item) => typeof item === "string" && PANEL_WIRE_ID.test(item)) && new Set(value).size === value.length,
+);

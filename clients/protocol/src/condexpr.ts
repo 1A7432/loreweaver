@@ -175,11 +175,15 @@ function compare(op: string, left: unknown, right: unknown): boolean {
 
 class Evaluator {
   private pos = 0
+  private readonly tokens: Token[]
+  private resolve: Resolver
 
-  constructor(
-    private readonly tokens: Token[],
-    private resolve: Resolver,
-  ) {}
+  // Plain fields, not parameter properties: the v3 entry imports this file, and the server
+  // type-checks the v3 entry under erasable-syntax-only settings.
+  constructor(tokens: Token[], resolve: Resolver) {
+    this.tokens = tokens
+    this.resolve = resolve
+  }
 
   evaluate(): unknown {
     const value = this.orExpr()

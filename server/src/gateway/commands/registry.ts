@@ -21,7 +21,7 @@ import { LifecycleError, StaleGeneration } from "../../infra/lifecycle/errors.ts
 import { COMMANDS_CATALOG } from "./catalog.ts";
 import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCommands } from "./engine/checks.ts";
 import { importCommand, uploadsCommand } from "./engine/files.ts";
-import { packCommand, skillCommand } from "./engine/packs.ts";
+import { packCommand, panelsCommand, skillCommand } from "./engine/packs.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
 import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, saveCommand, undoCommand } from "./engine/room.ts";
 import { pcCommand, renameCommand, sheetCommand } from "./engine/sheet.ts";
@@ -127,6 +127,7 @@ export class CommandRegistry {
       importCommand(options.uploads ?? null, options.recall ?? null, packs),
       packCommand(packs),
       skillCommand(packs),
+      panelsCommand(packs),
       jrrpCommand,
       drawCommand,
       helpCommand((call) => this.#entries(call.context, call.locale)),

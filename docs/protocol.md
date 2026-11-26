@@ -473,6 +473,7 @@ argument. Text forms are given as English table / Chinese table; with any of the
 | `jrrp` | player | `jrrp`, `luck` / `jrrp` | — | Today's luck. |
 | `draw` | player | `draw` / `draw`, `抽牌` | — | Draws a card from a shuffled deck. |
 | `help` | player, observer | `help`, `h` / `help`, `帮助` | `id?` (1–128) | The `commands` view as text; with `id` (an id or a form), one command. |
+| `panels` | player, observer; `enable`, `disable`: admin | `panels`, `panel` / `panels`, `面板`, `模组面板` | `op` (`list`\|`enable`\|`disable`), `id?` (`<pack>/<panel>`, 1–129) | The panels of the room's enabled packs ([10.6](#106-panels)). Every one is on by default; the admin's switch is a room setting that survives resets. `panel_not_available` for an id no enabled pack has. |
 
 **Rule-pack commands** depend on the room's rule system. With the built-in systems only `coc7`
 has any:
@@ -895,6 +896,27 @@ ones players do not see marked `hidden: true`.
 | `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | As the provider reported them, summed over the turn. |
 | `last.estimated` | boolean | The prompt size was estimated by the engine: the provider reported none. |
 
+**`packs`**: the content packs, by name.
+
+| field | type | meaning |
+|---|---|---|
+| `packs` | `[{id, version, name, enabled, cards: [{file, name, kind}]}]` | An admin sees every installed pack, each with whether this room enabled it; anyone else the packs this room enabled. `kind` is `world` or `character`. |
+
+**`panels`**: this viewer's panel list ([10.6](#106-panels)).
+
+| field | type | meaning |
+|---|---|---|
+| `panels` | `[entry]` | The panels of the room's enabled packs that are switched on and listed to this viewer, in the order the packs were enabled, then as each pack declares them. |
+| `entry.id` | string | `<pack>/<panel>`. |
+| `entry.title` | string | In the viewer's language. |
+| `entry.slot` | string | `sidebar`, `tray` or `modal`. A text client may fold all three into its sidebar. |
+| `entry.kind` | string | `template` or `page`. |
+| `entry.views` | `[{as, view}]` | The views the panel reads, each under the handle its paths use. Subscribe to every `view`. |
+| `entry.source` | `{kind, id}` | `kind` is `pack` (the only source in 3.0; `room` is reserved for panels a room publishes itself). |
+| `entry.blocks` | `[template block]` | A template's blocks. |
+| `entry.page` | `{hash, size, mime}` | A page's HTML (`mime` is `text/html`), fetched by hash over the byte channel ([11.3](#113-get)). |
+| `entry.fallback` | `[template block]` or `null` | A page's template for a client that cannot run it; `null`: show one "needs a rich client" line. |
+
 ### 10.5 Module views
 
 A module may publish views named `<module>/<name>`, each with the JSON Schema and title its
@@ -902,6 +924,40 @@ module declared (listed by `view.list`). The module computes each value per view
 server forwards it unfiltered, to that viewer only; a value over 512 KiB is dropped. Their
 shapes are the module's; a client that does not know a module view renders it generically or
 not at all. Names starting `admin/` are reserved and never offered by a module.
+
+### 10.6 Panels
+
+A panel is persistent UI beside the story, shipped by a pack ([LWF panels](lwf/formats/panels.md)).
+Its data comes **only from views**: there is no panel frame. A client:
+
+1. subscribes to `panels`, and to every view an entry names in `views`;
+2. for a `template`, calls `instantiate({views, blocks}, values)` — `values` being each
+   view's data by name — and draws the resulting blocks (the same `Block` vocabulary as a
+   `blocks` event, [8.3](#83-blocks)); for a `page`, runs the HTML in a sandboxed frame if it
+   can, else instantiates the `fallback`, else shows one "needs a rich client" line;
+3. sends a `choices` option, and anything a page does, as `command.run {id: command, args}`
+   ([6.2](#62-two-entrances)), as the member viewing the panel.
+
+A template block is a `Block` whose fields may be **bindings**, `{"$view": "<path>"}`, plus
+`visible_when` (a condition) on any block and the construct
+`{"repeat": {"each": "<path>", "as": "<handle>", "prefix"?: "…", "block": <block>}}`.
+A path is `<handle>.<segment>…`: the handle is one of the entry's `views[].as` (or, inside a
+repeat, its `as`); a segment names a record's property, a list's element by index, or a
+list's element by its `id`/`key`/`path`. Elements flagged `hidden` are never read. A binding
+that does not resolve drops its block (required field) or field (optional field); a condition
+that cannot be decided hides its block. The grammar, the caps and the full rules are the LWF
+panels document §4–§6; the protocol package's `instantiate`, `panelBlocks` and
+`panelViewNames` implement them, and its `panels.vectors.json` is the table every
+implementation must match.
+
+```json
+{"type":"view","name":"panels","rev":1,"at":12,"data":{"panels":[{"id":"harbor/tide","title":"The tide","slot":"sidebar","kind":"template","views":[{"as":"tide","view":"harbor/tide"}],"source":{"kind":"pack","id":"harbor"},"blocks":[{"kind":"meter","label":"Tide","value":{"$view":"tide.level"},"min":0,"max":10},{"kind":"text","text":"Flood warning!","style":"warning","visible_when":"tide.level >= 8"}]}]}}
+```
+
+Which panels a member is listed is the server's decision: a panel the pack restricts to
+admins, or one that reads an `admin/*` view, is never in a player's `panels`. A page's HTML
+and a panel's pictures are the room's unlisted media: fetchable by the room's members (an
+admin-only page by its admins), listed nowhere, and unknown to every other room.
 
 ## 11. The byte channel
 
@@ -1229,11 +1285,11 @@ These are defined in the design, or reserved in the code, but not built in 3.0:
 
 - **`features` and `caps` values.** Both lists exist; the server sends `features: []` and
   ignores `caps`.
-- **Panels.** A `panels` view listing a viewer's panels, as declarative templates bound to views
-  or as sandboxed pages fetched over the byte channel.
+- **Running pages.** The `panels` view lists pages and the byte channel serves their HTML;
+  no reference client runs one yet (the terminal client shows the fallback). The page bridge
+  is the desktop client's to define. Panels a room publishes at runtime (`source.kind:
+  "room"`) are reserved: no server produces them.
 - **The `audio` view**: the audio library and what each layer is playing.
-- **The `packs` view** and content packs: installed packs, the cards they ship, and pack assets
-  served over the byte channel.
 - **Admin views** (`admin/model`, `admin/keys`, `admin/content`): the names under `admin/` are
   reserved for admins; no such view exists yet. Keys are minted by the operator
   (`loreweaver key`), not over the protocol.

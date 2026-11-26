@@ -6,11 +6,12 @@
 // modules run as real code in the server's process, so which code the server runs is not a
 // room admin's decision. A room admin decides what of the installed content this room uses.
 import { localText } from "../../../core/packs/index.ts";
+import { panelAdminOnly, panelListedTo, panelText } from "../../../core/panels/index.ts";
 import { disableSkill, enableSkill, readEnabledSkills, skillDescription, skillName, writeEnabledSkills } from "../../../core/skills/index.ts";
 import type { LoadedPack, RoomPacks } from "../../packs.ts";
 import { firstWord } from "../parse.ts";
 import { compact, object, oneOf, text } from "../schema.ts";
-import { MAX_ENABLED_PACKS, ROOM_PACKS } from "../state.ts";
+import { MAX_ENABLED_PACKS, ROOM_PACKS, ROOM_PANELS_OFF } from "../state.ts";
 import { type CommandCall, type CommandSpec, type Done, refuse, type Refused } from "../types.ts";
 
 const LIST_WORDS: ReadonlySet<string> = new Set(["list", "ls", "列表", "列出"]);
@@ -49,6 +50,7 @@ function packSummary(packs: RoomPacks, call: CommandCall, loaded: LoadedPack, en
     ruleSystems: pack.ruleSystems.map((system) => system.id),
     skills: pack.skills.map((entry) => entry.id),
     cards: pack.cards.map((card) => ({ file: card.path, name: card.name, kind: card.kind })),
+    panels: pack.panels.map((panel) => panel.spec.id),
     presentation: pack.presentation !== null,
     assets: pack.assets.length,
     shadowed: [...shadowedSystems, ...pack.skills.filter((entry) => !own.has(entry.id)).map((entry) => entry.id)],
@@ -65,6 +67,7 @@ function adminLine(call: CommandCall, summary: Record<string, unknown>): string 
   list("pack.part_systems", summary.ruleSystems as string[]);
   list("pack.part_skills", summary.skills as string[]);
   list("pack.part_cards", (summary.cards as { file: string; name: string; kind: string }[]).map((card) => call.say("pack.card", { name: card.name, file: card.file, kind: call.say(`pack.kind_${card.kind}`) })));
+  list("pack.part_panels", summary.panels as string[]);
   if (summary.presentation === true) parts.push(call.say("pack.part_kit"));
   if ((summary.assets as number) > 0) parts.push(call.say("pack.part_assets", { count: summary.assets as number }));
   list("pack.part_shadowed", summary.shadowed as string[]);
@@ -211,6 +214,78 @@ export function skillCommand(packs: RoomPacks): CommandSpec {
         data: { id, enabled: false, changed: true },
         events: [{ kind: "narrative", data: { speaker: "system", text: call.tell("skill.event_disabled", { name: entry === undefined ? id : skillName(entry.skill, call.context.locale) }), format: "plain" } }],
       };
+    },
+  };
+}
+
+const PANEL_SWITCH_PARAMS = object({ op: oneOf(["list", "enable", "disable"]), id: text(129, 1) }, ["op"]);
+
+/**
+ * `panels`: the panels of the room's enabled packs. Anyone sees the ones listed to them; the
+ * admin sees every one and switches each on or off for this room (`room.panels_off`). A panel
+ * is on by default once its pack is enabled; the switch is the override, and it survives
+ * every reset.
+ */
+export function panelsCommand(packs: RoomPacks): CommandSpec {
+  return {
+    id: "panels",
+    source: "engine",
+    key: "panels",
+    params: PANEL_SWITCH_PARAMS,
+    text: { en: ["panels", "panel"], zh: ["panels", "面板", "模组面板"] },
+    role: "player",
+    observers: true,
+    adminWhen: (args) => args.op !== "list",
+    parseText: (rest) => parseSwitch(rest),
+    run(call, args): Done | Refused {
+      const { services, room, writer } = call.context;
+      const store = services.store;
+      const all = packs.panels(store, room);
+      const role = call.context.who.member?.role ?? "observer";
+      if (args.op === "list") {
+        const shown = role === "admin" ? all : all.filter((entry) => entry.on && panelListedTo(entry.panel.spec, role));
+        const entries = shown.map((entry) => ({
+          id: entry.id,
+          title: panelText(entry.panel.spec.title, call.locale) || entry.panel.spec.id,
+          kind: entry.panel.spec.kind,
+          views: entry.panel.spec.views.map((ref) => ref.view),
+          ...(role === "admin" ? { on: entry.on, adminOnly: panelAdminOnly(entry.panel.spec) } : {}),
+        }));
+        if (entries.length === 0) return { text: call.say("panels.none"), data: { panels: [] } };
+        const lines = [call.say(role === "admin" ? "panels.header_admin" : "panels.header_player")];
+        for (const entry of entries) {
+          const marks = [entry.kind === "page" ? call.say("panels.mark_page") : "", entry.adminOnly === true ? call.say("panels.mark_admin") : ""].filter((mark) => mark !== "");
+          const line = call.say(entry.on === false ? "panels.line_off" : "panels.line", { title: entry.title, id: entry.id });
+          lines.push(marks.length === 0 ? line : `${line} ${marks.join(" ")}`);
+        }
+        return { text: lines.join("\n"), data: { panels: entries } };
+      }
+      const id = args.id as string | undefined;
+      if (id === undefined) return refuse("missing_arg", { path: "id" });
+      const found = all.find((entry) => entry.id === id);
+      if (found === undefined) return refuse("panel_not_available", { id });
+      const title = panelText(found.panel.spec.title, call.locale) || found.panel.spec.id;
+      // Ids of packs no longer installed are dropped; those of installed packs stay, so a
+      // pack disabled and enabled again keeps its panels as the admin left them.
+      const off = packs.panelsOff(store, room).filter((item) => packs.get(item.split("/")[0] ?? "") !== null);
+      if (args.op === "enable") {
+        if (found.on) return { text: call.say("panels.already_enabled", { title }), data: { id, on: true, changed: false } };
+        const remaining = off.filter((item) => item !== id);
+        if (remaining.length === 0) writer.stateDelete(ROOM_PANELS_OFF);
+        else writer.statePut(ROOM_PANELS_OFF, remaining);
+        return {
+          text: call.say("panels.enabled", { title }),
+          data: { id, on: true, changed: true },
+          // Its pictures and page become this room's media once the switch committed.
+          after: async () => {
+            const problems = await packs.registerAssets(room, store);
+            return problems.length === 0 ? [] : [call.say("pack.assets_failed", { count: problems.length })];
+          },
+        };
+      }
+      if (!found.on) return { text: call.say("panels.already_disabled", { title }), data: { id, on: false, changed: false } };
+      writer.statePut(ROOM_PANELS_OFF, [...off, id]);
+      return { text: call.say("panels.disabled", { title }), data: { id, on: false, changed: true } };
     },
   };
 }

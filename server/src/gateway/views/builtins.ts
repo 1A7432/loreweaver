@@ -12,6 +12,7 @@ import {
   type CommandsViewData,
   type MeView,
   type PacksView,
+  type PanelsView,
   type PartyView,
   type Role,
   type RoomView,
@@ -353,6 +354,12 @@ function packs(source: ViewSource, viewer: ViewerContext): PacksView {
   };
 }
 
+/** The panels of the room's enabled packs that are on and listed to this viewer, in the viewer's language. */
+function panels(source: ViewSource, viewer: ViewerContext): PanelsView {
+  if (source.packs === undefined) return { panels: [] };
+  return { panels: source.packs.panelsFor(source.services.store, source.room, viewer.member.role, viewer.locale) };
+}
+
 function builtIn<N extends BuiltInViewName>(name: N, compute: BuiltInView<N>["compute"]): BuiltInView<N> {
   return { name, schema: BUILT_IN_VIEW_SCHEMAS[name], admin: false, compute };
 }
@@ -368,6 +375,7 @@ export const BUILT_IN_VIEWS: readonly BuiltInView[] = [
   builtIn("room", room),
   builtIn("usage", usage),
   builtIn("packs", packs),
+  builtIn("panels", panels),
 ] as readonly BuiltInView[];
 
 /** Who may see a view listed and subscribe to it. */

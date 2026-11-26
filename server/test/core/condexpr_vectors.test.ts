@@ -11,8 +11,8 @@ import { join } from "node:path";
 
 import { compile, ExprError, FUNCTION_NAMES, recordResolver, type Value } from "../../src/core/condexpr.ts";
 
-// The client's evaluator, loaded at run time: its source predates this package's compiler
-// settings (it uses parameter properties), so it is run, not type-checked, from here.
+// The client's evaluator, loaded at run time by URL, as a second implementation under test
+// (it is type-checked through the protocol package's v3 entry, which imports it for panels).
 const CLIENT_EVALUATOR = new URL("../../../clients/protocol/src/condexpr.ts", import.meta.url).href;
 const { evaluate: clientEvaluate } = (await import(CLIENT_EVALUATOR)) as {
   evaluate: (expression: string, resolve: (path: string) => unknown) => unknown;

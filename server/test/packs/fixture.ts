@@ -46,7 +46,56 @@ audio:
   - { id: bell, layer: ambience, asset: sound/bell.ogg, title: Harbor bell }
 `;
 
-export function manifestYaml(overrides: { readonly id?: string; readonly version?: string; readonly entry?: string; readonly extra?: string } = {}): string {
+/**
+ * Panels: a template panel reading a built-in view and the module's view (with a picture),
+ * an admin-only template reading the variables, and a page with a template fallback.
+ */
+export const PANELS_YAML = `panels:
+  - id: tide
+    title: { en: The tide, zh: 潮汐 }
+    slot: sidebar
+    views: { me: me, tide: tally/tide }
+    blocks:
+      - { kind: meter, label: { en: Tide, zh: 潮位 }, value: { $view: tide.level }, min: 0, max: 10 }
+      - kind: image
+        src: art/chart.png
+        caption: Harbor chart
+      - repeat:
+          each: me.character.resources
+          as: r
+          block: { kind: meter, label: { $view: r.label }, value: { $view: r.value }, min: 0, max: { $view: r.max } }
+      - kind: choices
+        prompt: Ring the bell?
+        options:
+          - { id: ring, label: Ring it, command: tally/ring, args: { times: 2 } }
+        visible_when: "tide.level >= 5"
+  - id: ledger
+    title: Keeper ledger
+    slot: tray
+    audience: admin
+    views: { vars: variables }
+    blocks:
+      - repeat: { each: vars.module, block: { kind: stat, label: { $view: item.label }, value: { $view: item.value } } }
+  - id: chart
+    title: Sea chart
+    slot: modal
+    views: { tide: tally/tide }
+    entry: ui/chart.html
+    fallback:
+      - { kind: text, text: { $view: tide.level } }
+  - id: notes
+    title: Keeper notes
+    slot: tray
+    audience: admin
+    views: { vars: variables }
+    entry: ui/notes.html
+    fallback: null
+`;
+export const NOTES_HTML = "<!doctype html><html><body>admin notes</body></html>\n";
+export const PAGE_HTML = "<!doctype html><html><body><script>window.loreweaver && window.loreweaver.ready()</script></body></html>\n";
+export const CHART_PNG = PNG_BYTES.map((byte, index) => (index < 8 ? byte : (byte + 5) % 256));
+
+export function manifestYaml(overrides: { readonly id?: string; readonly version?: string; readonly entry?: string; readonly extra?: string; readonly panels?: boolean } = {}): string {
   return `manifest_version: 3
 id: ${overrides.id ?? "harbor"}
 version: ${overrides.version ?? "1.0.0"}
@@ -63,7 +112,7 @@ contents:
   cards:
     - { path: cards/drowned.json, kind: world, notes: Import as the world. }
     - { path: cards/sailor.json, kind: character }
-  presentation: [presentation.yaml]
+  presentation: [presentation.yaml]${overrides.panels === true ? "\n  panels: [ui/panels.yaml]" : ""}
 assets:
   - { path: art/cover.png, title: Cover }
 ${overrides.extra ?? ""}`;
@@ -83,6 +132,12 @@ export function packEntries(replace: Readonly<Record<string, Uint8Array | null>>
     ["art/cover.png", PNG_BYTES.map((byte, index) => (index < 8 ? byte : (byte + 1) % 256))],
     ["sound/bell.ogg", OGG_BYTES],
   ]);
+  if (manifest.includes("ui/panels.yaml")) {
+    files.set("ui/panels.yaml", text(PANELS_YAML));
+    files.set("ui/chart.html", text(PAGE_HTML));
+    files.set("ui/notes.html", text(NOTES_HTML));
+    files.set("art/chart.png", CHART_PNG);
+  }
   for (const [path, bytes] of Object.entries(replace)) {
     if (bytes === null) files.delete(path);
     else files.set(path, bytes);

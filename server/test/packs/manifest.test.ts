@@ -111,8 +111,7 @@ describe("refusals", () => {
   });
 
   test("content kinds: 2.x kinds and unknown kinds", () => {
-    expect(problems(`${BASE}contents: { panels: [p.yaml], presets: [x.json], prep: [p.js], lorebooks: [l.json] }\n`).map((item) => `${item.code}@${item.path}`)).toEqual([
-      "unsupported_kind@contents.panels",
+    expect(problems(`${BASE}contents: { presets: [x.json], prep: [p.js], lorebooks: [l.json] }\n`).map((item) => `${item.code}@${item.path}`)).toEqual([
       "unsupported_kind@contents.presets",
       "unsupported_kind@contents.prep",
       "unsupported_kind@contents.lorebooks",

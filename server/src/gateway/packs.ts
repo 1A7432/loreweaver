@@ -9,7 +9,11 @@
 //   so the byte channel serves them to members of that room and to nobody else;
 // - its skills available to the room's `skill` command (enabling a skill stays a step of
 //   its own);
-// - its cards importable with `import {pack, card, as}`.
+// - its cards importable with `import {pack, card, as}`;
+// - its panels part of the room's `panels` view (each on unless the admin switched it off
+//   with `panels disable`, the `room.panels_off` room setting), the pictures they name and
+//   each page's HTML registered as the room's unlisted media like the kit's — a page that
+//   only admins are listed is fetchable by admins only.
 //
 // A pack's rule systems are not per room: they join the server's rule-system registry at
 // start-up (`assemblePacks`), chosen per room with `rule system`. Clashes are settled by
@@ -19,12 +23,16 @@
 // silently or otherwise.
 import type { InstalledKit, KitAsset, RoomKit } from "../agent/lanes/presentation.ts";
 import { mergeRoomKit } from "../agent/lanes/presentation.ts";
-import type { Pack, PackAsset, TrustCard } from "../core/packs/index.ts";
+import type { PanelEntry, Role } from "loreweaver-protocol/v3";
+
+import type { Pack, PackAsset, PackPanel, TrustCard } from "../core/packs/index.ts";
+import { panelAdminOnly, panelEntry, type PanelFile, panelListedTo } from "../core/panels/index.ts";
 import { builtInPacks, type RulePack, RulePackRegistry } from "../core/rulepacks/index.ts";
 import { builtInSkills, type Skill, SkillRegistry } from "../core/skills/index.ts";
 import type { MediaStore } from "../infra/media/index.ts";
 import type { Store } from "../infra/store.ts";
-import { MAX_ENABLED_PACKS, ROOM_PACKS } from "./commands/state.ts";
+import type { Audience } from "../infra/media/index.ts";
+import { MAX_ENABLED_PACKS, ROOM_PACKS, ROOM_PANELS_OFF } from "./commands/state.ts";
 
 /** An installed pack the server loaded and validated at start-up. */
 export interface LoadedPack {
@@ -89,6 +97,20 @@ function kitAssetsOf(pack: Pack): readonly PackAsset[] {
   if (kit === undefined) return [];
   const named = new Set<string>([...kit.subjects.flatMap((subject) => (subject.ref === null ? [] : [subject.ref])), ...kit.audio.map((cue) => cue.asset)]);
   return pack.assets.filter((asset) => named.has(asset.path));
+}
+
+/** One panel of a pack the room enabled, with its wire id and whether the room has it on. */
+export interface RoomPanel {
+  readonly loaded: LoadedPack;
+  readonly panel: PackPanel;
+  /** `<pack>/<panel>`. */
+  readonly id: string;
+  readonly on: boolean;
+}
+
+/** The files a panel names, by pack path, as a client fetches them. */
+function panelFiles(pack: Pack): ReadonlyMap<string, PanelFile> {
+  return new Map(pack.assets.map((asset) => [asset.path, { sha256: asset.sha256, size: asset.size, mime: asset.mime }]));
 }
 
 export interface RoomPacksOptions {
@@ -206,27 +228,76 @@ export class RoomPacks {
     return loaded.pack.skills.filter((entry) => this.#skills.get(entry.id) === entry.skill).map((entry) => entry.id);
   }
 
+  /** The panel ids (`<pack>/<panel>`) the room switched off, as stored. */
+  panelsOff(store: Store, room: string): readonly string[] {
+    return store.stateGet(room, ROOM_PANELS_OFF) ?? [];
+  }
+
+  /** Every panel of the room's enabled packs, in the order the packs were enabled, then as each declares them. */
+  panels(store: Store, room: string): readonly RoomPanel[] {
+    const off = new Set(this.panelsOff(store, room));
+    return this.enabled(store, room).flatMap((loaded) =>
+      loaded.pack.panels.map((panel) => {
+        const id = `${loaded.pack.manifest.id}/${panel.spec.id}`;
+        return { loaded, panel, id, on: !off.has(id) };
+      }),
+    );
+  }
+
   /**
-   * Store the kit assets of the room's enabled packs as the room's unlisted media (audience
-   * `members`): fetchable over the byte channel by that room's members, never listed or
-   * broadcast. Bytes the room already holds are not stored twice. Resolves to the problems,
-   * as codes; it never throws.
+   * The `panels` view for a member with `role`, in `locale`: the room's panels that are on and
+   * listed to that role — a panel reading an `admin/*` view, or with `audience: admin`, to
+   * admins only; `audience: player` to everyone else.
+   */
+  panelsFor(store: Store, room: string, role: Role, locale: string): PanelEntry[] {
+    const out: PanelEntry[] = [];
+    for (const { loaded, panel, on } of this.panels(store, room)) {
+      if (!on || !panelListedTo(panel.spec, role)) continue;
+      const page = panel.page === null ? null : { sha256: panel.page.sha256, size: panel.page.size, mime: "text/html" };
+      const entry = panelEntry(loaded.pack.manifest.id, panel.spec, locale, panelFiles(loaded.pack), page);
+      if (entry !== null) out.push(entry);
+    }
+    return out;
+  }
+
+  /**
+   * Store the kit assets of the room's enabled packs, and the pictures and page HTML of the
+   * panels it has on, as the room's unlisted media: fetchable over the byte channel by that
+   * room's members (`members`) — or, for what only admin-only panels name, by its admins
+   * (`admin`) — never listed or broadcast. Bytes the room already holds are not stored twice.
+   * Resolves to the problems, as codes; it never throws.
    */
   async registerAssets(room: string, store: Store): Promise<readonly string[]> {
     const media = this.#media;
     if (media === null) return [];
     const problems: string[] = [];
-    for (const loaded of this.enabled(store, room)) {
-      for (const asset of kitAssetsOf(loaded.pack)) {
-        if (media.find(room, asset.sha256, "admin") !== undefined) continue;
-        const bytes = await loaded.read(asset.path);
-        if (bytes === null) {
-          problems.push(`asset_unreadable:${loaded.pack.manifest.id}:${asset.path}`);
-          continue;
-        }
-        const stored = await media.registerServerBlob({ room, bytes, mime: asset.mime, name: asset.path.split("/").at(-1) ?? asset.path, audience: "members" });
-        if (!stored.ok) problems.push(`${stored.code}:${loaded.pack.manifest.id}:${asset.path}`);
+    // Each file once, with the widest audience any use of it needs.
+    const wanted = new Map<string, { loaded: LoadedPack; path: string; mime: string; audience: Audience }>();
+    const want = (loaded: LoadedPack, path: string, sha256: string, mime: string, audience: Audience): void => {
+      const held = wanted.get(sha256);
+      if (held === undefined) wanted.set(sha256, { loaded, path, mime, audience });
+      else if (audience === "members") held.audience = "members";
+    };
+    for (const loaded of this.enabled(store, room)) for (const asset of kitAssetsOf(loaded.pack)) want(loaded, asset.path, asset.sha256, asset.mime, "members");
+    for (const { loaded, panel, on } of this.panels(store, room)) {
+      if (!on) continue;
+      const audience: Audience = panelAdminOnly(panel.spec) ? "admin" : "members";
+      const files = panelFiles(loaded.pack);
+      for (const image of panel.spec.images) {
+        const file = files.get(image);
+        if (file !== undefined) want(loaded, image, file.sha256, file.mime, audience);
       }
+      if (panel.page !== null) want(loaded, panel.page.path, panel.page.sha256, "text/html", audience);
+    }
+    for (const [sha256, { loaded, path, mime, audience }] of wanted) {
+      if (media.find(room, sha256, "admin") !== undefined) continue;
+      const bytes = await loaded.read(path);
+      if (bytes === null) {
+        problems.push(`asset_unreadable:${loaded.pack.manifest.id}:${path}`);
+        continue;
+      }
+      const stored = await media.registerServerBlob({ room, bytes, mime, name: path.split("/").at(-1) ?? path, audience });
+      if (!stored.ok) problems.push(`${stored.code}:${loaded.pack.manifest.id}:${path}`);
     }
     for (const problem of problems) this.#report(room, `pack assets: ${problem}`);
     return problems;

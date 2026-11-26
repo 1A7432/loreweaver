@@ -4,6 +4,7 @@ import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/co
 import { stripControlChars } from "loreweaver-protocol/v3"
 import { HeaderBar, type LinkStatus } from "./components/HeaderBar"
 import { NarrativeLog } from "./components/NarrativeLog"
+import { hasChoices, panelSections, PanelsPanel, viewValues } from "./components/PanelsPanel"
 import { PartyRoster, freeClaimables } from "./components/PartyRoster"
 import { PictureViewer } from "./components/PictureViewer"
 import { ScenePanel } from "./components/ScenePanel"
@@ -12,7 +13,7 @@ import { StatusBar } from "./components/StatusBar"
 import type { UiChoice } from "./components/UiBlocks"
 import { VariablesPanel } from "./components/VariablesPanel"
 import type { Connection, ConnectionState } from "./connection"
-import { useConnectionState, useSnapshot, viewData } from "./hooks"
+import { useConnectionState, usePanelViews, useSnapshot, viewData } from "./hooks"
 import { tt, type MessageKey } from "./i18n"
 import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
 import { sidebarCollapsed, sidebarWidth } from "./layout"
@@ -20,7 +21,9 @@ import { lastChoicesIndex, logItems, logPictures, type Cleared, type Picture } f
 import type { Palette, ThemeName } from "./themes"
 import { usesAppClipboardCopy } from "./copy"
 import { writeTranscript } from "./transcript"
-import type { SessionSnapshot } from "loreweaver-protocol/v3"
+import type { PanelEntry, SessionSnapshot } from "loreweaver-protocol/v3"
+
+const NO_PANELS: readonly PanelEntry[] = []
 
 export interface GameViewProps {
   connection: Connection
@@ -79,6 +82,11 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const party = viewData(snapshot, "party")
   const characters = viewData(snapshot, "characters")
   const online = (party?.members ?? []).filter((member) => member.online).length
+  const panels = viewData(snapshot, "panels")?.panels ?? NO_PANELS
+  usePanelViews(connection, panels)
+  const sections = useMemo(() => panelSections(panels, viewValues(snapshot.views)), [panels, snapshot.views])
+  // Panels whose choices Tab can put the keys on, in sidebar order.
+  const panelStops = sections.filter(hasChoices).map((section) => `panel:${section.id}`)
 
   const [cleared, setCleared] = useState<Cleared | null>(null)
   const [command, setCommand] = useState("")
@@ -94,6 +102,8 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   // cycles; the chat `<input>`'s own `focused` prop is kept the logical opposite.
   const [rosterFocused, setRosterFocused] = useState(false)
   const [choicesFocused, setChoicesFocused] = useState(false)
+  // The panel whose choices own the arrows and Enter, or null (see Tab below).
+  const [panelFocus, setPanelFocus] = useState<string | null>(null)
   const [narrowSidebarOpen, setNarrowSidebarOpen] = useState(false)
   // Pictures: Tab puts the arrows on them, Enter (or a click) shows one; F8 opens the share form.
   const [picturesFocused, setPicturesFocused] = useState(false)
@@ -110,7 +120,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
   const showSidebar = !narrow || narrowSidebarOpen
   const inputState = inputLimitState(command)
-  const hasChoices = lastChoicesIndex(items) !== -1
+  const logChoices = lastChoicesIndex(items) !== -1
   const pictures = useMemo(() => logPictures(items), [items])
   const names = useMemo(() => memberNames(party), [party])
   const selectedPicture = pictures.find((picture) => picture.key === pictureKey) ?? pictures.at(-1)
@@ -131,11 +141,15 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
 
   // When the last choices block leaves the log, focus falls back to the chat input.
   useEffect(() => {
-    if (!hasChoices) setChoicesFocused(false)
-  }, [hasChoices])
+    if (!logChoices) setChoicesFocused(false)
+  }, [logChoices])
   useEffect(() => {
     if (pictures.length === 0) setPicturesFocused(false)
   }, [pictures.length])
+  // A focused panel that left the sidebar (switched off, its choices hidden) gives focus back.
+  useEffect(() => {
+    if (panelFocus !== null && (!showSidebar || !panelStops.includes(`panel:${panelFocus}`))) setPanelFocus(null)
+  }, [panelStops.join("\n"), showSidebar])
 
   useEffect(() => {
     onModalChange?.(modal)
@@ -216,6 +230,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
 
   const pickChoice = (option: UiChoice) => {
     setChoicesFocused(false)
+    setPanelFocus(null)
     void connection.runCommand(option.command, option.args ?? {})
   }
 
@@ -285,8 +300,8 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
       scrollRef.current?.scrollBy?.(-1, "viewport")
     }
     if (name === "pagedown") scrollRef.current?.scrollBy?.(1, "viewport")
-    if (name === "up" && !rosterFocused && !choicesFocused) recallHistory(-1)
-    if (name === "down" && !rosterFocused && !choicesFocused) recallHistory(1)
+    if (name === "up" && !rosterFocused && !choicesFocused && panelFocus === null) recallHistory(-1)
+    if (name === "down" && !rosterFocused && !choicesFocused && panelFocus === null) recallHistory(1)
     if (event.ctrl && name === "l") {
       const current = connection.session.getSnapshot()
       setCleared({ seq: current.head, lineId: connection.getState().lines.at(-1)?.id ?? 0 })
@@ -297,15 +312,22 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (name === "f7") onCommands?.()
     // Tab cycles focus: chat input -> the latest choices select (when one is live) -> the
-    // pictures in the log (when there are any) -> the roster (only when it can act) -> back to the
-    // input, so focus is never stranded.
+    // pictures in the log (when there are any) -> the roster (only when it can act) -> each panel
+    // with choices -> back to the input, so focus is never stranded.
     if (name === "tab") {
-      const stops = ["input", ...(hasChoices ? ["choices"] : []), ...(pictures.length > 0 ? ["pictures"] : []), ...(showSidebar && rosterFocusable ? ["roster"] : [])]
-      const current = choicesFocused ? "choices" : picturesFocused ? "pictures" : rosterFocused ? "roster" : "input"
-      const next = stops[(Math.max(0, stops.indexOf(current)) + 1) % stops.length]
+      const stops = [
+        "input",
+        ...(logChoices ? ["choices"] : []),
+        ...(pictures.length > 0 ? ["pictures"] : []),
+        ...(showSidebar && rosterFocusable ? ["roster"] : []),
+        ...(showSidebar ? panelStops : []),
+      ]
+      const current = choicesFocused ? "choices" : picturesFocused ? "pictures" : rosterFocused ? "roster" : panelFocus !== null ? `panel:${panelFocus}` : "input"
+      const next = stops[(Math.max(0, stops.indexOf(current)) + 1) % stops.length] ?? "input"
       setChoicesFocused(next === "choices")
       setPicturesFocused(next === "pictures")
       setRosterFocused(next === "roster")
+      setPanelFocus(next.startsWith("panel:") ? next.slice("panel:".length) : null)
     }
   })
 
@@ -352,6 +374,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
               />
               {narrow ? null : <ScenePanel scene={scene} theme={theme} locale={locale} established={8} />}
               <VariablesPanel variables={viewData(snapshot, "variables")} theme={theme} locale={locale} />
+              <PanelsPanel sections={sections} theme={theme} locale={locale} focused={panelFocus} onPick={pickChoice} />
             </box>
           </scrollbox>
         ) : null}
@@ -382,7 +405,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
           minWidth={0}
           value={command}
           maxLength={CHAT_INPUT_LIMIT}
-          focused={!rosterFocused && !choicesFocused && !picturesFocused && !modal}
+          focused={!rosterFocused && !choicesFocused && !picturesFocused && panelFocus === null && !modal}
           placeholder={tt(locale, "game.placeholder")}
           onInput={(value: string) => {
             setCommand(value)

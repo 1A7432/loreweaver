@@ -5,5 +5,6 @@ export * from "./decode.js";
 export * from "./schema.js";
 export * from "./client.js";
 export * from "./bytes.js";
+export * from "./panels.js";
 // The same sanitiser the 2.6 entry exports — one implementation, not a fork.
 export { stripControlChars } from "../sanitize.js";

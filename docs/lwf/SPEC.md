@@ -79,7 +79,7 @@ that "runs LWF" can also mean "runs it *as a game*, not as improv theater".
 - **Information isolation.** Keeper-only material MUST be removed structurally, per
   recipient and before any transport, by a projection the runtime computes. A client
   never merely hides it. Keeper-only material includes secret lore, keeper-visibility
-  variables, unexposed imported variables, overlays, keeper-audience panels and the
+  variables, unexposed imported variables, overlays, admin-audience panels and the
   other items of cards.md §8.
 - **Sandboxed logic.** Pack-shipped code (hooks, templates, rules scripts, prep scripts,
   panel code) runs only inside the sandboxes of §4. A broken or hostile script degrades
@@ -124,7 +124,7 @@ operator's explicit decision, and player devices trust nobody. Accordingly:
    full-mode templates together (skills-hooks.md §6).
 5. **Client-side sandboxes.** Panel code delivered to player devices MUST run with an
    opaque origin, with no host access beyond the panel bridge and with **no network
-   capability** ([formats/panels.md](formats/panels.md) §6). It loads only its own
+   capability** ([formats/panels.md](formats/panels.md) §7). It loads only its own
    content-addressed assets.
 6. **No central authority.** A pack MUST remain installable from a local file or a plain
    Git release. Conformance MUST NOT require any registry, account or phone-home.
@@ -165,7 +165,7 @@ reference refuses `manifest_version: 1` packs.
 - **Wire protocol.** The major version is the compatibility contract: a client and a
   server MUST agree on it. Minor versions within a major are additive, and a client
   ignores frame types and fields it does not recognize, with one exception: a field that
-  gates rendering, such as `visible_when`, is never ignorable (panels.md §5.1).
+  gates rendering, such as `visible_when`, is never ignorable (panels.md §6).
 
 ## 6. Constituent documents
 
@@ -175,7 +175,7 @@ reference refuses `manifest_version: 1` packs.
 | Cards, lorebooks, the world/character split, isolation | [formats/cards.md](formats/cards.md) | 2.0 stable |
 | Rule systems | [formats/rulepacks.md](formats/rulepacks.md) | 2.0 stable |
 | Skills, hooks, templates | [formats/skills-hooks.md](formats/skills-hooks.md) | 2.0 stable |
-| Module UI panels | [formats/panels.md](formats/panels.md) | 1.0 stable |
+| Panels | [formats/panels.md](formats/panels.md) | 3.0 draft |
 | Wire protocol | engine `docs/protocol.md` + npm `loreweaver-protocol` | 2.5 stable |
 
 Lorebooks: LWF accepts the SillyTavern lorebook shapes (`character_book`, or

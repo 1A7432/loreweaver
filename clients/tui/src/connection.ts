@@ -24,7 +24,7 @@ import { ByteError, type Dialer, type Transport } from "./irohLink"
 import { cachedMediaPath, readCachedMedia, sha256Hex, sniffImageMime, writeCachedMedia, type LocalFile } from "./media"
 
 /** Every built-in view the client shows. */
-export const CLIENT_VIEWS: readonly BuiltInViewName[] = ["me", "party", "scene", "variables", "characters", "commands", "room", "usage"]
+export const CLIENT_VIEWS: readonly BuiltInViewName[] = ["me", "party", "scene", "variables", "characters", "commands", "room", "usage", "panels"]
 
 /** Local lines kept; the oldest go first. */
 export const MAX_LOCAL_LINES = 200

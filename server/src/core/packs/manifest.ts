@@ -43,12 +43,9 @@ export const MAX_PRESENTATION = 1;
 export const MODULE_SOURCE_EXTENSIONS: readonly string[] = [".ts", ".mts", ".tsx", ".js", ".mjs", ".jsx"];
 export const BUNDLED_MODULE_EXTENSION = ".js";
 /** The content kinds of manifest version 3. */
-export const CONTENT_KINDS: readonly string[] = ["skills", "rulepacks", "cards", "presentation"];
-/**
- * Kinds of 2.x packs this version does not carry. `panels` arrive with the panel layer;
- * `lorebooks`, `presets` (prompt presets) and `prep` (prep scripts) are not part of 3.0.
- */
-export const UNSUPPORTED_KINDS: readonly string[] = ["lorebooks", "panels", "presets", "prep"];
+export const CONTENT_KINDS: readonly string[] = ["skills", "rulepacks", "cards", "presentation", "panels"];
+/** Kinds of 2.x packs this version does not carry: `lorebooks`, `presets` (prompt presets) and `prep` (prep scripts). */
+export const UNSUPPORTED_KINDS: readonly string[] = ["lorebooks", "presets", "prep"];
 
 export type CardKind = "world" | "character";
 
@@ -100,6 +97,8 @@ export interface Manifest {
   readonly cards: readonly ManifestCard[];
   /** The presentation kit file; null for none. */
   readonly presentation: string | null;
+  /** Panels files (`.yaml`/`.yml`): the panels the pack ships (docs/lwf/formats/panels.md). */
+  readonly panels: readonly string[];
   readonly assets: readonly ManifestAsset[];
   /** Top-level keys this version does not define: ignored, and reported. */
   readonly ignoredKeys: readonly string[];
@@ -385,6 +384,7 @@ export function checkManifest(document: unknown): ManifestParse {
   let rulepacks: string[] = [];
   let cards: ManifestCard[] = [];
   let presentation: string | null = null;
+  let panels: string[] = [];
   const contents = field(document, "contents");
   if (contents !== undefined && contents !== null) {
     if (!isRecord(contents)) r.fail("not_a_mapping", "contents");
@@ -398,6 +398,7 @@ export function checkManifest(document: unknown): ManifestParse {
       cards = readCards(r, field(contents, "cards"));
       const kits = readPathList(r, field(contents, "presentation"), "contents.presentation", MAX_PRESENTATION, [".yaml", ".yml"]);
       presentation = kits[0] ?? null;
+      panels = readPathList(r, field(contents, "panels"), "contents.panels", MAX_KIND_ENTRIES, [".yaml", ".yml"]);
     }
   }
   const assets = readAssets(r, field(document, "assets"));
@@ -414,6 +415,7 @@ export function checkManifest(document: unknown): ManifestParse {
   rulepacks.forEach((file, index) => claim(file, `contents.rulepacks.${index}`));
   cards.forEach((card, index) => claim(card.path, `contents.cards.${index}.path`));
   if (presentation !== null) claim(presentation, "contents.presentation.0");
+  panels.forEach((file, index) => claim(file, `contents.panels.${index}`));
   assets.forEach((asset, index) => claim(asset.path, `assets.${index}.path`));
   const skillIds = new Set<string>();
   skills.forEach((skill, index) => {
@@ -432,7 +434,7 @@ export function checkManifest(document: unknown): ManifestParse {
   if (r.problems.length > 0) return { ok: false, problems: r.problems };
   return {
     ok: true,
-    manifest: { manifestVersion: MANIFEST_VERSION, id, version, name, description, authors, license, engine, modules, skills, rulepacks, cards, presentation, assets, ignoredKeys },
+    manifest: { manifestVersion: MANIFEST_VERSION, id, version, name, description, authors, license, engine, modules, skills, rulepacks, cards, presentation, panels, assets, ignoredKeys },
   };
 }
 

@@ -215,3 +215,14 @@ describe("loading installed packs", () => {
     }
   });
 });
+
+test("build: a pack's panels files travel with their pages and pictures", async () => {
+  const source = fresh("source");
+  writeSourceTree(source, { manifest: manifestYaml({ entry: "src/tally.ts", panels: true }) });
+  const built = await buildPack(source, { out: `${fresh("out")}.lwpack` });
+  if (!built.ok) throw new Error(JSON.stringify(built));
+  const read = readZip(new Uint8Array(readFileSync(built.out)));
+  if (!read.ok) throw new Error(read.code);
+  expect(read.entries.map((entry) => entry.path)).toEqual(expect.arrayContaining(["ui/panels.yaml", "ui/chart.html", "art/chart.png"]));
+  expect(built.trust.panels.map((panel) => panel.id)).toEqual(["tide", "ledger", "chart", "notes"]);
+});

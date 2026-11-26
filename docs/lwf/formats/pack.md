@@ -6,14 +6,15 @@ time), a 2.x `hooks.js` is no longer run, and the generated `files` and `trust` 
 are gone from the manifest. A runtime that implements 3.0 refuses `manifest_version: 1`
 and `2`.
 Reference implementation, in the Loreweaver engine: `server/src/infra/zip.ts` (the
-archive), `server/src/core/packs/` (manifest, whole-pack validation, trust card),
+archive), `server/src/core/packs/` (manifest, whole-pack validation, trust card), `server/src/core/panels/`
+(panels files),
 `server/src/cli/packs.ts` (build, install, load) and `server/src/gateway/packs.ts`
 (enabling in a room).
 
 A pack is **one ZIP archive** with the suffix `.lwpack`. At its root is a manifest,
 `pack.yaml`, and beside it the files the manifest names. It is how content reaches a
-server: modules, rule systems, skills, cards, a presentation kit and the pictures and
-sounds that kit uses, as one unit that a runtime validates before writing anything.
+server: modules, rule systems, skills, cards, panels, a presentation kit and the pictures
+and sounds they use, as one unit that a runtime validates before writing anything.
 
 An author works in a **source tree**: a directory with a `pack.yaml`, module sources in
 TypeScript or JavaScript, and the content files. A **builder** turns the tree into the
@@ -33,6 +34,8 @@ harbor/                      the source tree
 ├── cards/drowned.json       a world card
 ├── cards/sailor.json        a character card
 ├── presentation.yaml
+├── ui/panels.yaml           panels, and one panel's page
+├── ui/chart.html
 ├── art/quay.png
 └── sound/bell.ogg
 ```
@@ -55,6 +58,7 @@ contents:
     - { path: cards/drowned.json, kind: world, notes: Import as the world. }
     - { path: cards/sailor.json, kind: character }
   presentation: [presentation.yaml]
+  panels: [ui/panels.yaml]
 assets:
   - { path: art/cover.png, title: Cover }
 ```
@@ -138,8 +142,9 @@ decision to run its code, and the trust card says so first (§8).
 | `rulepacks` | a `.yaml` or `.yml` file | Its stem is the rule system's id, a slug, unique in the pack. It MUST compile ([rulepacks.md](rulepacks.md)). |
 | `cards` | `{path, kind, notes?}` | §4.1. |
 | `presentation` | a `.yaml` or `.yml` file | At most **one**. §4.2. |
+| `panels` | a `.yaml` or `.yml` file | A panels file ([panels.md](panels.md)). At most 16 panels across the pack, ids unique across its files. Each page's HTML and every picture a panel names travel with it, listed under `assets` or not. |
 
-The 2.x kinds `lorebooks`, `panels`, `presets` and `prep` are refused with the code
+The 2.x kinds `lorebooks`, `presets` and `prep` are refused with the code
 `unsupported_kind`; any other unknown kind with `unknown_kind`.
 
 **Rule packs.** `extends:` names a base rule system: first one of the pack's own rule
@@ -222,7 +227,9 @@ never outside the source tree.
 ## 6. Assets
 
 An asset is a picture or a sound. The pack's assets are the records under `assets` and,
-in addition, every picture and sound its presentation kit names. A record is a path or:
+in addition, every picture and sound its presentation kit names and every picture its
+panels name. (A panel page's HTML is not an asset: it is a panel file, [panels.md](panels.md) §7.)
+A record is a path or:
 
 | Key | Req | Meaning |
 |---|---|---|
@@ -267,7 +274,8 @@ summary computed from the validated content: the pack's name, id, version, autho
 license; whether it **runs code**, and which modules (id, file, size, digest); the rule
 systems it adds and what each extends; its skills, the tools each unlocks and whether it
 declares mature content; its cards, each with its kind and the world machinery it
-carries; the presentation kit; how many assets and bytes; and what was **ignored** (a
+carries; its panels, each with its kind, audience, the views it reads and a page's file
+(path, size, digest); the presentation kit; how many assets and bytes; and what was **ignored** (a
 `hooks.js`, unnamed files, unknown manifest keys). Being computed, it cannot understate
 what the pack ships. In the reference, `loreweaver install <ref>` prints it and writes
 nothing; `loreweaver install <ref> --yes` installs.
@@ -296,7 +304,10 @@ pack in a room (`pack enable <id>`; `pack disable <id>` undoes it), and the choi
 room setting that survives every reset. For that room only, an enabled pack's modules
 load in the room's worker, in the order the packs were enabled; its presentation kit
 joins the room's kit, and the pictures and sounds the kit names become the room's
-unlisted media, fetchable by that room's members only; its skills can be enabled with
+unlisted media, fetchable by that room's members only; its panels join the room's `panels`
+view, each on until the admin switches it off (`panels disable <pack>/<panel>`, a room setting
+that survives every reset), and the pictures they name and each page's HTML become the room's
+unlisted media likewise (a page only admins are listed, fetchable by admins only); its skills can be enabled with
 `skill enable <id>` (enabling a pack enables none of them, and disabling it disables
 them); and its cards can be imported: `import {pack, card, as}`, where `card` is the
 card's path in the pack — a world import stays the admin's. Rule systems need no
@@ -326,5 +337,7 @@ Pack 3.0 is not compatible with 2.0, and a 3.0 runtime refuses a 2.0 pack. To mo
 - write `kind:` on every card entry (2.0 forbade it and stamped it at build time);
 - move the logic of each skill's `hooks.js` into a module (§3): the script is no longer
   run;
-- drop `lorebooks`, `presets` and `prep` (not part of 3.0) and, for now, `panels`;
+- drop `lorebooks`, `presets` and `prep` (not part of 3.0);
+- rewrite each panels file to panels 3.0 ([panels.md](panels.md) §9): bindings read views,
+  a choice runs a command, a page is one self-contained HTML file;
 - a rule pack with a rules script does not load in 3.0.

@@ -6,6 +6,7 @@
 // language; ids are stable and never translated. Module views (`<module>/<name>`) carry
 // the schema their module declared and are not described here.
 import type { Role } from "./frames.js";
+import type { PanelsView } from "./panels.js";
 
 /** A JSON Schema, as plain data. */
 export type ViewSchema = { readonly [key: string]: unknown };
@@ -188,6 +189,7 @@ export interface BuiltInViews {
   room: RoomView;
   usage: UsageView;
   packs: PacksView;
+  panels: PanelsView;
 }
 
 export type BuiltInViewName = keyof BuiltInViews;
@@ -334,6 +336,32 @@ export const PACKS_VIEW_SCHEMA: ViewSchema = record({
   ),
 });
 
+const BINDABLE_OBJECTS = list({ type: "object" });
+const PANEL_VIEW_REF = record({ as: STRING, view: STRING });
+
+/**
+ * `panels` (§8.5). Template blocks are checked as objects only: `instantiate` reads them
+ * defensively, block by block, and drops what it cannot use.
+ */
+export const PANELS_VIEW_SCHEMA: ViewSchema = record({
+  panels: list(
+    record(
+      {
+        id: STRING,
+        title: STRING,
+        slot: { type: "string", enum: ["sidebar", "tray", "modal"] },
+        kind: { type: "string", enum: ["template", "page"] },
+        views: list(PANEL_VIEW_REF),
+        source: record({ kind: { type: "string", enum: ["pack", "room"] }, id: STRING }),
+        blocks: BINDABLE_OBJECTS,
+        page: record({ hash: STRING, size: INTEGER, mime: { const: "text/html" } }),
+        fallback: { anyOf: [BINDABLE_OBJECTS, { type: "null" }] },
+      },
+      ["blocks", "page", "fallback"],
+    ),
+  ),
+});
+
 /** The schema of every built-in view, by name. */
 export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchema } = {
   me: ME_VIEW_SCHEMA,
@@ -345,6 +373,7 @@ export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchem
   room: ROOM_VIEW_SCHEMA,
   usage: USAGE_VIEW_SCHEMA,
   packs: PACKS_VIEW_SCHEMA,
+  panels: PANELS_VIEW_SCHEMA,
 };
 
 /** One entry of `view.list`. */

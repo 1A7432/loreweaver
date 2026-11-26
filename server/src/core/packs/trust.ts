@@ -2,7 +2,7 @@
 // before anything is written. It says, first, whether the pack runs code (and which
 // modules: 3.0 modules run in the server's process with no sandbox), then what it adds
 // (rule systems, skills and the tools each unlocks, cards and the world machinery they
-// carry, the presentation kit, assets and their bytes), and what was ignored (a 2.x
+// carry, the panels and the views they read, the presentation kit, assets and their bytes), and what was ignored (a 2.x
 // `hooks.js`, files the manifest does not name, unknown manifest keys). It is computed
 // from the validated pack, so it cannot understate what the pack ships.
 import type { LocalText } from "./manifest.ts";
@@ -42,6 +42,17 @@ export interface TrustCard {
       readonly hooks: number;
     };
   }[];
+  /**
+   * Its panels: each one's id, kind, audience and the views it reads; a page's HTML file (a
+   * page is code a rich client runs in its sandboxed frame, never the server).
+   */
+  readonly panels: readonly {
+    readonly id: string;
+    readonly kind: "template" | "page";
+    readonly audience: "all" | "player" | "admin";
+    readonly views: readonly string[];
+    readonly page: { readonly path: string; readonly bytes: number; readonly sha256: string } | null;
+  }[];
   readonly presentation: { readonly subjects: number; readonly cues: number; readonly generation: "allow" | "pack_only" } | null;
   readonly assets: { readonly count: number; readonly bytes: number };
   /** Every file the pack installs, `pack.yaml` included, and their bytes. */
@@ -74,6 +85,13 @@ export function trustCard(pack: Pack): TrustCard {
         moduleVariables: card.machinery.moduleVariables,
         hooks: card.machinery.unsupportedHooks,
       },
+    })),
+    panels: pack.panels.map(({ spec, page }) => ({
+      id: spec.id,
+      kind: spec.kind,
+      audience: spec.audience,
+      views: spec.views.map((ref) => ref.view),
+      page: page === null ? null : { path: page.path, bytes: page.size, sha256: page.sha256 },
     })),
     presentation: pack.presentation === null ? null : { subjects: pack.presentation.kit.subjects.length, cues: pack.presentation.kit.audio.length, generation: pack.presentation.kit.generation },
     assets: { count: pack.assets.length, bytes: pack.assets.reduce((sum, asset) => sum + asset.size, 0) },

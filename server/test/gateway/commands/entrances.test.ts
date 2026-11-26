@@ -54,6 +54,7 @@ const CASES: readonly Case[] = [
   { line: ".uploads off", id: "uploads", args: { on: false }, member: ADMIN, media: true },
   { line: `.import character ${sha256(CARD)} Mirabel`, id: "import", args: { file: sha256(CARD), as: "character", name: "Mirabel" }, media: true, setup: withCard },
   { line: ".pack", id: "pack", args: { op: "list" } },
+  { line: ".面板", id: "panels", args: { op: "list" } },
   { line: ".skill enable mature-mode", id: "skill", args: { op: "enable", id: "mature-mode" }, member: ADMIN },
   { line: ".jrrp", id: "jrrp", args: {} },
   { line: ".draw", id: "draw", args: {} },

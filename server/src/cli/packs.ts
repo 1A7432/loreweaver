@@ -24,6 +24,7 @@ import { PROTOCOL_VERSION } from "loreweaver-protocol/v3";
 import { MANIFEST_FILE, MAX_MANIFEST_BYTES, parseManifest, readPack, ruleSystemId, sha256Hex, skillId, trustCard, versionAtLeast, type Pack, type PackEntry, type PackProblem, type TrustCard } from "../core/packs/index.ts";
 import { builtInPackIds } from "../core/rulepacks/index.ts";
 import { builtInSkillIds } from "../core/skills/index.ts";
+import { parsePanels } from "../core/panels/index.ts";
 import { parsePresentationKit } from "../core/presentation/kit.ts";
 import { loadYaml } from "../core/yaml.ts";
 import type { LoadedPack } from "../gateway/packs.ts";
@@ -116,6 +117,23 @@ export async function buildPack(sourceDir: string, options: { readonly out?: str
         }
       } catch {
         // The whole-pack check reports a kit that does not read.
+      }
+    }
+  }
+
+  // Panels files, and what their panels name: a page's HTML and the pictures, listed or not.
+  for (const file of manifest.panels) {
+    const failed = read(file);
+    if (failed !== null) return failed;
+    const bytes = files.get(file);
+    if (bytes === undefined) continue;
+    const parsed = parsePanels(new TextDecoder().decode(bytes));
+    // The whole-pack check reports a panels file that does not read.
+    if (!parsed.ok) continue;
+    for (const panel of parsed.panels) {
+      for (const path of [...(panel.entry === null ? [] : [panel.entry]), ...panel.images]) {
+        const panelFailed = read(path);
+        if (panelFailed !== null) return panelFailed;
       }
     }
   }
