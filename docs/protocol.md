@@ -1,768 +1,1232 @@
-*English · [中文](protocol.zh.md)*
+# Loreweaver wire protocol 3.0
 
-# loreweaver networked TUI — wire protocol 2.6
+This document is the open, versioned protocol between a Loreweaver server and its clients:
+what a client sends, what the server sends back, and in what order. It is written so that a
+client can be built from it without reading the server. Protocol version: `"3.0"`.
 
-This is the open, versioned wire protocol between a loreweaver server (started via
-`python -m app --serve`) and the OpenTUI terminal client. The engine itself
-(deterministic core + AI Keeper) is unaffected by transport; the transport-neutral
-session logic is `net.session.SessionCore`, and this document is the language-agnostic seam.
+The authority is the code. The frame types, payload shapes and limits every client shares are
+in the `loreweaver-protocol` package, entry `loreweaver-protocol/v3`
+(`clients/protocol/src/v3/`): `frames.ts` (frames, event and signal payloads, limits),
+`views.ts` (the built-in views and their JSON Schemas), `bytes.ts` (the byte channel),
+`decode.ts` (what a client accepts and what it drops) and `client.ts` (a reference client
+session that does no I/O). Where this document and that package disagree, the package is
+right and this document has a bug.
 
-Frames are JSON objects, each shaped `{"type": ...}`. Protocol version: `"2.6"`. The same
-frames + `join` handshake ride the transport; only the carrier + its framing differ:
+**3.0 is a new protocol.** It has no compatibility with 2.x: not on the wire, not in the room
+database, not in pack or module formats. The transport's ALPN carries the protocol major
+(`loreweaver/3`), so a 2.x client fails to connect instead of misreading frames.
 
-- **Iroh** (the transport `--serve` starts) — peer-to-peer QUIC. The server
-  (`net.iroh_server`) binds an endpoint on the custom ALPN `loreweaver/tui/1` and prints a
-  shareable **ticket**; a client dials the ticket (no domain/TLS/port-forward). A QUIC
-  bidirectional stream is a raw byte stream, so control frames are **newline-delimited** JSON — one
-  compact `{...}\n` per frame — over one long-lived `open_bi`/`accept_bi` stream. Media bytes use
-  additional bidirectional streams on the same connection; see "Media transfer" below.
-- **WebSocket** (`net.tui_server`, endpoint `ws://host:port/`, one JSON object per message) —
-  kept ONLY as the offline test / loopback carrier; JSON control frames are text messages, and
-  media bytes are binary messages; see "Media transfer" below. It is not a `--serve` option.
+## Contents
 
-Both carriers drive the same `SessionCore`/`RoomHub`.
+1. [Concepts](#1-concepts)
+2. [Transport](#2-transport)
+3. [Frames](#3-frames)
+4. [Connecting](#4-connecting)
+5. [Requests and results](#5-requests-and-results)
+6. [Commands](#6-commands)
+7. [The event log](#7-the-event-log)
+8. [Event kinds](#8-event-kinds)
+9. [Signals](#9-signals)
+10. [Views](#10-views)
+11. [The byte channel](#11-the-byte-channel)
+12. [Behaving well](#12-behaving-well)
+13. [Example sessions](#13-example-sessions)
+14. [Not in 3.0 yet](#14-not-in-30-yet)
 
-**Versioning.** The major version is the compatibility contract: a client and server
-must agree on the major (`2`), and a client should refuse (or clearly warn on) a
-`welcome.protocol` with a different major. `loreweaver-protocol` ships the predicate
-(`protocolMismatch`) so no client has to write it, and both reference clients — the TUI
-and Loreweaver Studio — take the stronger option: they REFUSE, drop the connection, and
-name both versions. A client that keeps talking to a different-major server misreads
-frames instead of failing, which is far harder to diagnose. A version banner that cannot
-be parsed is not evidence of disagreement and must not be treated as one. Minor versions
-within a major are additive;
-a client ignores frame types and fields it does not recognize — with one NORMATIVE
-exception: **a field that GATES rendering is never ignorable.** A client that encounters
-a panel template block carrying `visible_when` and cannot evaluate that condition — because
-it does not implement the field, or does not implement that corner of the grammar, or the
-evaluation errors — MUST NOT render the block. Ignoring the gate draws content the author
-hid, so the undecidable case fails CLOSED, exactly as an unresolved `$var` does.
+---
 
-**2.6 (additive)** adds `state.actions`: the room's PLAYER-invokable module actions —
-hook-registered mechanics (`defineAction(name, {player: true, …})`, see `docs/hooks.md`)
-that any member may run without a Keeper round. Each entry is `{id, label, description,
-params?}`; `label` is resolved like every other server label, `params` is the author's
-free-text hint of the argument shape. A client that offers them sends `.act <id> <args>`
-through the ordinary `input` frame (`args`: a JSON object, or plain text the server wraps
-as `{"text": …}`), so there is no new client frame; the result comes back as an ordinary
-`narrative` from `system`, broadcast like a `.ra` result, with a `dice` frame when the
-action declares rolls. The list is served from a cache the server refreshes whenever it
-builds the room's hook engine (each Keeper turn, each `.act`, a hook install, a skill
-toggle), so it can briefly lag a change; it is omitted when the room has none. A 2.5 client
-ignores the field and can still type `.act`.
+## 1. Concepts
 
-**2.5 (additive)** adds display labels BESIDE raw ids, all optional: `value_label` on an
-`enum` entry of `state.variables` (the pack's name for the current option),
-`state.character.attribute_labels` (each attribute key's display name), `subsystem_label` on
-`dice` frames, and `blurb` / `claimed_by_name` on `state.pregens` entries. Nothing that was
-an id stops being one — `value`, attribute keys and `subsystem` are unchanged, so
-`visible_when`, hooks and commands keep using them. A 2.4 client ignores the new fields and
-shows the raw ids, as it did; a 2.5 client falls back to the raw id whenever a label is
-absent (an older server, a pack that names nothing). Panel templates gain one rule
-(`docs/lwf/formats/panels.md` §5.1 rule 7): a binding that DISPLAYS a variable's value shows
-its `value_label` when the entry carries one.
+Loreweaver runs tabletop role-playing sessions with an AI game master. The protocol has four
+ideas: an **event log** (what happened at the table, numbered and stored), **calls** (what a
+client asks for, each answered once), **views** (structured values the server keeps current for
+a client) and the **byte channel** (files, moved beside the control stream).
 
-**Labels and locale.** Every server-resolved label on the wire — these, and the existing
-`Resource.label`, `variables[].label`, `outcome.label` and `expr` — is resolved in the
-language the server runs in (its `settings.locale`, announced as `welcome.locale`). `join`
-carries no language, so all connections to one server receive the same language; frames
-are still BUILT per connection, which is what a future per-connection language would
-need. Panel text (`{en,zh}` maps) is different: the client picks it.
+| term | meaning |
+|---|---|
+| room | One table: its members, its story, its log. Every key belongs to exactly one room. |
+| key | A secret string that admits its holder to one room with one role. There is no registration. |
+| role | `player`, `admin` or `observer`, fixed by the key. See [4.4](#44-roles). |
+| the Keeper | The AI game master. It is not a member and holds no key. |
+| admin | The human holding an admin key. An admin also plays; "admin" never means the AI. |
+| member | One connection in a room. A person with two connections is two members with one member id. |
+| member id | A stable id derived from the key (`m:` and 12 hex digits). It never reveals the key. |
+| event | One entry of the room's log: numbered (`seq`), stored, sent to every member in order. |
+| signal | An ephemeral message to the table: never stored, never replayed. |
+| view | A named structured value computed for one viewer, pushed when it changes. |
+| command | The one kind of operation a person performs: engine, rule pack and module commands alike. |
+| turn | The Keeper's answer to one line of speech. Turns are numbered per room. |
+| epoch | The room's generation. It moves when the log is rewritten (undo, reset, import). |
+| `seq` | An event's number in its room's log. Never reused in a room, not even after an undo. |
+| `head` | The highest `seq` the room has handed out (0 for a room that never logged anything). |
+| `rid` | A request id the client chooses; the server's one `result` for that request carries it. |
 
-**2.4 (additive)** adds the `report` frame (Server → Client): the HTML session report
-(`.report html`, and the admin-only `.report html reveal`), stored as an unlisted room blob
-and announced only to the connection that asked for it. A 2.3 client ignores the frame and
-simply never receives the file.
+## 2. Transport
 
-**2.1 (additive, M19)** adds the presentation surface: the `image` block kind and the
-four performance templates (`letter`, `clipping`, `map_pin`, `title_card`) in the `ui`
-vocabulary and in panel templates; `visible_when` on panel template blocks; and
-`state` `Resource.label` resolved per connection (in the server's locale — see "Labels and locale" above). A 2.0 client ignores an
-unknown block kind and every unknown template field EXCEPT `visible_when` — for that one
-it drops the whole block under the rule above — so it degrades to at most what it
-rendered before, never to more. Nothing on the wire lets the server check this — `welcome.protocol`
-announces the SERVER's version and `join` carries no client version — so it is a client
-conformance requirement, and a pack that uses `visible_when` is 2.1-minimum. Note also
-what the gate is NOT: a gated block's content rides the manifest whatever the condition
-says, so `visible_when` decides WHEN a block draws, never whether its content reaches the
-client. Secrecy is `audience` (resolved server-side) and the `state` variable filter.
+### 2.1 Iroh
 
-`"2.0"` was a BREAKING consolidation of the 1.x line. What it broke, and the wart each
-break settles:
+The server speaks over [iroh](https://iroh.computer): peer-to-peer QUIC, dialled by a
+**ticket** (an iroh endpoint ticket string). No domain, TLS certificate or open port is needed.
 
-- `dice` frames are redesigned around the engine's neutral check-outcome contract: the
-  1.x CoC-shaped `rank:int(-2..4)` / `level:string` fields are gone; a graded check
-  carries `outcome:{id,label,success,critical,fumble,tier,margin?}` and clients color
-  by the semantic flags instead of embedding one system's rank ladder. The 1.x
-  `kind:"sanity"` becomes the generic `kind:"subsystem"` + a `subsystem` id, and
-  system-shaped extras (bonus/penalty tens dice, SAN loss, luck spend, advantage
-  candidates) ride an opaque `detail` object.
-- Streaming is two frame types with one rule: `narrative_delta` frames carry text
-  deltas for a draft bubble; the ONE closing `narrative` frame with the same `id`
-  carries the FULL final text and REPLACES the draft. The 1.x tail-suffix `done`
-  frame, the `stream`/`done` booleans, and the "a plain narrative supersedes an open
-  draft" rule are gone — post-generation corrections simply land in the final text.
-- `state.character` / `state.party[]` vitals ride one generic
-  `resources:[{id,label,value,max}]` list; the 1.x per-system field names (`hp`,
-  `hpmax`, `san`, …) and the `hpmax`-vs-`hpMax` casing split are gone.
-- Dice frames come ONLY from structured tool payloads; the 1.x server fallback that
-  re-parsed a tool's localized text to guess a rank no longer exists.
+- **ALPN:** `loreweaver/3`. It changes with the protocol major.
+- **The control stream** is the first bidirectional stream the client opens on the connection.
+  It lives as long as the connection. The client writes `hello` on it at once (a QUIC stream is
+  not visible to the server until the client sends on it).
+- **Every further bidirectional stream** the client opens on the same connection is one
+  operation of the byte channel ([section 11](#11-the-byte-channel)). Byte streams never block
+  the control stream.
 
-The first frame a client sends MUST be `join`. The server replies with
-either `welcome` or `error`, closing the connection on error. If it doesn't
-arrive within the server's join-handshake timeout (`TRPG_TUI__JOIN_TIMEOUT`,
-default 10s), the server closes the connection with `error join_timeout`
-rather than waiting forever. The offline WebSocket test carrier also supports a
-concurrent-connection cap (`TRPG_TUI__MAX_CONNECTIONS`): excess test-carrier
-connections receive `error too_many_connections` before `join` is read.
+The operator starts a server with `loreweaver serve`, which prints one JSON object holding the
+`ticket` (and, the first time a data directory is used, a `first_key`: an admin key for the
+room `main`). Further keys are minted with `loreweaver key <room> <admin|player|observer>
+<name>`. A client needs a ticket and a key; nothing else identifies a server or a person.
 
-## Client → Server
+### 2.2 Framing
 
-- `join` — authenticate and bind the connection to a room:
-  `{type:"join", key:string, name?:string, client?:{name,version}}`
-- `input` — a command line or player utterance, exactly what the player typed:
-  `{type:"input", text:string}`
-- `media_offer` — request to upload image/audio metadata before opening the byte channel:
-  `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
-- `media_set_enabled` — keeper-only room switch for player uploads:
-  `{type:"media_set_enabled", enabled:boolean}`
-- `avatar_set` — bind one already-uploaded image in this room to the caller's
-  own active character. The server rejects frames that try to name another
-  character/user:
-  `{type:"avatar_set", hash:string}`
-- `panel_intent` — a module-panel interaction. The server first checks
-  the named panel is in THIS member's own manifest (else `error forbidden`), then routes
-  the value exactly as if the member typed it — the panel privilege model in one move:
-  `choice` and `input` submit `value` verbatim through the normal input choke (rate
-  limits, turn lock, command privilege gates all apply); `roll` runs a public
-  `.r <value>` as that player, so the real dice engine validates the expression.
-  `value` is capped at 2000 chars (`error input_too_long`):
-  `{type:"panel_intent", panel:string, kind:"choice"|"input"|"roll", value:string}`
-- `list_pack_cards` (v2.2) — ask for the card files installed packs ship, the
-  structured lane behind an "import from installed pack" picker. Player-open:
-  the reply carries FILENAMES only (the operator's install banner already
-  printed them), never card content; the world/companion import verbs keep
-  their keeper gates regardless of how a ref was discovered:
-  `{type:"list_pack_cards"}`
-- `ping`: `{type:"ping", t:number}`
+Control frames are newline-delimited JSON: one compact JSON object per line, UTF-8, ended by
+`\n`. Blank lines are skipped. Every frame is an object with a string `type`.
 
-## Server → Client
+A line that is not valid JSON is treated as an unreadable frame (`bad_frame`,
+[4.5](#45-connection-level-errors)).
 
-- `welcome` — sent once, on a successful `join`:
-  `{type:"welcome", protocol:"2.6", features:["media","audio", "imagegen"?, "demo"?, "update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
-  `version` is the server's own release version (compare it to the client's to detect a mismatch). The `"update"` feature appears only for a keeper on a server whose operator configured a self-update command, and gates the `admin_update_server` control.
-  `demo` means the server is using its offline sample Keeper, vector support is
-  enabled, and this specific Keeper room was empty when the server checked it.
-  The server rechecks under the room turn lock before setup, so a stale flag cannot
-  overwrite campaign state. An `admin_config{using_demo:false}` refresh (for example,
-  after saving on the model screen) removes it immediately; otherwise reconnecting
-  recalculates it, and a stale action is rejected server-side.
-- `error` — a localized failure notice; `bad_key`, `join_timeout` and
-  `too_many_connections` close the connection (they only ever happen during
-  or before the `join` handshake), the others do not:
-  `{type:"error", code:"bad_key"|"bad_frame"|"input_too_long"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|media error codes, message:string}`
-- `media_accept` — upload accepted; if `existing` is true, no PUT is needed:
-  `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
-- `media` — media metadata broadcast and history replay entry; bytes are fetched on demand:
-  `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
-- `media_enabled` — the room's player-upload policy. Broadcast to every member when a
-  an admin toggles it, and sent to a joining member during replay when uploads are OFF
-  (the non-default state; no frame on join means the default: enabled). Clients may
-  gate their upload surface on it:
-  `{type:"media_enabled", enabled:boolean}`
-- `audio_library_item` — a room audio-library entry created from an uploaded audio blob:
-  `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`
-- `audio_control` — playback intent for local clients:
-  `{type:"audio_control", id:string, action:"play"|"stop"|"pause"|"resume"|"volume", layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, loop?:boolean, volume?:number, fade_ms?:int, position_ms?:int, server_ts?:number}`
-- `audio_state` — best-effort persisted BGM/ambience state, replayed on join:
-  `{type:"audio_state", layers:[{layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, playing:boolean, volume?:number, loop?:boolean, started_at?:number}]}`
-- `narrative` — one COMPLETE line of story/chat text:
-  `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain"}`
-  For `speaker:"npc"`, `name` carries the NPC name. A `narrative` frame always
-  carries the full, final text. When its `id` matches a draft bubble the client
-  accumulated from `narrative_delta` frames, the final text REPLACES that
-  draft (post-generation corrections are already folded in); otherwise it is a
-  plain one-shot line. An EMPTY final text is a discard, not a message: the
-  server closes an abandoned draft that way (a tool round the Keeper superseded,
-  a turn that died mid-stream), and a client must remove — never render — a
-  bubble whose final text is empty.
-  **Join replay.** On every join the server replays the room's recent transcript
-  (the last 30 chat-history entries) as ordinary `narrative` frames — story lanes
-  only, never dot-command echoes — and, since v2.3, every `dice` and npc
-  `narrative` frame the table saw live (an AI-Keeper roll, a companion's turn, a
-  typed `.ra`) is replayed right after the transcript line it followed live, so
-  the interleaving is the one everyone watched (see Turn flow, steps 5–6). The
-  same holds for every INLINE `ui` frame (`panel:"inline"`): a hook's card right
-  after the reply it followed, and the Stage Director's staging (a picture, a
-  letter, a title card) right after the turn it dressed — even when it finished
-  rendering after the next player had already spoken. A replayed player line has
-  the live echo's shape: `speaker:"player"`, the speaker in `name`, the player's
-  own words in `text`. Live frames published while a member's replay is running
-  are delivered after it, in order, once. Replayed frames are indistinguishable
-  from live ones by design: a client renders them in arrival order and dedupes a
-  `narrative` by `id`.
-- `narrative_delta` — one streaming text delta for a draft bubble:
-  `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
-  Clients concatenate deltas sharing an `id` into a draft bubble (render as
-  markdown). The stream ends when the `narrative` frame with the SAME `id`
-  arrives; servers guarantee that closing frame (even on a failed turn, which
-  closes with the text streamed so far). Servers stream the AI-KP's reply as it
-  generates, sanitized fail-closed (machinery/MVU blocks never stream).
-- `dice` — one dice roll/check, rendered client-side; NEVER carries keeper secrets:
-  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, subsystem_label?:string, outcome?:Outcome, detail?:object}`
-  `Outcome = {id:string, label:string, success:boolean, critical:boolean, fumble:boolean, tier:number, margin?:number}`
-  `outcome` is present on graded checks: `id` is the rule system's own rank
-  vocabulary (presentation only — never branch on it), `label` is the
-  already-localized display label, and clients color by the semantic flags
-  (`critical`/`fumble`/`success`) and may shade by `tier` (the ladder ordinal;
-  higher is better). `kind:"subsystem"` marks a rule-subsystem check
-  (`subsystem` names it by its stable pack id, e.g. `sanity_check`; v2.5
-  `subsystem_label` is that subsystem's display name from the rulepack, e.g. "Sanity" /
-  "理智" — show the label, fall back to the id when it is absent). Like `outcome.label`
-  and `expr`, the label is resolved once, when the roll happens, and a join replay
-  re-sends the frame exactly as recorded: a replayed roll keeps the language it was
-  recorded in, and a roll recorded before 2.5 has no `subsystem_label`. `kind:"opposed"` carries
-  `detail.left`/`detail.right` (`{name,total,target?,outcome?}`) and
-  `detail.winner:"left"|"right"|"tie"`. `detail` is otherwise system-declared
-  roll data (bonus/penalty dice, loss/remaining, advantage candidates, …) a
-  client may surface verbatim but never needs to understand.
-- `ui` — declarative module UI emitted by the room's event hooks
-  (`emitUI(blocks, opts?)` in a skill's / card's `hooks.js` — see `docs/plugins.md`),
-  broadcast right after the KP `narrative` it annotates and before the `state`
-  snapshot. Blocks are whitelisted, validated and size-capped server-side
-  (`core.hooks`), so clients may render them as-is. The content is PLAYER-VISIBLE
-  authorial output on the same trust stance as narration: hooks must never emit
-  keeper-only secrets into it, and the engine never routes keeper tool results into
-  this frame. An `inline` frame is part of the story log and is replayed on join
-  where the table saw it (see the join replay note under `narrative`); its image
-  hashes pass the same reachability check again at replay time. A `sidebar` frame
-  is not replayed — a hook that wants a persistent panel simply re-emits it each
-  turn:
-  `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
-  `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
-  `| {kind:"stat", label:string, value:number|string|boolean}`
-  `| {kind:"badge", label:string, tone?:"info"|"warn"|"danger"}`
-  `| {kind:"text", text:string, style?:"quote"|"warning"}`
-  `| {kind:"divider"}`
-  `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
-  `| {kind:"image", hash:string, mime?:string, size?:int, caption?:string, alt?:string}`
-  `| {kind:"letter", body:string, from?:string, to?:string, date?:string}`
-  `| {kind:"clipping", headline:string, body:string, source?:string, date?:string}`
-  `| {kind:"map_pin", hash:string, mime?:string, size?:int, label:string, x:number, y:number, note?:string}`
-  `| {kind:"title_card", title:string, subtitle?:string, act?:string}`
-  The last four are the M19 PERFORMANCE templates: declarative, not markup. A rich
-  client styles a `letter` as stationery and a `title_card` as a full-bleed act card;
-  a text-first client prints the same fields as lines. `map_pin`'s `x`/`y` are
-  FRACTIONS of the map image's own box (0..1), so a client scales the marker to
-  whatever size it draws the map at. They are emitted by the room's Stage Director
-  (`agent.stage_director`) on story beats and are equally available to hooks and
-  pack panels.
-  An `image` block names a picture by CONTENT HASH — the same address the media byte
-  channel answers (`{op:"get", hash}`). The server only ever emits a hash reachable
-  from THIS room (its own media, or an asset of a pack enabled in it) and stamps the
-  authoritative `mime`, so a client may fetch and cache it exactly like any other
-  media; an unreachable hash is dropped server-side before the frame is built.
-  Text-first clients degrade to the `caption`/`alt` line plus their usual media
-  affordance.
-  `panel:"inline"` renders into the narrative stream; `"sidebar"` into a persistent
-  panel region. `id` names a UI region: a later sidebar frame with the same `id`
-  replaces that region's content, and an inline frame with `replace:true` MAY update
-  the prior inline frame with the same `id` in place (a client without in-place
-  updates simply appends). Picking a `choices` option sends that option's `input`
-  back verbatim as a NORMAL `input` frame — no new client→server frame type exists.
-- `ui_manifest` — this VIEWER's complete module-panel list, sent on
-  `join` right after the initial `state` frame and pushed to every connected member
-  after an admin's `.panels enable|disable`. FULL-REPLACE semantics: the frame carries
-  the whole list (empty = no panels, which also clears stale panels on reconnect). The
-  pack's `audience` declarations are resolved server-side per the viewer's keystore
-  role BEFORE this frame is built — a keeper-only panel structurally never appears in
-  a player's manifest, and `audience` itself never rides the wire. See "Module UI
-  panels" below for the panel/template shapes:
-  `{type:"ui_manifest", panels:[UiManifestPanel]}`
-- `panel_event` — an opaque JSON payload a room hook emitted via
-  `emitPanel(panelId, payload)` (see `docs/plugins.md`), for the named panel's own
-  code (tier-2). Delivered — right after the turn's `ui` frames — ONLY to members
-  whose manifest contains that panel; ≤ 20 per turn (excess dropped + logged) and
-  ≤ 32 KB serialized per payload. Clients that do not run panel code (the TUI)
-  simply ignore it:
-  `{type:"panel_event", panel:string, payload:any}`
-- `state` — a panel snapshot, sent on `join` and after every turn:
-  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, usage?:{context_tokens:int,context_window:int,input_tokens:int,output_tokens:int,cache_hit_tokens:int,cache_miss_tokens:int}, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], actions?:[{id:string,label:string,description:string,params?:string}], reset?:boolean}`
-  `Resource = {id:string, label:string, value:number, max?:number}` — the rule
-  system's vital meters (HP, sanity, mana, …) as generic data: a client renders
-  the list as meters without knowing any system's field names. Entries arrive in
-  render order. `label` is already resolved, in the server's locale (see "Labels and
-  locale"): a rulepack may declare `sheet.resources[].label` as a locale map, so one
-  pack's bars read correctly on an `en` server and a `zh` one.
-  `character.attributes` (v2.3) is the sheet's CHARACTERISTICS only — the keys the
-  rule system's `sheet.attributes` declares, in the pack's own order (`STR CON SIZ …`
-  for CoC 7e, `STR DEX CON …` for D&D 5e, a community pack's own for its system);
-  the vitals are NOT repeated here (they are `resources`) and derived values are
-  never sent — so a client renders the dict as-is, in wire order, and each key is a
-  name `.st <key>=<n>` accepts. A system that declares no sheet spec sends its
-  stored dict unfiltered.
-  `character.attribute_labels` (v2.5, optional) maps each `attributes` key to its
-  display name, from the rule system's own data (the key's canonical name, through the
-  rulepack's `display` table): CoC 7e on a `zh` server sends `{"APP":"外貌", …}`. Show
-  `attribute_labels[key]`, falling back to the key; the KEYS of `attributes` do not
-  change, and they stay what `.st` accepts. A key with no known name is left out of the
-  map, and the map is omitted entirely when it would be empty (a system without a sheet
-  spec).
-  `variables[].hidden` marks a keeper-connection-only row the admin has not `.var expose`d yet — players never receive hidden rows at all. `pregens` is the module's claimable cast (`.pc list`/`.pc claim`); `claimed_by` is the claiming member id, `""` while unclaimed; omitted when no roster exists. v2.5 adds, each only when non-empty: `blurb`, the card's one-line player-facing concept (the cast list a player chooses from — never the author's keeper notes or the sheet), and `claimed_by_name`, the claimer's display name as it was when they claimed (stored with the claim, so an offline claimer is still named; cleared on release). Show `claimed_by_name`, falling back to `claimed_by`. `systems` (v2.3) is every rule system this server discovered, each with the dialect word that makes a character in it (`make_char`, absent when the pack declares none) — what a client needs to offer character creation without knowing any rule system, so a pack that ships its own appears in every client's picker with no client release.
-  `variables` (optional — omitted when the room has none) is the room's
-  deterministic module variables, PLAYER-VISIBLE subset only: keeper-only variables are
-  filtered inside the engine (`core.modvars.player_entries`) and never reach any transport.
-  Entries arrive in definition order (render as-is, don't sort); `label` is already localized
-  (in the server's locale — see "Labels and locale"); `min`/`max` appear only on bounded
-  `number` variables (clients may render those as a meter). `value_label` (v2.5, optional)
-  appears only on an `enum` whose pack names its CURRENT option (`option_labels` in the
-  card format), resolved like `label`: DISPLAY it in place of `value`, but compare, store
-  and send `value` — the raw option id is what `visible_when`, hooks and `.var set` use. Imported SillyTavern MVU card variables ride the same list with
-  `id` prefixed `mvu.` and the dotted path as `label` (scalar leaves only, server-capped) —
-  no separate frame type, no client change required. MVU leaves are ADMIN-CURATED
-  (fail-closed): a player frame carries only the paths the admin exposed (`.var expose`);
-  a keeper connection's own frames additionally carry the unexposed remainder, each entry
-  flagged `hidden:true` (additive/optional — clients that ignore it simply render the
-  entry; ones that understand it may dim or lock-mark it).
-  `reset:true` marks the snapshot the server pushes right after a campaign wipe (`.reset` / `admin_reset_room`): the panel data is already fresh (empty) and the client should ALSO clear its locally-accumulated chat scrollback.
-  `usage` is a rolling per-room LLM token/cache aggregate (additive/optional — omitted
-  until the room's first completed AI-KP turn, and never sent by a pre-1.1 server):
-  `context_tokens`/`context_window` describe the MOST RECENT turn's context fullness;
-  `input_tokens`/`output_tokens`/`cache_hit_tokens`/`cache_miss_tokens` are summed across
-  every turn in the room's session so far.
-- `pack_cards` (v2.2) — the unicast answer to `list_pack_cards`: every installed
-  pack's card files. `ref` is exactly what `.import <ref>` accepts; `pack` and
-  `name` (the filename stem) are for display. `kind` (v2.3) is the card's 拆卡
-  classification and it decides the VERB: a `character` card imports as
-  `.import <ref> pc`, a `world` card is module machinery and imports through the
-  admin's `.import <ref> world` (a player-facing picker should offer it as
-  admin-only rather than as a character). A pre-2.3 server omits `kind`; treat a
-  missing one as `"character"`. `cards` is empty — not absent — when no installed
-  pack ships card files:
-  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string, kind:"character"|"world"}]}`
-- `presence` — the connected-player roster, sent on join/leave:
-  `{type:"presence", players:[{id,name,online}], online:int}`
-- `system` — an out-of-band notice: `{type:"system", level:"info"|"warn", text:string, spinner?:boolean}`
-- `turn_status` — ephemeral room-wide AI-KP activity. `busy` names the actor whose
-  action is being resolved; `idle` clears the activity. Clients should animate their
-  busy indicator and apply a safety timeout in case an end frame is lost:
-  `{type:"turn_status", status:"busy", actor:string, activity?:"reading"|"dice"|"cast"|"bookkeeping", round?:int}` or
-  `{type:"turn_status", status:"idle"}`.
-  A long turn re-sends `busy` once per tool round with the OPTIONAL `activity` and
-  `round` hints (added in 2.3.1): `activity` is the coarse kind of work that round
-  opened with — never a tool name or argument — and `round` counts from 1. Both fields
-  are absent on the opening `busy` and on any server that predates them, so a client
-  that ignores them behaves exactly as before; treat a repeated `busy` as a refresh of
-  the one indicator, not as a second turn.
-- `report` (v2.4) — a server-generated session report is ready for THIS connection.
-  Sent ONLY to the connection whose `.report html` / `.report html reveal` produced it —
-  never broadcast, never part of join replay, never listed:
-  `{type:"report", hash:string, name:string, size:int, mime:"text/html", variant:"player"|"reveal"}`
-  The page is one self-contained HTML file (inline CSS, no scripts, no external
-  resources) stored as an UNLISTED room blob; fetch it with the ordinary media GET
-  (`{op:"get", hash}`) and verify its sha256. `variant:"reveal"` is the admin's
-  spoiler edition: its blob answers a GET only on a keeper-key connection of the room —
-  any other connection gets `media_not_found`, exactly as for a hash the room does not
-  hold. `name` is a suggested file name; treat it as untrusted (keep only its base name).
-  **Client rule (normative):** a client MUST NOT render the report inside its own UI
-  (no webview, no inline HTML panel) — it saves the file and MAY hand the saved file to
-  the system browser. The page's content is untrusted table text; a browser opening a
-  local file is the sandbox it was written for, a client's own UI is not.
-- `pong`: `{type:"pong", t:number}`
+### 2.3 Ping
 
-## Turn flow
+The client may send `{"type":"ping","t":<number>}` at any time, even before `hello`; the
+server answers `{"type":"pong","t":<same number>}` at once. Only the client pings: the server
+never sends a ping and does not require one. Use it to measure the round trip or to notice a
+dead link.
 
-On an `input` frame from a client in room `R`, the server:
+## 3. Frames
 
-1. Builds an `AgentCtx` from the room's `SessionSource` (`chat_key =
-   "tui:group:{room}"`, `user_id` = the client's key-derived id, `locale`).
-2. Pre-layer: `RateLimiter.allow(user)` + `allow(room)`; if blocked, sends
-   `error rate_limited` to that client only (the turn stops there).
-3. Broadcasts `narrative{speaker:"player", name, text}` to the whole room
-   (everyone sees the action, including the sender).
-4. If `CommandRouter.dispatch(ctx, text)` returns non-`None`, that string is
-   the reply (a `.`/`/` command or a SealDice-style inline roll).
-   Otherwise, the server broadcasts `turn_status{status:"busy", actor:name}`, then
-   `run_kp_turn(ctx, services, toolset, text,
-   output_review=censor)` drives the AI Keeper and returns a
-   `KPTurnResult`.
-5. WHILE the AI Keeper runs, each tool call's public consequences are broadcast
-   AS THEY HAPPEN, in the order the model made them (v2.3 — before, they were
-   read off the finished trace after the reply, which on a streaming provider
-   put the narration ABOVE the roll it narrates): a dice/check tool
-   (`roll_dice`, `skill_check`, `sanity_check`, `opposed_check`,
-   `initiative_tracker`) yields one `dice` frame per structured payload it
-   bound during dispatch (a tool that emitted no payload emits no dice frame —
-   frames are never reconstructed from tool text); `speak_as_npc` yields
-   `narrative{speaker:"npc", name, text, format:"markdown"}`, `name` being the
-   tool call's `npc` argument and `text` the player-safe tool result. On a
-   streaming provider these frames therefore arrive BETWEEN `narrative_delta`
-   chunks; a client must not assume the delta stream is contiguous.
-6. The same dice / npc frames are RECORDED as they happen (`turn_event_history`),
-   each anchored to the transcript line it followed, and replayed on join in
-   that place — see the join replay note under `narrative` above. A joining
-   member's transcript keeps the live order, companion sub-turns included.
-7. Broadcasts the reply as `narrative{text: reply}` — `speaker:"system"` for
-   a command reply, `speaker:"kp", format:"markdown"` for an AI Keeper
-   reply. The reply is already passed through the configured output wordlist.
-   Raw keeper-only tool results are never copied directly into this frame, but
-   the main Keeper model has seen them and could restate them; that behavioral
-   risk is measured separately by the live-model red-line eval.
-8. Broadcasts one `ui` frame per emission the turn's event hooks buffered via
-   `emitUI` — already validated and capped server-side; rooms
-   with no hooks never see this frame. The `inline` ones are recorded with the
-   step-6 events, anchored to the reply, and replayed on join in that place.
-9. Delivers one `panel_event` frame per emission the turn's hooks buffered via
-   `emitPanel` — NOT a broadcast: each event reaches only members
-   whose own manifest contains the target panel.
-10. After the AI-KP branch (including error cleanup), broadcasts
-    `turn_status{status:"idle"}`. Command replies do not emit turn status.
-11. Rebuilds and broadcasts a `state` frame (`net.state.build_room_state`).
+Eleven frame types.
 
-Multiple clients whose keys map to the same room share one AI-KP session;
-every frame described above as "broadcast" goes to every member currently
-connected to that room.
+Client to server:
 
-## Module UI panels
+| `type` | fields | purpose |
+|---|---|---|
+| `hello` | `protocol`, `key`, `name?`, `locale`, `client {name, version}`, `caps`, `resume? {epoch, after}` | The first frame: authenticates and joins the key's room. |
+| `input` | `rid`, `text` | A line the person typed: speech, or a text command. |
+| `call` | `rid`, `method`, `params` | Everything else a client asks for. |
+| `ping` | `t` | Round-trip measurement. |
 
-A `.lwpack` may ship named UI panels (`contents.panels` + `ui/panels.yaml` — authoring
-guide in `docs/plugins.md`); a room admin admits an installed pack's panels to a room with
-`.panels enable <packId>` (install ≠ enable, exactly like skills). The room manifest is
-resolved per viewer and delivered via `ui_manifest` (above). The privilege model is one
-sentence: **a panel acts as the player viewing it** — inbound it receives only that
-viewer's filtered data, outbound (`panel_intent`) it can send only what that player
-could type.
+Server to client:
 
-`UiManifestPanel` (audience never appears — it was resolved server-side):
+| `type` | fields | purpose |
+|---|---|---|
+| `welcome` | `protocol`, `server {name, version}`, `room {id, locale}`, `you {id, name, role}`, `features`, `epoch`, `head` | The answer to `hello`. |
+| `event` | `seq`, `id`, `ts`, `kind`, `turn?`, `data` | One entry of the room's log, to every member, in `seq` order. |
+| `signal` | `kind`, `data` | Ephemeral: never logged, never replayed. |
+| `view` | `name`, `rev`, `at`, `data` | The current value of a view this connection subscribed to. |
+| `result` | `rid`, `ok`, then `data?` and `text?` (ok) or `error {code, message}` (not ok) | The one answer to an `input` or a `call`, to the caller alone. |
+| `error` | `code`, `message`, `fatal` | Connection-level only: there is no `rid` to answer. |
+| `pong` | `t` | The answer to `ping`. |
 
-```jsonc
-{"id": "<packId>/<panelId>", "title": {"en": "...", "zh": "..."}, "slot": "sidebar|tray|modal",
- "tier": 1, "blocks": [/* template blocks */]}
-// or tier 2:
-{"id": "...", "title": {...}, "slot": "modal", "tier": 2,
- "entry": {"hash": "<sha256>", "size": 1234},
- "assets": [{"path": "app.js", "hash": "<sha256>", "size": 999, "mime": "text/javascript"}],
- "fallback": [/* template blocks */] /* or null */}
+A `rid` is a string of 1 to 64 characters, chosen by the client and unique among its requests
+still waiting for an answer. Unknown fields in a client frame are ignored by the server.
+
+## 4. Connecting
+
+### 4.1 `hello`
+
+```json
+{"type":"hello","protocol":"3.0","key":"rT9vQ2xLm8Kc3PzW0aYbN5sEdF7gHjU1","name":"Ada","locale":"en","client":{"name":"my-client","version":"0.1.0"},"caps":[]}
 ```
 
-**Tier-1 template blocks** are the `ui` frame's `UiBlock` vocabulary with two additions the
-CLIENT resolves against its OWN `state.variables` (ids exactly as they appear there —
-modvar ids, `mvu.`-prefixed leaves):
+| field | type | meaning |
+|---|---|---|
+| `protocol` | string | `"3.0"`. Only the major is compared. |
+| `key` | string | The access key. |
+| `name` | string, optional | The name to appear under. Trimmed; empty or absent means the key's own name. At most 64 code points. |
+| `locale` | string | The client's language, e.g. `en`, `zh`, `zh-CN`. Only the part before `-` or `_` is used; a language the server has no catalog for falls back to `en`. Results, errors and views addressed to this member are written in it. |
+| `client` | `{name, version}` | The client's own name and version, both strings. |
+| `caps` | string[] | What the client can do. 3.0 servers define no values and ignore the list; send `[]`. |
+| `resume` | `{epoch, after}`, optional | The room generation and the last `seq` this client holds. Integers. See [7.4](#74-resume-and-the-replay-limit). |
 
-- any scalar field may be `{"$var": "<variable id>"}`; the variable being absent/hidden
-  for this viewer omits the WHOLE block when that field is REQUIRED; on an OPTIONAL field
-  only that field is dropped and the block stays (fail-closed — a panel can never widen
-  visibility; the `state` wire filter remains the single choke point);
-- `{"repeat": {"prefix": "<id prefix>", "block": <TemplateBlock>}}` renders one
-  instance per visible variable whose id starts with the prefix (≤ 32 instances);
-  inside, `{"$leaf": "id"|"label"|"value"}` substitutes the matched variable's field;
-- (2.5) where such a binding yields a variable's value for DISPLAY (a text field, a
-  `stat` value) and the entry carries `value_label`, the label is shown; `visible_when`,
-  a badge `tone` and every numeric field read the raw `value`
-  (`docs/lwf/formats/panels.md` §5.1 rule 7).
+The server checks, in this order, and refuses with a **fatal** `error` (then closes the
+connection) at the first failure:
 
-`image` and `map_pin` are the template blocks the server rewrites rather than passes
-through: the author writes a pack-relative `src` path, and the manifest carries the
-resolved `{hash, mime, size}` alongside the block's own (localized) fields —
-addressing is decided by the pack build, so a panel can only point at a picture its
-own pack ships. Fetch it over the media byte channel like a tier-2 asset. Every other
-performance template is ordinary localized text; `map_pin`'s `x`/`y` may bind to
-`{$var}` so a marker moves with the story.
+1. the major of `protocol` is 3, else `protocol_mismatch` (the message names both versions);
+2. the key is known, else `bad_key`;
+3. the trimmed `name` is at most 64 code points, else `bad_name` (refused, never cut).
 
-**`visible_when` (2.1)** — any template block may carry `visible_when: "<condition>"`,
-evaluated CLIENT-side against that viewer's own `state.variables`. `$var`'s
-absent-means-hide cannot express a VALUE gate ("show once day >= 46"), and values move
-at runtime, so a server-side per-viewer filter is impossible. The grammar is a
-deliberately small, portable subset (the server refuses anything else at pack build, so
-a condition that reaches you is always in it):
+The language is taken from `hello` before these checks, so even these refusals are in the
+client's language.
 
-- comparisons `=== !== == != >= <= > <`; logic `&& || !` (word forms `and`/`or`/`not`);
-- literals: numbers, `'strings'`, `"strings"`, `true`/`false`/`null`/`undefined`;
-- references: bare dotted paths (CJK included), each looked up as a variable **id** in
-  `state.variables`; an absent one is `null`.
-- NOT in the subset: arithmetic, function calls (including `getvar`), bracket segments.
+### 4.2 `welcome`, then the replay
 
-Semantics follow the reference implementation, not JavaScript's own operators: `==`/`!=`
-coerce numeric strings, `===`/`!==` are strict (a bool is never strictly equal to a
-number), and an unorderable comparison (`"abc" > 5`, `null > 5`) is an ERROR. **A
-condition that errors, or that a client cannot evaluate, MUST hide its block** —
-fail-closed, the same rule as an unresolved `$var`, and the one place a minor version's
-new field may not be ignored (see "Versioning"). This holds for every block a condition
-can sit on, `repeat` included: a gate on the repeat itself suppresses the whole
-expansion, a gate on its inner template suppresses each instance. Hidden variables are
-dropped before evaluation, so a condition can never surface what the wire filter
-withheld — and, the other way round, the gated block's own content is in the manifest
-regardless of the condition, so `visible_when` is presentation, never secrecy.
-`tests/fixtures/visible_when_vectors.json` is the shared conformance table every
-implementation runs.
+On success the server sends, in this order and with nothing in between:
 
-Localized strings are `{en,zh}` maps; the client picks its locale (fallback `en`).
-Picking a tier-1 `choices` option sends `panel_intent{kind:"choice", value: <option
-input>}`. Text-first clients (the TUI) render tier-1 blocks with the existing block
-renderer, fold `tray`/`modal` into sidebar sections, render a tier-2 panel's
-`fallback` blocks, and show one localized "available in the rich client" line for an
-explicit `fallback: null`.
+1. `welcome`;
+2. the replay: the events the client is owed ([7.4](#74-resume-and-the-replay-limit)), in `seq` order;
+3. from then on, live traffic.
 
-**Tier-2 assets** are content-addressed: fetch each manifest hash over the EXISTING
-media byte channel (`{op:"get", hash}` — see "Media transfer"); wire `path`s are
-relative to the entry document's directory (each panel is a self-contained static
-root). Verify the sha256 before caching (immutable, keyed by hash).
-
-## Media transfer and audio
-
-All media is server-stored and server-forwarded. The JSON control stream carries only metadata;
-raw bytes never appear in JSON and are never base64-encoded. Supported upload MIME types are
-`image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml`, `audio/mpeg`, `audio/ogg`, `audio/wav`,
-`audio/flac`, `audio/mp4`, and `audio/aac`. The default image limits are 8 MiB per file and
-512 MiB per room; the default audio limits are 128 MiB per file and 2 GiB per room. Both share
-the default 10 uploads per member per minute rate limit. The server treats media bytes as opaque
-blobs; decoding and playback happen only in clients.
-
-SVG is the exception to fully opaque storage: the server accepts only a safe, static subset
-(`svg`, `g`, `rect`, `line`, `polyline`, `text`, `tspan`, `title`, `desc`) and rejects scripts,
-foreignObject, event handlers, external links, data URLs, and CSS/url execution surfaces with
-`error media_bad_svg`. TUI SVG previews parse that same static drawing information into terminal
-text; they never execute SVG as browser content.
-
-Upload flow:
-
-1. Client sends `media_offer{name,mime,size,sha256}` on the control stream.
-2. Server validates MIME, size, room quota, rate limit, and room upload switch, then sends
-   `media_accept{upload_id}` or `error`. If the room already has the same hash, it may send
-   `media_accept{upload_id:"", existing:true, media|audio}` and broadcast the metadata without a PUT.
-3. Client sends PUT on the MediaChannel: header `{op:"put", upload_id}` plus raw bytes.
-4. Server verifies exact size and sha256, stores `data_dir/media/<room>/<sha256>`, records
-   `media_index(hash, room, mime, size, name, uploader, created_at)`, and broadcasts `media` for
-   images or `audio_library_item` for audio.
-
-Download flow:
-
-1. Client sends GET on the MediaChannel: header `{op:"get", hash}`.
-2. Server checks the hash belongs to the caller's room, then replies with `{op:"get",hash,size,mime,name}`
-   plus raw bytes. The client should verify sha256 and may cache under
-   `~/.loreweaver/cache/media/<hash>`.
-3. A hash that is not room media additionally resolves against installed-pack
-   assets of packs ENABLED in the caller's room — the panel asset path. Same reply
-   shape; the server re-verifies the bytes against their manifest digest before
-   serving. A hash from a pack the room has not enabled stays `media_not_found`
-   (no arbitrary blob oracle).
-4. (v2.4) A room may also hold UNLISTED blobs: the server-generated session reports
-   (`text/html`, see the `report` frame). They are never broadcast as `media`, never
-   replayed on join and never carried by a room export. The `members` audience (the
-   player edition) answers a GET from any member of the room; the `keeper` audience (the
-   reveal edition) answers only a keeper-key connection, and is `media_not_found` for
-   everyone else — the same reply as an unknown hash. `text/html` is NOT an upload type:
-   a client can never offer HTML. Report bytes count against the room's image quota.
-
-MediaChannel wire formats:
-
-- Iroh: open a new bidirectional stream on the existing connection. The stream begins with one
-  newline-terminated compact JSON header. For PUT, the client then writes the raw body in chunks
-  of up to 64 KiB; the server answers with one newline-terminated `{op:"put_ok", hash}` line once
-  the blob is stored (or a `{type:"error", code, message}` line on rejection). For GET, the server
-  writes one newline-terminated `{op:"get",hash,size,mime,name}` response header, then the raw
-  body in chunks of up to 64 KiB; an error reply is a `{type:"error", ...}` line with no body.
-- WebSocket: one binary message is `uint32_be header_length` + UTF-8 JSON header + raw bytes.
-  PUT sends `{op:"put", upload_id}` plus the body; success is observed via the room's `media` /
-  `audio_library_item` broadcast, and rejections arrive as standard `error` text frames. GET
-  sends `{op:"get", hash}` with no body; the server replies with `{op:"get",hash,size,mime,name}`
-  plus the body.
-
-Audio control is intentionally separate from byte transfer. Uploading an audio file only creates
-or updates the room's audio library. Admin commands such as `.bgm play <audio>`,
-`.ambience stop`, and `.sfx <audio>` broadcast `audio_control` frames; TUI clients fetch the bytes
-with the same GET flow and play them locally. The server never plays audio itself.
-
-## Auth / keystore
-
-There is no registration. A deployer runs an offline admin command to mint
-a key bound to a room:
-
-```
-python -m app --tui-key add --room R --name N [--role player|keeper]
+```json
+{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2}
 ```
 
-Keys live in a TOML file (default `keys.toml`, overridable with `--keys
-FILE` or the `TRPG_TUI_KEYS` environment variable), one table per key:
+| field | meaning |
+|---|---|
+| `protocol` | The server's version. A client refuses a different major. |
+| `server` | The server's name and version. |
+| `room.id` | The key's room. |
+| `room.locale` | The room's language: what events and signals are written in. |
+| `you` | Your member id, the name you appear under, and your role. |
+| `features` | What the server offers beyond the protocol. 3.0 servers send `[]`. |
+| `epoch` | The room's generation now. |
+| `head` | The highest `seq` the room has handed out. |
 
-```toml
-["<opaque-key>"]
-room = "R"
-name = "N"
-role = "player"  # or "keeper"; defaults to "player"
+Replay and join happen in one uninterrupted step on the server, so no live event can fall
+between two replayed ones or be missed. The replay carries events only: no signals and no
+views. A client that reconnects during a Keeper turn does not learn that a turn is running
+until the next `turn` signal.
+
+### 4.3 After the welcome
+
+A `hello` sent again on a joined connection is answered with a non-fatal `bad_frame`. Any
+other frame (`input`, `call`) sent before a successful `hello` ends the connection with a fatal
+`hello_first`. `ping` is answered at any time.
+
+Views are not subscribed automatically: a client that wants them calls `view.subscribe` after
+the welcome, and again after every reconnect ([10.2](#102-subscribing)).
+
+### 4.4 Roles
+
+| role | may |
+|---|---|
+| `player` | Speak, run player commands, subscribe to views, upload (when uploads are on), fetch room media. |
+| `admin` | Everything a player may, plus admin commands and admin-only arguments, and fetch admin-only files. |
+| `observer` | Watch: receive events, signals and views, run the few commands marked for observers (`help`, `recap`, `uploads` without arguments), fetch room media. An observer's speech is refused (`observer_speech`) and so are its uploads (`observer_upload`). |
+
+The role belongs to the key; it cannot be changed from a connection. "Keeper" is never a
+role: the Keeper is the AI. The person with the admin key is the room admin.
+
+### 4.5 Connection-level errors
+
+An `error` frame answers something that has no `rid`. With `fatal: true` the server closes the
+connection after sending it; a client must not redial with the same settings (the reference
+client marks the session ended).
+
+| code | fatal | when |
+|---|---|---|
+| `protocol_mismatch` | yes | `hello.protocol` has another major. |
+| `bad_key` | yes | The key is unknown. |
+| `bad_name` | yes | `hello.name` is over 64 code points. |
+| `hello_first` | yes | An `input` or `call` arrived before a successful `hello`. |
+| `bad_frame` | yes before the welcome, no after it | A frame that cannot be read: not JSON, not an object, no string `type`, an unknown `type`, a missing required field, an `input` or `call` without a valid `rid`, or a second `hello`. |
+
+A malformed `input` or `call` that does carry a valid `rid` is not an `error`: it is answered
+with a `result` refusal (`input_too_long`, `invalid_params`).
+
+## 5. Requests and results
+
+### 5.1 One answer per request
+
+Every `input` and every `call` is answered by exactly one `result` with the same `rid`, sent to
+the caller alone. A refusal is a `result` with `ok: false`; it is never an event and never
+reaches anyone else.
+
+```json
+{"type":"result","rid":"r3","ok":true,"data":{"totals":[10]}}
 ```
 
-On `join`, the server looks up `key`; an unknown key is rejected with
-`error bad_key` and the connection is closed. A recognized key binds the
-connection to `SessionSource(platform="tui", chat_type="group",
-chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` — see
-`net/keystore.py` and the shipped `keys.example.toml`.
+```json
+{"type":"result","rid":"r5","ok":false,"error":{"code":"forbidden","message":"That is for the room admin."}}
+```
 
-## Admin frames (keeper-gated)
+- `ok: true` may carry `data` (structured, per method or per command) and `text` (the same
+  answer written for a person, in the caller's language). Either, both or neither may be present.
+  A text-only client prints `text`.
+- `ok: false` carries `error.code` (stable, for programs) and `error.message` (for people, in the
+  caller's language).
 
-A deployer / room admin can manage the server from the client's admin screens (Rooms &
-invites, Model) over the SAME connection, using a **keeper-role
-key**: the keystore role stamped on the connection at `join` is the admin gate —
-there is no separate auth. The server answers these ONLY for a `keeper`
-connection; any other connection gets `admin_error{code:"forbidden"}` and nothing
-is read or mutated. Implemented in `net/admin.py`.
+Results are not ordered with respect to each other: a command queued behind a Keeper turn is
+answered after a `view.get` sent later. Match by `rid`.
 
-Client → server:
+**Where an outcome goes.** What happened at the table is published as **events**, to every
+member. What concerns only the caller (done or not, why not, the answer to a query, anything
+secret such as a hidden roll) is the **result**. One command often does both: `.r 2d6` puts a
+`dice` event in the log and answers the caller with `data.totals`.
 
-- `admin_get_config` — `{type:"admin_get_config"}`
-- `admin_set_model` — switch the live LLM provider/model, and optionally set this
-  provider's key/base_url. Omitted fields reuse the provider's saved credential
-  only while the endpoint is unchanged; an explicit empty value clears that
-  field. Supplying a different `base_url` without a new `api_key` clears the old
-  key, so it is never sent to the new endpoint. The server remembers credentials
-  per provider, so a later switch back to an unchanged endpoint needs no key:
-  `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
-- `admin_set_imagegen` — configure the OpenAI-compatible image-generation
-  endpoint. It follows the same endpoint/key isolation rule as `admin_set_model`:
-  an omitted key is reusable only for the same endpoint, while changing
-  `base_url` without a new key clears the old key:
-  `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
-- `admin_list_models` — fetch a provider's live model catalog (OpenAI-compatible
-  `GET /models`). All fields optional: omit to list the current provider; pass
-  `provider` (+ optional `api_key`/`base_url`) to preview another before switching:
-  `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`.
-  Previewing a different `base_url` never reuses a saved/current key unless that
-  key is supplied on the same request. The reply also includes the current
-  `imagegen` status.
-- `admin_list_keys` — list access keys for the caller's bound room only:
-  `{type:"admin_list_keys"}`
-- `admin_mint_key` — mint an access key for the caller's bound room only; a
-  different `room` is forbidden (the field may be omitted to select the caller's room):
-  `{type:"admin_mint_key", room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_update_key` — update one key by its stable non-secret id. Demoting the
-  room's LAST keeper join key is refused with `admin_error{code:"last_keeper"}`
-  (anti-lockout — mint a second keeper key first):
-  `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_delete_key` — delete one key by id; deleting the room's last keeper
-  join key is refused the same way (`last_keeper`):
-  `{type:"admin_delete_key", id:string}`
-- `admin_delete_room` — delete every access key bound to a room; room data is
-  left untouched:
-  `{type:"admin_delete_room", room:string}`
-- `admin_export_room` — write a room backup JSON file on the server. If `path`
-  is omitted, the server writes under `<data_dir>/room_backups/`:
-  `{type:"admin_export_room", room:string, path?:string}`
-- `admin_import_room` — restore a server-side backup JSON. If `room` is
-  supplied, the snapshot is remapped to that room before restoring:
-  `{type:"admin_import_room", path:string, room?:string}`
-- `admin_delete_room_data` — delete a room's access keys, room-scoped KV state,
-  document vectors, and worldbook vectors. `backup` defaults to `true`; with
-  backup enabled, deletion only proceeds after the backup write succeeds:
-  `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
-- `admin_reset_room` — restart a campaign in place, keeping the keystore keys,
-  channel/keeper bindings, live connections and room settings (language, house
-  rules, enabled skills), so the table can start over without re-provisioning.
-  No backup is taken and no members are evicted (contrast
-  `admin_delete_room_data`). `scope` chooses how much to wipe: `"story"`
-  (default) clears the story/progress only (keeps characters, module, lore,
-  media); `"chars"` also rolls new characters (keeps the module); `"all"` erases
-  everything (characters, module, lore, media). Keeper-gated and confined to the
-  caller's own room:
-  `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
-- `admin_list_skills` — list every discoverable Keeper skill (Layer B.1), marked
-  `enabled` per the CALLER's own room. The optional `locale` (`"en"`/`"zh"`,
-  additive) asks for skill display names/descriptions localized to the CLIENT's
-  own UI language (for skills shipping `name-zh`/`description-zh` frontmatter),
-  independent of the server locale; absent means the server locale applies:
-  `{type:"admin_list_skills", locale?:string}`
-- `admin_enable_skill` — enable/disable one skill for the caller's room; replies
-  a fresh `admin_skills` (same optional `locale` hint):
-  `{type:"admin_enable_skill", id:string, on:boolean, locale?:string}`
-- `admin_list_rules` — list every discoverable rule system (Layer A):
-  `{type:"admin_list_rules"}`
-- `admin_generate` — author + install a brand-new skill/rule system/module from a
-  natural-language description via the matching `agent.forge` self-extension
-  engine (Layer B.3); a `kind:"module"` generation installs into the CALLER's own
-  room. This is a slow LLM call answered as a normal request/reply — the client
-  shows a spinner while it awaits `admin_generated`:
-  `{type:"admin_generate", kind:"skill"|"rule"|"module", description:string}`
+### 5.2 `input`
 
-Server → client:
+`{"type":"input","rid":"…","text":"…"}`. `text` is at most 8000 code points; over that it is
+refused with `input_too_long`. The server decides what the line is ([6.2](#62-two-entrances)):
 
-- `admin_config` — the live, display-safe LLM config (api_key masked), the
-  provider catalog, the providers that already have a saved credential (`saved_providers`),
-  whether a runtime override is active, and the display-safe image-generation
-  status:
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, using_demo?:boolean, subscription_status?:""|"logged_in"|"logged_out"}`
-  `using_demo` tracks the live offline fallback so a client can immediately remove
-  a stale sample-adventure affordance. A true value alone does not authorize setup;
-  only the room-scoped `welcome.features` check may add it.
-  `subscription_status` is `"logged_in"` or `"logged_out"` when the current
-  provider is on a ChatGPT / SuperGrok OAuth path. Empty or absent means the
-  classic API-key path (including a `chatgpt` / `gpt-subscription` provider with
-  an explicit proxy `base_url`). Login remains a private chat command
-  (`.model login`); the TUI model page only displays the status.
-- `admin_models` — a provider's live model catalog (empty when the provider is a
-  native SDK, the key is missing/invalid, or `/models` is unreachable — the client
-  falls back to a free-text model field):
-  `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
-- `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`.
-  The API key is never returned in cleartext.
-- `admin_keys` — the caller's own room-key roster; every entry's key value is masked. A
-  `mint` request additionally returns the freshly minted key ONCE in cleartext
-  under `minted` (so the admin can copy it):
-  `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
-- `admin_room_op` — result for export/import/full-delete room operations:
-  `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number, scope?:"story"|"chars"|"all"}`
-  (`scope` is present on a `reset` op, echoing which reset scope was applied.)
-- `admin_error` — a localized failure notice (does not close the connection):
-  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed"|"not_configured"|"last_keeper", message?:string}`
-- `admin_skills` — every discoverable skill, `enabled` reflecting the caller's room:
-  `{type:"admin_skills", skills:[{id:string, name:string, description:string, content_rating:string, enabled:boolean}]}`
-- `admin_rules` — every discoverable rule system, `built_in` marking a shipped
-  system (`coc7`/`dnd5e`) vs a generated/user-installed one:
-  `{type:"admin_rules", systems:[{id:string, built_in:boolean}]}`
-- `admin_generated` — the forge engine's outcome; `id`/`name` are empty and
-  `error` carries an (untranslated) diagnostic when `ok` is `false`, and nothing
-  was installed:
-  `detail` carries the per-room install outcome — for `kind:"module"` it is the only signal of
-  whether the module actually landed in the room (`ok` merely means a valid document was authored
-  and written); it is empty for `skill`/`rule` (no per-room install step):
-  `{type:"admin_generated", kind:"skill"|"rule"|"module", ok:boolean, id:string, name:string, error:string, detail:string}`
-- `admin_update_server` — an admin (keeper-role connection) asks the server to update itself in place. No parameters: the
-  server runs its OWN operator-configured command (`TRPG_TUI__UPDATE_COMMAND`, e.g.
-  `git pull && uv sync`), never anything the client supplies, and requires the `"update"` feature
-  (advertised in `welcome`). On success it re-execs into the new code, so the client should expect
-  a brief disconnect + reconnect:
-  `{type:"admin_update_server"}`
-- `admin_update` — the reply to `admin_update_server`. `"restarting"`: the command succeeded and
-  the server is re-execing. `"failed"`: the command exited non-zero; `output` is the tail of its
-  combined stdout/stderr. (A missing command yields `admin_error{code:"not_configured"}`.):
-  `{type:"admin_update", status:"restarting"|"failed", output?:string}`
+- **A text command** (a prefix and a command word): it runs exactly as `command.run` would, and
+  its result is the command's answer.
+- **Speech** (anything else): the line is accepted at once. Its `narrative` event and the
+  `dice` events of its inline rolls are published first, then the caller gets `ok: true`
+  (with `text` naming any inline roll that failed). The Keeper's turn then queues behind the
+  room's lock and its reply arrives later as events. The result does not wait for the reply.
 
-`admin_set_model` validates `provider` against the known providers
-(`infra.providers.is_known_provider`), persists the override via
-`services.runtime_config`, and hot-reconfigures the shared `MutableLLM` — the
-same path as the `.model set` chat command — then replies a fresh
-`admin_config`. A key set here is also saved to a per-provider credential book
-(`infra.runtime_config.CredentialBook`), so switching providers never re-asks for
-a key you've already entered; `admin_list_models` reuses that saved credential
-when no explicit `api_key` is supplied and the endpoint is unchanged. A newly
-supplied endpoint is never paired with an older key: the caller must supply the
-matching key on that request or the server uses/persists an empty key.
-Subscription OAuth grants are stored in
-the same local credential book under their canonical provider name.
+### 5.3 Methods
 
-The provider catalog is additive. `chatgpt` / `gpt-subscription` are dual-mode:
-without a `base_url`, they use the ChatGPT subscription OAuth grant obtained by
-`.model login chatgpt`; with an explicit `base_url`, they retain the classic
-OpenAI-compatible proxy path and its API key. `supergrok` always uses the
-SuperGrok subscription OAuth path (`.model login supergrok`) and can share that
-grant with SuperGrok image generation.
+| method | params | `data` of a success | refusals |
+|---|---|---|---|
+| `command.run` | `{id, args?}` | the command's own answer ([6](#6-commands)) | `invalid_params` (`id` not a non-empty string of at most 200 code points), and every command refusal |
+| `view.list` | `{}` | `{views: [{name, schema, title?}]}` | — |
+| `view.subscribe` | `{names}` | `{problems: [{name, code}]}`; the current values follow as `view` frames | `invalid_params` (`names` not a list of at most 64 strings) |
+| `view.unsubscribe` | `{names}` | `{removed: [name]}` | `invalid_params` |
+| `view.get` | `{name}` | `{name, rev, at, data}` | `invalid_params`, `unknown_view`, `view_failed`, `too_large` |
+| `log.page` | `{before, limit?}` | `{events: [event frame]}`, oldest first | `invalid_params` (`before` not an integer; `limit` not an integer from 1 to 100) |
+| `media.offer` | `{name, mime, size, sha256, purpose?}` | `{upload_id}` or `{existing}` | see [11.2](#112-offering-a-file) |
 
-Room backup snapshots contain the room's raw access keys as well as campaign
-state and vector points. Treat exported JSON like `keys.toml` or the SQLite
-database: it is sensitive server-side data and should not be shared publicly.
+An unknown method is refused with `unknown_method`. `params` may be omitted (it is then `{}`);
+present and not an object, it is refused with `invalid_params`.
 
-## NPC frames
+### 5.4 The rate limit
 
-AI-played, knowledge-scoped NPC sub-actors (`agent/npc.py`, `agent/npc_actor.py`,
-`agent/kp_tools_npc.py`) surface as additional
-`narrative{speaker:"npc", name:<npc>, format:"markdown"}` frames before the
-KP's own narration. Clients that ignore unknown speaker values render them as
-ordinary narrative lines.
+Each member has a token bucket: a burst of 5, refilled at one token every two seconds (the
+server's default). Every `input` and every `command.run` spends one token; with none left the
+request is refused with `rate_limited`, not queued. Views, `log.page` and `ping` are not
+rate-limited. Uploads have their own limit ([11.2](#112-offering-a-file)).
+
+## 6. Commands
+
+### 6.1 The command model
+
+A command is the only kind of operation a person performs. The engine's commands, the commands
+of the room's rule system (its "rule pack") and the commands of the room's modules share one
+table, discovered through the `commands` view ([6.5](#65-discovering-commands-the-commands-view)).
+
+| source | ids look like | examples |
+|---|---|---|
+| `engine` | a plain word | `roll`, `undo`, `help` |
+| `pack` | `rules.<subsystem>` | `rules.sanity_check` |
+| `module` | `<module>/<name>` | `duel/strike` |
+
+### 6.2 Two entrances
+
+The same command is reached two ways, with the same role checks, argument validation, rate
+limit and queueing:
+
+- `input` with a text form: `.r 2d6`;
+- `call` `command.run`: `{"id":"roll","args":{"expr":"2d6"}}`.
+
+A text form's argument string is parsed into exactly the argument object a structured call
+passes, then both are validated against the command's parameter schema and reach the same
+handler. The command runs in one transaction: a refusal leaves the room exactly as it was.
+
+**Ordering.** Commands and speech queue behind one lock per room, in arrival order. A command
+opens no Keeper turn. Three commands are **room-lifecycle** commands and do not wait for the
+lock: `undo`, `reset` and `save` (export and import). They run at once, even in the middle of a
+Keeper turn; work of the old generation still running (a turn waiting on the model, a queued
+line) fails to commit by itself, and the in-flight turn ends with its `turn idle` signal as usual.
+
+### 6.3 Text forms
+
+A line is a text command when, after trimming:
+
+1. it starts with one of the three equivalent prefixes `.`, `。` (U+3002) or `/`;
+2. optional whitespace follows, then the **command word**: the first run of non-whitespace
+   characters, matched exactly after case folding. There is no glued form: `.r3d6` is the word
+   `r3d6`, which is no command;
+3. the word names a command in this room.
+
+Everything after the word (trimmed) is the argument string, at most 4000 code points (over it
+the command is refused with `too_long`, never cut short).
+
+- A line with no prefix, no word, or a word that names no command is **speech**, said at the
+  table as written. A mistyped command therefore reaches the Keeper as speech.
+- Exception: a word that some installed rule system declares but this room's system does not is
+  refused (`not_in_system`) instead of becoming speech.
+- Engine forms win over rule-pack forms. Every command has an English and a Chinese alias table;
+  both are always searched, the caller's language first.
+- A module command's only text entrance is its full id followed by a JSON object:
+  `.duel/strike {"target":"Bo"}` (no argument string means `{}`; anything that is not a JSON
+  object is refused with `module_args`).
+
+**Inline rolls.** Speech may carry up to 8 inline rolls written `[[expr]]`, e.g.
+`I swing the lantern [[1d6]]`. Each is rolled and published as a `dice` event right after the
+line's `narrative` event. A roll that fails to parse is skipped and named in the result's
+`text`; more than 8 and none are rolled.
+
+### 6.4 Refusals
+
+A command refusal is a `result` with a stable code and a message in the caller's language. The
+codes a client meets most:
+
+| code | meaning |
+|---|---|
+| `unknown_command` | No command with that id (or text form) in this room. |
+| `forbidden` | The command, or one of the arguments given, is for the room admin; or an observer tried a command not marked for observers. |
+| `usage` | The text form's arguments could not be read; the message carries the usage line. |
+| `unknown_arg`, `missing_arg`, `invalid_arg` | The argument object does not fit the schema; the message names the path (`expr`, `a.skill`, `writes.0.value`). |
+| `too_long` | The text form's argument string is over 4000 code points. |
+| `no_rule_system`, `not_in_system`, `no_media` | The command is not available in this room now (the same words appear as `reason` in the `commands` view). |
+| `stale_generation` | The room was rewound, reset or replaced while the command waited. Try again. |
+| `rate_limited` | The member's burst is spent. |
+| `module_args`, `module_unavailable` | A module command's arguments are not a JSON object; the module refused (its own reason is shown as written). |
+| `command_failed` | The server failed; nothing was changed. |
+
+Commands add their own (`bad_dice`, `no_character`, `name_taken`, `reset_not_armed`,
+`undo_out_of_range`, `undo_beyond_depth`, `not_uploaded`, `not_a_card`, …). A code without a
+sentence of its own is stated with a generic message that includes the code. Treat any code you
+do not know as a plain refusal and show `message`.
+
+### 6.5 Discovering commands: the `commands` view
+
+The `commands` view ([10.4](#104-built-in-views)) lists the commands this viewer may see, as
+this viewer may use them now:
+
+```json
+{"id":"roll","source":"engine","title":"Roll dice","description":"Roll a dice expression for the table to see. A comparison straight after a dice group counts the dice that meet it (5d10>=7); compare a total in parentheses ((5d10)>6). d% is a d100. N# rolls N times; adv/dis keeps the better or worse of two.","params":{"type":"object","properties":{"expr":{"type":"string","minLength":1,"maxLength":1000},"repeat":{"type":"integer","minimum":1,"maximum":20},"mode":{"type":"string","enum":["adv","dis"]}},"additionalProperties":false},"role":"player","available":true,"text":{"forms":["roll","r"],"usage":".r [N#][expr] [adv|dis] — e.g. .r 3d6+2, .r 2#1d20 adv, .r 5d10>=7"}}
+```
+
+| field | meaning |
+|---|---|
+| `id` | What `command.run` takes. |
+| `source` | `engine`, `pack` or `module`. |
+| `title`, `description` | In the viewer's language (a module's are as the module wrote them). |
+| `params` | The arguments as a JSON Schema object ([6.6](#66-parameter-schemas)). |
+| `text` | Optional: `forms` (the words that run it, without prefix) and `usage` (a one-line usage text). Absent for a command without a text form. |
+| `role` | `player` (players and admins) or `admin` (admins only). |
+| `danger` | Present and `true` for a destructive command: ask before running it (`undo`, `reset`, `save`). |
+| `available` | Whether this viewer can run it here now. |
+| `reason` | When not available: `observer`, `no_rule_system`, `not_in_system`, `no_media`, or a module's own reason code. |
+
+- An admin command is not listed to a non-admin at all.
+- Some player commands need the admin for certain arguments (`bot` with `on`, `rule` with
+  `variant` or `system`, `uploads` with `on`, `init` with `name`, `lore` with anything but
+  `list`, `import` with `as: "world"`). The entry says `role: "player"`; the admin-only
+  arguments are refused with `forbidden`. See the table in [6.8](#68-the-engines-commands).
+- `text.forms` lists the viewer's language table (or the other one when it is empty). The
+  server accepts the forms of both tables.
+- A module command's `text.forms` are the templates its module declared (such as
+  `strike {target}`), shown for people, and its `available` is `true` for any player: the
+  module answers at the moment of use.
+
+### 6.6 Parameter schemas
+
+Engine and rule-pack parameter schemas use this subset of JSON Schema, and the server validates
+strictly:
+
+| keyword | used for |
+|---|---|
+| `type` | `"object"`, `"string"`, `["string","null"]`, `"integer"`, `"boolean"`, `"array"` |
+| `properties`, `required`, `additionalProperties` | objects; `additionalProperties` is `false` (no other names), `true` (any object), or a schema for every other name |
+| `maxProperties` | objects (default cap 64 names) |
+| `enum`, `minLength`, `maxLength` | strings (lengths in code points; default cap 4000) |
+| `minimum`, `maximum` | integers |
+| `items`, `maxItems` | arrays (default cap 64 items) |
+
+A name the schema does not list is refused (`unknown_arg`); an integer must be a JSON number
+with no fraction, never the text `"5"`; an argument given as `null` counts only where the type
+allows `null`; nesting deeper than 8 levels is refused. A module command's `params` is the
+schema its module declared.
+
+### 6.7 Room-lifecycle commands, as a client sees them
+
+- **`undo`** (admin): rewinds the room by `turns` (default 1, at most 64, and never past the
+  server's undo window, `undo_beyond_depth`). The table receives one `rewind` event
+  ([8.5](#85-rewind)); the caller's result carries `data {turn, epoch, removedTurns}`.
+  Undoing a turn also takes back every command that ran after that turn began.
+- **`reset`** (admin): two steps. `{"scope":"story"}` (or `chars`, `all`; default `story`)
+  *arms* a reset for 60 seconds, for this member and this room, and answers
+  `data {armed: <scope>}`; nothing changes yet. `{"confirm":true}` within the window carries
+  it out: the table receives one `reset` event ([8.6](#86-reset)) and the caller gets
+  `data {scope, epoch}`. A confirm with nothing armed is `reset_not_armed`; one naming another
+  scope is `reset_scope_mismatch`.
+- **`save`** (admin): `{"op":"export"}` answers the whole room as a bundle in `data`, to the
+  caller alone (it holds every secret of the room). `{"op":"import","bundle":{…}}` replaces the
+  room with a bundle; the table receives a `reset` event with scope `all`.
+
+### 6.8 The engine's commands
+
+Generated from the server's command table (`server/src/gateway/commands/`). Every id here is
+also listed in the `commands` view with its full parameter schema; `?` marks an optional
+argument. Text forms are given as English table / Chinese table; with any of the prefixes
+`.`, `。`, `/`.
+
+| id | role | text forms | arguments | notes |
+|---|---|---|---|---|
+| `roll` | player | `roll`, `r` / `r`, `rd` | `expr?` (1–1000, default `1d20`), `repeat?` (1–20), `mode?` (`adv`\|`dis`) | One `dice` event per roll; `data {totals}`. |
+| `hidden_roll` | player | `rh`, `hroll` / `rh` | `expr?`, `mode?` | No event: the table is not told. `text` and `data {expr, rolls, total}` to the caller. |
+| `check` | player | `check`, `attack`, `cast`, `ra`, `rc` / `ra`, `rc`, plus the rule system's own check words | `skill?`, `target?`, `difficulty?`, `bonus?` (0–10), `penalty?` (0–10), `mode?`, `proficient?`, `params?` (object of integers, ≤16), `repeat?` (1–20) | Available when the room's rule system grades checks (`no_rule_system`). One `dice` event per check. |
+| `opposed` | player | `opposed`, `rav`, `rcv` / `rav`, `rcv` | `a` `{skill?, value?, bonus?, penalty?}`, `b?` (same) | Available when the rule system has a contest (`not_in_system`). |
+| `init` | player; `name`: admin | `init`, `initiative`, `ri` / `ri`, `init` | `op` (`show`\|`roll`\|`next`\|`clear`), `value?`, `name?` | Initiative order. |
+| `sheet` | player | `sheet`, `st` / `st` | `op` (`show`\|`set`\|`clear`\|`finalize`), `writes?` (≤32 of `{name, op: "="\|"+="\|"-=", value}`) | Your character sheet. |
+| `rename` | player | `rename`, `nn` / `nn` | `name` (1–64) | Renames the character you play. |
+| `new_character` | player | the creation words of the installed rule systems (with the built-in ones: `coc`, `coc7`, `dnd`, `dnd5e`) | `system`, `name?` | Makes and seats a character; a `narrative` system event; `data {id, name, system, violations}`. |
+| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op` (`list`\|`claim`\|`release`), `name?` (≤128) | The roster of characters on offer. |
+| `recap` | player, observer | `recap` / `recap`, `前情提要`, `前情` | — | The spoiler-free story so far. |
+| `lore` | player; all but `list`, and `list` with `disabled`: admin | `lore` / `lore`, `设定`, `設定` | `op` (`list`\|`add`\|`enable`\|`disable`\|`bind`\|`unbind`\|`restore`), `title?` (≤200), `content?` (≤16000), `condition?` (≤500), `disabled?` | The room's lore. |
+| `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op` (`list`\|`expose`\|`hide`\|`set`\|`add`), `path?` (≤200), `value?` (≤4000), `delta?` | The room's variables; `expose` shows a branch to players. |
+| `npc` | admin | `npc` / `npc`, `角色` | `op` (`list`\|`show`\|`delete`), `name?` | The answer is the caller's alone. |
+| `chronicle` | admin | `chronicle` / `chronicle`, `编年史`, `年史` | `op` (`list`\|`summary`\|`threads`\|`note`), `text?` | The answer is the caller's alone. |
+| `habits` | admin | `habits` / `habits`, `习惯`, `習慣` | `op` (`show`\|`forget`), `text?` (≤200) | What the Keeper learned about this table. |
+| `rule` | player; `variant`, `system`: admin | `rule` / `rule`, `规则`, `規則` | `variant?` (string or `null`), `system?` (string or `null`) | Shows or sets the rule system and its house-rule ladder; `null` returns to the default. |
+| `bot` | player; `on`: admin | `bot` / `bot` | `on?` (boolean) | Shows or sets whether the Keeper answers. |
+| `language` | admin | `language` / `language`, `语言`, `語言` | `locale` (`en`\|`zh`) | Sets the room's language; announced by a `narrative` event in the new language. |
+| `undo` | admin, danger | `undo` / `undo`, `撤销`, `撤銷` | `turns?` (1–64) | Lifecycle ([6.7](#67-room-lifecycle-commands-as-a-client-sees-them)). |
+| `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?` (`story`\|`chars`\|`all`), `confirm?` | Lifecycle; arm, then confirm. |
+| `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op` (`export`\|`import`), `bundle?` (object) | Lifecycle. |
+| `uploads` | player, observer; `on`: admin | `uploads` / `uploads`, `上传` | `on?` (boolean) | Shows or sets the room's upload switch. Available when the server keeps files (`no_media`). |
+| `import` | player; `as: "world"`: admin | `import` / `import`, `导入` | `file` (a 64-hex content hash), `as` (`world`\|`character`), `name?` (1–64) | Imports a card file the caller uploaded with `purpose: "import"` ([11.6](#116-importing-a-card)). `no_media` without a media store. |
+| `jrrp` | player | `jrrp`, `luck` / `jrrp` | — | Today's luck. |
+| `draw` | player | `draw` / `draw`, `抽牌` | — | Draws a card from a shuffled deck. |
+| `help` | player, observer | `help`, `h` / `help`, `帮助` | `id?` (1–128) | The `commands` view as text; with `id` (an id or a form), one command. |
+
+**Rule-pack commands** depend on the room's rule system. With the built-in systems only `coc7`
+has any:
+
+| id | text forms | arguments |
+|---|---|---|
+| `rules.sanity_check` | `sc`, `sanity` | `success?`, `failure?` (loss notations, 1–100), `tag?` (≤64) |
+| `rules.skill_growth` | `en`, `growth` | `skill` |
+| `rules.random_madness` | `ti`, `li` | `table?` (1–64) |
+
+## 7. The event log
+
+### 7.1 The envelope
+
+```json
+{"type":"event","seq":5,"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","ts":1764240000123,"kind":"narrative","turn":2,"data":{"speaker":"kp","text":"The lantern catches, and the quay comes out of the dark.","format":"markdown"}}
+```
+
+| field | meaning |
+|---|---|
+| `seq` | The event's number in the room's log, an integer ≥ 1. Increases in sending order; never reused in the room. |
+| `id` | The event's id (a string). A `narrative` event takes the id of the draft it replaces ([9.1](#91-draft)); a `blocks` event with `replace: true` reuses the id of the one it replaces, so ids are not unique in a log. |
+| `ts` | Milliseconds since the Unix epoch, server time. |
+| `kind` | `narrative`, `dice`, `blocks`, `media`, `rewind` or `reset` ([8](#8-event-kinds)). |
+| `turn` | The Keeper turn the event belongs to, when it belongs to one. |
+| `data` | The payload of that kind. |
+
+**`turn` is present** on events of a turn: the player's line, its inline rolls, the Keeper's
+reply, NPC lines and staging produced for that turn. **It is absent** on turn-less events: a
+command's events, a shared file (`media`), `rewind` and `reset`.
+
+### 7.2 What is in the log, and in what order
+
+- Every member receives every event, in `seq` order, as it is appended.
+- Events are stored as sent, in the room's language at the time. A replayed event is the
+  recorded one: changing the room's language does not rewrite the past.
+- `seq` has holes. An undo removes events and their numbers are never handed out again; a reset
+  empties the log but `head` stays where it was. Never infer a count from `seq`.
+- Turns interleave. A line is logged when it is accepted and numbered then; its reply is
+  logged when the Keeper's turn ends. Lines accepted while a turn runs get the next turn
+  numbers at once, so the log can read: line of turn 1, line of turn 2, reply of turn 1,
+  reply of turn 2.
+- Some events of a turn arrive after its `turn idle` signal: the Stage Director's staging (a
+  `blocks` event carrying that turn's number) and its `audio` signals come from a pass that runs
+  after the turn without holding the room, possibly after later lines have been logged.
+
+### 7.3 Epoch and head
+
+`welcome.epoch` is the room's generation. It starts at 1 and moves by one on every undo, reset
+and room import. Within one epoch the log only grows at its end, so a
+client resuming by `seq` in the same epoch misses nothing. Across an epoch change the client's
+copy of the log is void.
+
+`welcome.head` and every `seq` come from one per-room counter that only rises.
+
+### 7.4 Resume and the replay limit
+
+The replay after a `welcome` is computed from `hello.resume` and the protocol's
+`RESUME_LIMIT` = **200**:
+
+- **`resume` present and `resume.epoch == welcome.epoch`:** the events with
+  `seq > max(resume.after, head − 200)`.
+- **otherwise** (no `resume`, or another epoch): the events with `seq > head − 200`. The
+  welcome's epoch tells the client that whatever it holds is void.
+
+So a client that was away for more than 200 events in one epoch receives only the newest
+stretch and has a **gap**: every `seq` with `resume.after < seq < head − 199` may hold events it
+does not have. Fill it with `log.page`.
+
+### 7.5 Paging: `log.page`
+
+`{"method":"log.page","params":{"before":<seq>,"limit":<1..100>}}` answers
+`{events: [...]}`: the newest `limit` events with `seq < before`, **oldest first**, as full
+event frames (in the same shape as live events). `limit` defaults to and is at most
+`PAGE_LIMIT` = **100**; asking for more is refused (`invalid_params`), not cut to 100. Fewer
+than `limit` events back means the log has nothing older. Paged events are history: a
+`rewind` or `reset` among them has already been applied by the server and changes nothing
+for the client.
+
+### 7.6 Keeping a local log
+
+The reference client (`client.ts`) does this, and a client that keeps a log should do the same:
+
+1. **On `welcome`:** if you hold a log built under another epoch, or one whose newest `seq` is
+   above `welcome.head`, discard it. If you hold none, the log is complete when
+   `head ≤ 200`. If you hold one and `head − lastSeq > 200`, record a gap
+   `(lastSeq, head − 199)`.
+2. **On each event:** insert it by `seq`, ignoring a `seq` you already hold. Apply `rewind` and
+   `reset` as described below. Remember the highest `seq` seen, **including events of kinds you
+   do not know** (they still occupy a place in the log): that number is `resume.after` next time.
+3. **On `rewind {from, kept, epoch}`:** drop every event with `seq ≥ from` except those whose
+   `seq` is in `kept`; adopt `epoch` if it is higher than yours. Then keep the `rewind` event
+   itself (it is in the log).
+4. **On `reset {scope, epoch}`:** drop everything you hold and every draft; adopt `epoch`. The
+   `reset` event is the first entry of the new log.
+5. **On reconnect:** send `resume {epoch, after: lastSeq}`.
+
+### 7.7 Why an undo can remove from the middle
+
+An undo of turn N keeps every event of turns before N, however late it landed, and removes
+every event of turn N and later, together with every turn-less event logged after the first of
+them. Because turns interleave, what it removes is not always a suffix: with lines of turns 1
+and 2 accepted before either reply, the log is `1 (line, turn 1)`, `2 (line, turn 2)`,
+`3 (reply, turn 1)`, `4 (reply, turn 2)`, and undoing turn 2 leaves 1 and 3. The `rewind` event
+says exactly that: `{"from":2,"kept":[3],"epoch":2}`. In the common case `kept` is empty.
+
+## 8. Event kinds
+
+A client renders the kinds it knows and skips the others ([12.1](#121-forward-compatibility)).
+
+### 8.1 `narrative`
+
+```json
+{"speaker":"player","name":"Ada","member":"m:15b5f3445045","text":"I light the lantern.","format":"plain"}
+```
+
+| field | meaning |
+|---|---|
+| `speaker` | `player` (a member's speech), `kp` (the Keeper), `npc` (a non-player character speaking), `system` (an announcement by the engine, e.g. a new character, a changed setting). |
+| `name` | Who speaks: the character (or member) name for `player`, the NPC's name for `npc`. Absent for `kp`; usually absent for `system`. |
+| `member` | For `player`: the speaking member's id. |
+| `text` | The line. |
+| `format` | `markdown` (the Keeper's prose) or `plain` (render verbatim). |
+
+### 8.2 `dice`
+
+One roll or check as the table saw it. It never carries Keeper-only information.
+
+```json
+{"actor":"Alice","kind":"check","expr":"1d100","rolls":[19],"total":19,"target":25,"effectiveTarget":25,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":6},"detail":{"skill":"Spot Hidden","modifier":0,"modifiers":[],"params":[]}}
+```
+
+| field | meaning |
+|---|---|
+| `actor` | Who rolled: a character or member name. |
+| `kind` | `roll` (plain dice), `check` (a graded check), `subsystem` (a rule subsystem such as a sanity roll), `opposed` (a contest), `init` (initiative). |
+| `expr` | The notation rolled, in canonical form. |
+| `rolls` | The individual results. |
+| `total` | The result. |
+| `target`, `effectiveTarget` | For a check: the value rolled against, and the value after difficulty and modifiers. |
+| `subsystem`, `subsystemLabel` | For `subsystem`: its stable id and its name in the room's language. |
+| `outcome` | For a graded roll: see below. |
+| `detail` | Extras declared by the rule system (an object). Show them verbatim if you like; never branch on them. A plain roll carries `detail.text`, a readable rendering such as `"2d6 (5, 5) = 10"`. |
+
+**The outcome contract** is neutral to the rule system, so one client renders every system:
+
+| field | meaning |
+|---|---|
+| `id` | The system's own rank word (`regular`, `hard`, `extreme`, …). Presentation only: never branch on it. |
+| `label` | The rank, already in the room's language. Show this. |
+| `success`, `critical`, `fumble` | Booleans. Colour by these. |
+| `tier` | A number; higher is better. Shade by it if you like. |
+| `margin` | Optional: how far above (positive) or below (negative) the target. |
+
+### 8.3 `blocks`
+
+Declarative content set into the story: a module's card, the Stage Director's staging.
+
+```json
+{"blocks":[{"kind":"title_card","title":"Act II","subtitle":"The Drowned Quay"},{"kind":"letter","from":"M.","body":"Come alone."}],"replace":true}
+```
+
+| field | meaning |
+|---|---|
+| `blocks` | Up to 256 blocks, rendered in order. |
+| `replace` | When `true`, this event updates the earlier `blocks` event with the same event `id` in place (render it where the earlier one was, or replace it; do not show both). |
+
+| block `kind` | fields | render as |
+|---|---|---|
+| `meter` | `label`, `value`, `min`, `max` | a gauge |
+| `stat` | `label`, `value` (number, string or boolean) | a labelled value |
+| `badge` | `label`, `tone?` (`info`\|`warn`\|`danger`) | a tag |
+| `text` | `text`, `style?` (`quote`\|`warning`) | a paragraph |
+| `divider` | — | a rule |
+| `choices` | `prompt?`, `options` (≤64 of `{id, label, command, args?}`) | buttons; pressing one is `command.run {id: command, args}` made as the member pressing it |
+| `image` | `hash`, `mime?`, `size?`, `caption?`, `alt?` | a picture, fetched by `hash` over the byte channel |
+| `letter` | `body`, `from?`, `to?`, `date?` | a letter or note |
+| `clipping` | `headline`, `body`, `source?`, `date?` | a newspaper clipping |
+| `map_pin` | `hash`, `mime?`, `size?`, `label`, `x`, `y`, `note?` | a pin at (`x`, `y`) on the image `hash` |
+| `title_card` | `title`, `subtitle?`, `act?` | a chapter card |
+
+**Fail closed.** A block of an unknown `kind` is skipped and the rest of the event is shown. A
+block of a known kind with a missing field, a wrong type or an enumerated value the client does
+not know (a `tone`, a `style`) makes the whole event malformed: drop it rather than draw it
+wrongly.
+
+### 8.4 `media`
+
+A file shared with the table.
+
+```json
+{"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","mime":"image/png","size":48213,"name":"map.png","from":"m:15b5f3445045"}
+```
+
+`hash` is the lowercase hex SHA-256 of the bytes, fetched over the byte channel; `from` is the
+sharing member's id, or `server`.
+
+### 8.5 `rewind`
+
+```json
+{"from":3,"kept":[],"epoch":2}
+```
+
+An undo: the log lost every event numbered `from` or higher **except** those whose `seq` is in
+`kept`, and the room moved to generation `epoch`. Apply it as in [7.6](#76-keeping-a-local-log).
+
+### 8.6 `reset`
+
+```json
+{"scope":"all","epoch":3}
+```
+
+The campaign was wiped (`story`: the story; `chars`: the story and the characters; `all`:
+everything) or the room was replaced by an import (always `all`). Clear the scrollback and every
+draft; adopt `epoch`. Views follow with their new values.
+
+## 9. Signals
+
+`{"type":"signal","kind":…,"data":…}`. Signals are sent to every member and are never stored or
+replayed. A signal from work of a past generation (a turn cancelled by an undo) is not sent,
+except `turn idle`.
+
+### 9.1 `draft`
+
+Streaming text of the Keeper's reply.
+
+```json
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"The lantern catches, "}}
+```
+
+```json
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","discard":true}}
+```
+
+- `{id, text}` **appends** a slice to the bubble `id`; the first slice for an id opens the bubble,
+  shown after the newest event. Slices go out at about 48 characters or at a newline.
+- `{id, discard: true}` removes the bubble: the model round turned out to call tools, or the
+  provider retried. A retry streams again under a new id.
+- The `narrative` event with the same `id` **replaces** the bubble. The event is authoritative;
+  a draft can show less than the event, never more (text that might belong to a hidden block is
+  held back and may be dropped).
+- On `turn idle`, drop every bubble still open: a turn that failed or was cancelled by an undo
+  does not always discard its drafts.
+- A draft for an id whose `narrative` event you already hold is stale: ignore it.
+
+### 9.2 `turn`
+
+```json
+{"type":"signal","kind":"turn","data":{"status":"busy","actor":"Ada"}}
+```
+
+```json
+{"type":"signal","kind":"turn","data":{"status":"idle"}}
+```
+
+`busy` means the Keeper is working on a turn; `actor` is the name of whoever's line it answers.
+`idle` means it finished (replied, failed or was cancelled). Treat `busy` as a state, not an
+event: it may be sent more than once for one turn. The protocol also defines two optional
+`busy` fields, `activity` (`reading`\|`dice`\|`cast`\|`bookkeeping`, presentation only: an
+unknown value is ignored) and `round` (an integer); the 3.0 server does not send them.
+
+### 9.3 `notice`
+
+An out-of-band line for the table, in the room's language.
+
+```json
+{"type":"signal","kind":"notice","data":{"level":"warn","code":"provider_transient","text":"The AI provider is still temporarily unavailable after retrying. Please try again shortly."}}
+```
+
+| field | meaning |
+|---|---|
+| `level` | `info` or `warn`. |
+| `code` | Optional, stable. Sent today: `turn_failed`, `reply_blocked`, `provider_auth`, `provider_quota`, `provider_transient`, `provider_content`, `unavailable`. |
+| `text` | Show it. |
+| `spinner` | Optional boolean (a long operation under way). Not sent by the 3.0 server. |
+
+### 9.4 `audio`
+
+A playback intent; the bytes are fetched by `hash` over the byte channel.
+
+| field | meaning |
+|---|---|
+| `id` | The cue's id. |
+| `action` | `play`, `stop`, `pause`, `resume`, `volume`. |
+| `layer` | `bgm`, `ambience` or `sfx`. |
+| `hash`, `mime` | The sound to fetch. |
+| `title` | Optional, for display. |
+| `loop` | Optional boolean. |
+| `volume` | Optional number. |
+| `fadeMs` | Optional fade duration in milliseconds. |
+
+Audio cues come from the Stage Director's pass after a turn. Being signals, they are not
+replayed: a client that connects later does not learn what is playing.
+
+## 10. Views
+
+### 10.1 The model
+
+A view is a named, structured value computed for one viewer: the member, their role, their
+language and the character they play. Names and labels in it are in the **viewer's** language;
+ids are never translated. A client subscribes to the views it wants; the server sends a view's
+current value at once and then whenever that value changes for this viewer. Each update carries
+the whole value.
+
+```json
+{"type":"view","name":"room","rev":1,"at":2,"data":{"locale":"en","localeLabel":"English","system":{"id":"coc7","label":"CoC"},"variant":null,"keeperMuted":false,"uploads":true}}
+```
+
+| field | meaning |
+|---|---|
+| `name` | The view's name. |
+| `rev` | Counts per connection per view name and only grows: one rev never names two different values. It survives an unsubscribe on the same connection, and starts again on a new connection. Keep the value with the highest rev from the current connection. |
+| `at` | The log `head` the value reflects. |
+| `data` | The value. |
+
+The server recomputes subscribed views after every Keeper turn, every command, every
+lifecycle command, the pass after a turn, and whenever a member joins or leaves (presence is
+part of `party`), and sends only the values that changed. A line of speech by itself does not
+refresh views.
+
+### 10.2 Subscribing
+
+- **`view.list`** answers the views this connection may subscribe to, each with its JSON Schema
+  (and a module view's `title`).
+- **`view.subscribe {names}`** answers `{problems: [{name, code}]}` first, then sends the current
+  value of each newly subscribed view as a `view` frame. A name already subscribed is not sent
+  again. Problem codes: `unknown_view` (no such view, or one this connection may not see),
+  `too_many_views` (more than 64 subscriptions on one connection), `too_large`, `view_failed`.
+- **`view.unsubscribe {names}`** answers `{removed: [...]}`: the names that were subscribed.
+- **`view.get {name}`** answers `{name, rev, at, data}`: the view recomputed now, whether or not
+  the connection is subscribed. The rev moves only when the value differs from the last one sent
+  under that name, so an unchanged value comes back under its old rev.
+
+Subscriptions belong to the **connection** and die with it. After a reconnect, subscribe again
+(the reference client keeps a wanted set and re-subscribes on every welcome).
+
+One call names at most `MAX_VIEW_NAMES` = 64 views; a connection holds at most 64
+subscriptions; a view name is at most 200 code points; a value over 512 KiB (as compact JSON)
+is not sent (`too_large`; the last value sent stands).
+
+### 10.3 Who sees what
+
+Every built-in view is computed per viewer from the server's per-viewer projections: a player
+sees what a player may see, an admin also sees what is hidden from players (marked
+`hidden: true` where a view carries such entries), an observer sees what the table sees. Several
+connections of one member with the same role, language and character share one computation.
+When a member's character or role changes, the next refresh computes for the new viewer.
+
+### 10.4 Built-in views
+
+The JSON Schemas are in the protocol package (`BUILT_IN_VIEW_SCHEMAS`) and in `view.list`.
+
+**`me`**: the viewer and the character they play.
+
+| field | type | meaning |
+|---|---|---|
+| `member` | `{id, name, role, roleLabel}` | `roleLabel` is the role in the viewer's language. |
+| `character` | object or `null` | `null` for a spectator (no character). |
+| `character.id`, `.name`, `.pack` | string | `pack` is the character's rule system id. |
+| `character.status` | string[] | Conditions. |
+| `character.resources` | `[{id, label, value, max}]` | Meters such as HP and sanity. |
+| `character.attributes`, `.skills` | `[{key, label, value}]` | `value` is a number or a string. Filled only when the sheet is the viewer's own. |
+
+**`party`**: who is at the table, what they play, and the fight's order.
+
+| field | type | meaning |
+|---|---|---|
+| `members` | `[{id, name, role, online, character}]` | Members online, then seated members who are not. `role` is `null` for one who is offline; `character` is a character id or `null`. |
+| `characters` | `[{id, name, pack, status, resources, player}]` | Every seated character, and any other the room keeps that is not on offer (a companion). `player` is `{id, name}` or `null`. |
+| `initiative` | `{round, acting, order: [{name, value}]}` or `null` | `null` while no fight is on. `acting` is a name or `null`. |
+
+**`scene`**: what the table is looking at, and the time.
+
+| field | type | meaning |
+|---|---|---|
+| `name`, `focus` | string | Empty strings when unset. |
+| `established` | `[{text, at}]` | Facts established in the scene; `at` is a time text or `null`. |
+| `time` | string or `null` | The clock's text. |
+| `clockModule` | string or `null` | The module that keeps the clock; `null` when the Keeper does. |
+| `round` | integer or `null` | The combat round while a fight is on, else a module clock's round, else `null`. |
+
+**`variables`**: the room variables this viewer may see.
+
+| field | type | meaning |
+|---|---|---|
+| `module` | `[{id, kind, label, value, valueLabel?, min?, max?, options?, hidden?}]` | Declared variables. `kind` is `number`, `bool`, `text` or `enum`; `value` a number, boolean or string. |
+| `tree` | `[{path, value, description?, hidden?}]` | Leaves of the imported variable tree; `value` is a scalar or a list of scalars. |
+
+A player sees only player-visible variables and exposed leaves; an admin sees all of them, the
+ones players do not see marked `hidden: true`.
+
+**`characters`**: what can be played.
+
+| field | type | meaning |
+|---|---|---|
+| `claimable` | `[{id, name, blurb, source: {kind, id}, player}]` | Characters on offer; `source.kind` is `pack` or `module`; `player` is `{id, name}` of whoever plays it, or `null`. |
+| `systems` | `[{id, label, active}]` | Rule systems that can make a new character; `active` marks the room's. |
+| `mine` | string or `null` | The id of the character the viewer plays. |
+
+**`commands`**: `{commands: [entry]}`, the command table for this viewer
+([6.5](#65-discovering-commands-the-commands-view)).
+
+**`room`**: the room's settings.
+
+| field | type | meaning |
+|---|---|---|
+| `locale`, `localeLabel` | string | The room's language and its name in the viewer's language. |
+| `system` | `{id, label}` or `null` | The active rule system. |
+| `variant` | string or `null` | The house-rule ladder within it; `null` for the default. |
+| `keeperMuted` | boolean | The Keeper does not answer while `true`. |
+| `uploads` | boolean | Whether members may upload files. `false` on a server that keeps no files. |
+
+**`usage`**: the token figures of the room's last Keeper turn.
+
+| field | type | meaning |
+|---|---|---|
+| `last` | object or `null` | `null` before the first turn (and after a story reset). |
+| `last.turn` | integer | The turn. |
+| `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | As the provider reported them, summed over the turn. |
+| `last.estimated` | boolean | The prompt size was estimated by the engine: the provider reported none. |
+
+### 10.5 Module views
+
+A module may publish views named `<module>/<name>`, each with the JSON Schema and title its
+module declared (listed by `view.list`). The module computes each value per viewer and the
+server forwards it unfiltered, to that viewer only; a value over 512 KiB is dropped. Their
+shapes are the module's; a client that does not know a module view renders it generically or
+not at all. Names starting `admin/` are reserved and never offered by a module.
+
+## 11. The byte channel
+
+### 11.1 Streams
+
+Files move on their own streams beside the control stream. Each operation is one new
+bidirectional stream on the same connection: the client writes **one header line** (compact
+JSON and `\n`), the server answers with one header line and, for a GET, the bytes; then the
+server finishes the stream.
+
+- At most `MAX_BYTE_STREAMS` = **4** byte streams open at once per connection (the control
+  stream not counted); a fifth is refused with `too_many_streams`.
+- A header line is at most `MAX_BYTE_HEADER_BYTES` = **2048** bytes, newline included
+  (`header_too_long`).
+- A stream on which nothing arrives for `BYTE_STALL_MS` = **30 s** is closed (`stalled`).
+- The connection must have been welcomed (`not_open` otherwise, and after the session ends).
+- A refused stream gets one error line and is closed. The connection and its control stream
+  are never affected.
+
+Content is addressed by **hash**: the lowercase hex SHA-256 of the bytes, exactly 64
+characters.
+
+### 11.2 Offering a file
+
+An upload starts on the control stream with `call media.offer`:
+
+| param | type | meaning |
+|---|---|---|
+| `name` | string | The file name, at most 255 code points (stored sanitised). |
+| `mime` | string | The file's type (at most 128 characters). |
+| `size` | integer | Bytes, greater than 0. |
+| `sha256` | string | The lowercase hex SHA-256 of the bytes. |
+| `purpose` | `share` (default) or `import` | `share`: the file becomes room media and the table sees a `media` event once the bytes arrive. `import`: a card file for the `import` command ([11.6](#116-importing-a-card)), stored where only admins can fetch it, announced to nobody. |
+
+A success answers one of:
+
+- `{"upload_id":"…"}`: send the bytes with a PUT ([11.4](#114-put)). The id is good for one
+  attempt, by this member, within 15 minutes.
+- `{"existing":{hash, mime, size, name, from}}`: the room already holds these bytes; send
+  nothing. For a `share`, the file is announced to the table again (a new `media` event, `from`
+  the offering member). For an `import`, the file is ready for the `import` command.
+
+Accepted types: `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml` (a
+restricted subset), `audio/mpeg`, `audio/ogg`, `audio/wav`, `audio/flac`, `audio/mp4`,
+`audio/aac`. For `purpose: "import"` only `image/png` (a card with the data embedded) and
+`application/json`.
+
+Default limits: an image at most 8 MiB and 512 MiB of images per room; a sound at most
+128 MiB and 2048 MiB of sounds per room; 10 offers per member per room per minute (a refused
+offer still spends one).
+
+Refusals: `invalid_params` (a field of the wrong shape), `media_unavailable` (the server keeps
+no files), `observer_upload`, `media_disabled` (the room's upload switch is off),
+`media_rate_limited`, `media_bad_mime`, `media_bad_offer`, `media_too_large`, `media_bad_hash`,
+`media_quota_exceeded`.
+
+### 11.3 GET
+
+```
+client: {"op":"get","hash":"<64 hex>"}\n
+server: {"op":"get","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}\n  then exactly <n> bytes
+```
+
+A member can fetch what the room holds under an audience its role may see: room media (shared
+files, staging pictures) for everyone; import files for admins. A hash in another room, one the
+role may not see and one nobody holds all answer the same: `media_not_found`.
+
+### 11.4 PUT
+
+```
+client: {"op":"put","upload_id":"<id>"}\n  then exactly the offered size in bytes, then it finishes its side of the stream
+server: {"op":"put","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}\n
+```
+
+The client **must finish its sending side** after the body: the server confirms the end of the
+body by reading the end of the stream, and a stream left open is closed as `stalled`. The bytes
+are checked (exact size, SHA-256, the declared type's file signature, the SVG subset) before
+anything is stored. For a `share`, the `media` event goes to the table before the PUT's answer
+line.
+
+PUT refusals: `media_unknown_upload` (no waiting offer with that id for this member: never
+made, expired, already used, or the room was cleared), `media_size_mismatch` (more or fewer
+bytes than offered), `media_hash_mismatch`, `media_bad_signature`, `media_bad_svg`,
+`media_quota_exceeded`, `media_disabled`, `media_bad_upload`, `media_storage_failed`. Any
+failed PUT uses the offer up: offer again.
+
+### 11.5 Errors
+
+```
+server: {"ok":false,"code":"<stable code>","message":"<in the member's language>"}\n
+```
+
+The channel's own codes: `bad_request` (the header is not a request this channel knows),
+`header_too_long`, `too_many_streams`, `stalled`, `not_open`, `byte_failed` (the server
+failed; nothing was kept); plus the media codes above.
+
+### 11.6 Importing a card
+
+A card (a SillyTavern character card as PNG or JSON, or a native card as JSON) is brought in
+two steps: upload it with `media.offer {purpose: "import"}` (and a PUT when the answer is an
+`upload_id`), then run `command.run import {file: <hash>, as: "character"|"world"}`. Only the
+member who uploaded a file can import it (`not_uploaded` otherwise). As `character` any player
+makes it their character; as `world` (admin only) it becomes the room's world, and the table
+hears one `narrative` line naming it.
+
+## 12. Behaving well
+
+### 12.1 Forward compatibility
+
+Minor versions within a major are additive. A client:
+
+- **ignores** a frame of an unknown `type`, an event of an unknown `kind` (but counts its `seq`,
+  [7.6](#76-keeping-a-local-log)), a signal of an unknown `kind`, and a block of an unknown
+  `kind` (showing the rest of its event);
+- **ignores unknown fields** everywhere;
+- **fails closed** on a field that gates rendering: a known field with a value this version does
+  not know (a `speaker`, a `format`, a dice `kind`, a `role`, a reset `scope`, an audio `action`
+  or `layer`, a notice `level`, a block's `tone` or `style`), or a known field of the wrong type,
+  makes the frame malformed, and a malformed frame is dropped, not drawn wrongly. The one
+  exception is `turn.activity`, which is presentation only: an unknown value is left out;
+- **caps** what it accepts and drops a frame over a cap rather than truncating it. The reference
+  decoder (`decode.ts`) uses: 256 characters for short strings (ids, codes, names, view names,
+  locales, hashes), 200,000 for texts (a narrative, a draft slice, a notice, a result's text, a
+  block's body), 1024 for a dice expression, 10,000 dice per roll, 256 blocks per event, 64
+  options per `choices` block, 1000 events per `log.page` answer, 4096 entries in a rewind's
+  `kept`;
+- passes opaque values through: `view.data` of module views, `result.data`, a dice `detail`.
+
+Built-in view values are checked against their schemas, but extra fields are allowed: a newer
+server may add fields to a view.
+
+### 12.2 Languages
+
+| what | language |
+|---|---|
+| events and signals (everything sent to the table) | the room's (`welcome.room.locale`; the `room` view after a change) |
+| `result` text and error messages, `error` frames, byte-channel errors | the member's (`hello.locale`) |
+| views | the viewer's (`hello.locale`) |
+
+### 12.3 Text from the server
+
+Every string comes from people, the Keeper, a module or a card. Render it as text. Strip
+terminal control characters before writing to a terminal: `loreweaver-protocol/v3` exports
+`stripControlChars` for that. `format: "markdown"` is the only text the server marks as Markdown.
+
+### 12.4 Limits
+
+| limit | value | where |
+|---|---|---|
+| `input.text` | 8000 code points | `MAX_INPUT_CHARS` |
+| `hello.name` | 64 code points | server |
+| `rid` | 1–64 characters | `frames.ts` |
+| `command.run` `id` | 200 code points | server |
+| text-command argument string | 4000 code points | server |
+| inline rolls per line | 8 | server |
+| string argument (default) | 4000 code points | parameter schema |
+| list argument (default) | 64 items | parameter schema |
+| replay after `welcome` | 200 events | `RESUME_LIMIT` |
+| `log.page` `limit` | 1–100 | `PAGE_LIMIT` |
+| names per `view.subscribe` / `view.unsubscribe` | 64 | `MAX_VIEW_NAMES` |
+| subscriptions per connection | 64 | server |
+| view name | 200 code points | server |
+| view value | 512 KiB | server |
+| requests (`input`, `command.run`) | burst 5, then one per 2 s per member | server default |
+| byte streams per connection | 4 | `MAX_BYTE_STREAMS` |
+| byte header line | 2048 bytes | `MAX_BYTE_HEADER_BYTES` |
+| byte stream stall | 30 s | `BYTE_STALL_MS` |
+| `upload_id` | 64 characters | `MAX_UPLOAD_ID_CHARS` |
+| offered file name | 255 code points | `MAX_OFFER_NAME_CHARS` |
+| offers | 10 per member per room per minute | server default |
+| reset confirmation window | 60 s | server |
+
+### 12.5 Result error codes
+
+The protocol-level codes a `result` may carry (command refusals are in [6.4](#64-refusals),
+upload refusals in [11.2](#112-offering-a-file)):
+
+| code | from |
+|---|---|
+| `input_too_long` | `input` over 8000 code points |
+| `invalid_params` | a `call` whose `params` (or a field of it) has the wrong shape |
+| `unknown_method` | a `call` of a method the server does not have |
+| `rate_limited` | `input`, `command.run` |
+| `observer_speech` | an observer's line of speech |
+| `unknown_view`, `view_failed`, `too_large`, `not_open` | `view.get` |
+| `command_failed` | the server failed running a command; nothing was changed |
+
+## 13. Example sessions
+
+### 13.1 A table session
+
+Every line below is one frame exactly as it crosses the wire (whitespace aside). The room
+`main` speaks English, plays with the `coc7` rule system, and already holds two events: Bao
+said something and the Keeper answered.
+
+**1. Ada says hello.** A first visit: no `resume`.
+
+```json
+{"type":"hello","protocol":"3.0","key":"rT9vQ2xLm8Kc3PzW0aYbN5sEdF7gHjU1","name":"Ada","locale":"en","client":{"name":"my-client","version":"0.1.0"},"caps":[]}
+```
+
+**2. The welcome, then the replay** of the two events (`head` is 2, under the replay limit, so
+this is the whole log).
+
+```json
+{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2}
+{"type":"event","seq":1,"id":"2c1f8e7a-6b5d-4c3e-9f2a-1b0c9d8e7f6a","ts":1764240000001,"kind":"narrative","turn":1,"data":{"speaker":"player","name":"Bao","member":"m:b40a5aaa35ea","text":"I wait by the quay.","format":"plain"}}
+{"type":"event","seq":2,"id":"7d6e5f4a-3b2c-4d1e-8f9a-0b1c2d3e4f5a","ts":1764240002410,"kind":"narrative","turn":1,"data":{"speaker":"kp","text":"The fog thickens.","format":"markdown"}}
+```
+
+**3. Ada subscribes to two views.** The answer comes first, then one `view` frame per view.
+Ada has no character yet, so `me.character` is `null`.
+
+```json
+{"type":"call","rid":"r1","method":"view.subscribe","params":{"names":["me","room"]}}
+{"type":"result","rid":"r1","ok":true,"data":{"problems":[]}}
+{"type":"view","name":"me","rev":1,"at":2,"data":{"member":{"id":"m:15b5f3445045","name":"Ada","role":"player","roleLabel":"Player"},"character":null}}
+{"type":"view","name":"room","rev":1,"at":2,"data":{"locale":"en","localeLabel":"English","system":{"id":"coc7","label":"CoC"},"variant":null,"keeperMuted":false,"uploads":true}}
+```
+
+**4. A line of speech with an inline roll.** The line is accepted at once: its `narrative`
+event (turn 2) and the inline roll's `dice` event are published, then Ada's result arrives.
+The Keeper's turn follows: `busy`, two draft slices, the `narrative` event that replaces them
+(same id), `idle`.
+
+```json
+{"type":"input","rid":"r2","text":"I light the lantern. [[1d6]]"}
+{"type":"event","seq":3,"id":"5e4d3c2b-1a0f-4e9d-8c7b-6a5f4e3d2c1b","ts":1764240010000,"kind":"narrative","turn":2,"data":{"speaker":"player","name":"Ada","member":"m:15b5f3445045","text":"I light the lantern. [[1d6]]","format":"plain"}}
+{"type":"event","seq":4,"id":"0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d","ts":1764240010001,"kind":"dice","turn":2,"data":{"actor":"Ada","kind":"roll","expr":"1d6","rolls":[6],"total":6,"detail":{"text":"1d6 (6) = 6","inline":true}}}
+{"type":"result","rid":"r2","ok":true}
+{"type":"signal","kind":"turn","data":{"status":"busy","actor":"Ada"}}
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"The lantern catches, "}}
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"and the quay comes out of the dark."}}
+{"type":"event","seq":5,"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","ts":1764240014820,"kind":"narrative","turn":2,"data":{"speaker":"kp","text":"The lantern catches, and the quay comes out of the dark.","format":"markdown"}}
+{"type":"signal","kind":"turn","data":{"status":"idle"}}
+```
+
+**5. One command, both entrances.** Typed, then structured: the same command, the same shape
+of outcome. Each puts a turn-less `dice` event in the log and answers Ada with the totals. No
+Keeper turn opens.
+
+```json
+{"type":"input","rid":"r3","text":".r 2d6"}
+{"type":"event","seq":6,"id":"3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f","ts":1764240020000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[5,5],"total":10,"detail":{"text":"2d6 (5, 5) = 10"}}}
+{"type":"result","rid":"r3","ok":true,"data":{"totals":[10]}}
+{"type":"call","rid":"r4","method":"command.run","params":{"id":"roll","args":{"expr":"2d6"}}}
+{"type":"event","seq":7,"id":"8f7e6d5c-4b3a-4f2e-9d1c-0b9a8f7e6d5c","ts":1764240025000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[3,4],"total":7,"detail":{"text":"2d6 (3, 4) = 7"}}}
+{"type":"result","rid":"r4","ok":true,"data":{"totals":[7]}}
+```
+
+**6. Ada tries to undo.** `undo` is an admin command: the refusal is Ada's alone.
+
+```json
+{"type":"input","rid":"r5","text":".undo"}
+{"type":"result","rid":"r5","ok":false,"error":{"code":"forbidden","message":"That is for the room admin."}}
+```
+
+**7. The admin undoes the last turn.** On the admin's connection:
+
+```json
+{"type":"call","rid":"a1","method":"command.run","params":{"id":"undo","args":{}}}
+```
+
+Every member, Ada included, receives the `rewind`. It removes everything from `seq` 3 on: turn
+2 (the line, its roll and the reply) and the two rolls that came after turn 2 began. The room is
+now in epoch 2.
+
+```json
+{"type":"event","seq":8,"id":"6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d","ts":1764240030000,"kind":"rewind","data":{"from":3,"kept":[],"epoch":2}}
+```
+
+The admin's own answer:
+
+```json
+{"type":"result","rid":"a1","ok":true,"text":"Rewound 1 turn(s); the room is back at the end of turn 1.","data":{"turn":1,"epoch":2,"removedTurns":[2]}}
+```
+
+Ada's log now holds `seq` 1, 2 and 8. If she reconnects with
+`"resume":{"epoch":1,"after":8}`, the welcome says `"epoch":2`: she discards her log and takes
+the replay afresh.
+
+### 13.2 The byte channel
+
+Ada shares a 48,213-byte PNG. On the control stream:
+
+```json
+{"type":"call","rid":"r6","method":"media.offer","params":{"name":"map.png","mime":"image/png","size":48213,"sha256":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}}
+{"type":"result","rid":"r6","ok":true,"data":{"upload_id":"c4b3a291-8f7e-4d6c-9b5a-4f3e2d1c0b9a"}}
+```
+
+On a new stream, the PUT header, then the 48,213 bytes, then Ada finishes her side:
+
+```json
+{"op":"put","upload_id":"c4b3a291-8f7e-4d6c-9b5a-4f3e2d1c0b9a"}
+```
+
+The table (Ada included) sees the file arrive on the control stream:
+
+```json
+{"type":"event","seq":9,"id":"e1d2c3b4-a5f6-4e7d-8c9b-0a1f2e3d4c5b","ts":1764240040000,"kind":"media","data":{"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","mime":"image/png","size":48213,"name":"map.png","from":"m:15b5f3445045"}}
+```
+
+and the PUT stream answers, then closes:
+
+```json
+{"op":"put","ok":true,"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","size":48213,"mime":"image/png","name":"map.png"}
+```
+
+Bao fetches it on a stream of his own; the answer line is followed by exactly 48,213 bytes:
+
+```json
+{"op":"get","hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}
+{"op":"get","ok":true,"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","size":48213,"mime":"image/png","name":"map.png"}
+```
+
+A hash the room does not hold (or one Bao may not see):
+
+```json
+{"ok":false,"code":"media_not_found","message":"No such file."}
+```
+
+## 14. Not in 3.0 yet
+
+These are defined in the design, or reserved in the code, but not built in 3.0:
+
+- **`features` and `caps` values.** Both lists exist; the server sends `features: []` and
+  ignores `caps`.
+- **Panels.** A `panels` view listing a viewer's panels, as declarative templates bound to views
+  or as sandboxed pages fetched over the byte channel.
+- **The `audio` view**: the audio library and what each layer is playing.
+- **The `packs` view** and content packs: installed packs, the cards they ship, and pack assets
+  served over the byte channel.
+- **Admin views** (`admin/model`, `admin/keys`, `admin/content`): the names under `admin/` are
+  reserved for admins; no such view exists yet. Keys are minted by the operator
+  (`loreweaver key`), not over the protocol.
+- **`turn.activity`, `turn.round` and `notice.spinner`** are defined in the frames but not sent.
