@@ -16,6 +16,7 @@ import {
   setDisposition,
   setKnowledge,
   sketchNpc,
+  MAX_DISPOSITION_CHARS,
 } from "../../../src/core/npcs/index.ts";
 
 function ok(result: { ok: true; data: Npc } | { ok: false; code: string }): Npc {
@@ -135,7 +136,9 @@ describe("the Keeper's NPC changes", () => {
     expect([moved.location, moved.locationKnown, moved.secretAgenda]).toEqual(["the mill", true, "keep the ledger hidden"]);
     expect(moveNpc(npc, "l".repeat(121), true)).toEqual({ ok: false, code: "bad_location" });
     expect(ok(setDisposition(npc, "wary")).disposition).toBe("wary");
-    expect(setDisposition(npc, "d".repeat(81))).toEqual({ ok: false, code: "bad_disposition" });
+    // An attitude with its reason fits; only a wall of text is refused.
+    expect(ok(setDisposition(npc, "d".repeat(MAX_DISPOSITION_CHARS))).disposition.length).toBe(MAX_DISPOSITION_CHARS);
+    expect(setDisposition(npc, "d".repeat(MAX_DISPOSITION_CHARS + 1))).toEqual({ ok: false, code: "bad_disposition" });
     const revised = ok(reviseNpc(npc, { major: false, style: "clipped" }));
     expect([revised.name, revised.major, revised.style]).toEqual(["Tom", false, "clipped"]);
   });

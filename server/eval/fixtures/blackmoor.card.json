@@ -1,0 +1,129 @@
+{
+  "spec": "chara_card_v2",
+  "spec_version": "2.0",
+  "data": {
+    "name": "The Blackmoor Lighthouse",
+    "description": "A Call of Cthulhu one-shot set in the fishing village of Blackmoor.",
+    "personality": "",
+    "scenario": "The investigators arrive in Blackmoor to look into the disappearance of three sailors.",
+    "first_mes": "Rain drives in off the sea as you push through the door of the Salt & Anchor. The low-beamed tavern is smoke-stained and half-empty; a water-stained harbor map hangs by the hearth, and the innkeeper, Martha, eyes you warily from behind the bar. Three sailors have vanished this month. Their boats came back empty, scratched, reeking of brine. On the northern cliff the old lighthouse is burning, as it does every night.",
+    "mes_example": "",
+    "creator_notes": "Evaluation fixture: the public text of tests/fixtures/module_en.txt recast as a world card, with its keeper-only section as secret entries.",
+    "system_prompt": "",
+    "post_history_instructions": "",
+    "alternate_greetings": [],
+    "tags": [
+      "coc7",
+      "fixture"
+    ],
+    "creator": "loreweaver",
+    "character_version": "1",
+    "character_book": {
+      "name": "Blackmoor",
+      "entries": [
+        {
+          "keys": [
+            "Blackmoor"
+          ],
+          "content": "The fishing village of Blackmoor has lost three sailors this month. Their boats returned empty, scratched, and reeking of brine. The investigators arrive to look into the disappearances. The old lighthouse on the northern cliff still burns each night, though the keeper, Elias Crane, is rarely seen in the village anymore.",
+          "comment": "Premise",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 10,
+          "extensions": {}
+        },
+        {
+          "keys": [
+            "inn",
+            "tavern",
+            "Salt & Anchor",
+            "Martha"
+          ],
+          "content": "Opening scene. A low-beamed tavern, smoke-stained, half-empty. The innkeeper Martha eyes strangers warily. A water-stained harbor map hangs by the hearth. Patrons fall silent when the lighthouse is mentioned. Clue (Spot Hidden): behind the map, someone has scratched a tide table with three dates circled - the three nights sailors vanished. Martha (innkeeper) knows the sailors feared the lighthouse light \"changed color\".",
+          "comment": "The Salt & Anchor Inn",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 20,
+          "extensions": {}
+        },
+        {
+          "keys": [
+            "lighthouse",
+            "Elias",
+            "Crane",
+            "keeper"
+          ],
+          "content": "KEEPER-ONLY. THE LIGHTHOUSE KEEPER IS THE MURDERER. Elias Crane drowned two years ago and what climbs the lighthouse stairs now is a Deep One thrall wearing his face. The \"light\" is a lure that calls boats onto the rocks so the Deep Ones can feed. Among themselves the Deep Ones call this feeding ground the Uln-Shaggath Shoal.",
+          "comment": "Keeper truth: the lighthouse keeper",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 30,
+          "extensions": {
+            "secret": true
+          }
+        },
+        {
+          "keys": [
+            "lamp",
+            "lens",
+            "lamp room"
+          ],
+          "content": "KEEPER-ONLY. Hidden clue, only if the players search the lighthouse lamp room: the lamp's lens is packed with human teeth. Sanity loss 1/1D6.",
+          "comment": "Keeper truth: the lamp room",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 40,
+          "extensions": {
+            "secret": true
+          }
+        },
+        {
+          "keys": [
+            "pact",
+            "villagers",
+            "village"
+          ],
+          "content": "KEEPER-ONLY. Final truth to be earned, never told: the villagers made a pact generations ago, which the old families call the Brine Covenant; the three dead sailors tried to break it.",
+          "comment": "Keeper truth: the pact",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 50,
+          "extensions": {
+            "secret": true
+          }
+        },
+        {
+          "keys": [
+            "thrall",
+            "Deep One",
+            "fight",
+            "attack"
+          ],
+          "content": "KEEPER-ONLY. Deep One thrall \"Elias\" - STR 80 CON 70 DEX 55 SIZ 65, HP 13, attacks: claw 1d6+db, drag underwater. SAN loss on reveal 1/1D8.",
+          "comment": "Keeper: the threat",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 60,
+          "extensions": {
+            "secret": true
+          }
+        },
+        {
+          "keys": [
+            "night",
+            "timeline"
+          ],
+          "content": "KEEPER-ONLY. Night 1: the lighthouse light shifts to a sickly green. Night 2: a boat is found circling with no crew. Night 3 (if unresolved): the thrall descends into the village.",
+          "comment": "Keeper: timeline",
+          "enabled": true,
+          "constant": true,
+          "insertion_order": 70,
+          "extensions": {
+            "secret": true
+          }
+        }
+      ]
+    },
+    "extensions": {}
+  }
+}

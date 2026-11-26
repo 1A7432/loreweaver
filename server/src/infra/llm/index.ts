@@ -30,6 +30,8 @@ export interface LLMSettings {
   /** Overrides the verified table; required for a model the table does not know. */
   readonly contextWindow?: number;
   readonly timeoutMs?: number;
+  /** False: the OpenAI-compatible wire never sends `prompt_cache_key` (see `openai.ts`). Default: sent. */
+  readonly promptCacheKey?: boolean;
   readonly retry?: Partial<RetryPolicy>;
 }
 
@@ -102,6 +104,7 @@ export class ConfiguredLLM implements LLMClient {
       ...(settings.reasoningEffort === undefined ? {} : { reasoningEffort: settings.reasoningEffort }),
       ...(settings.maxOutputTokens === undefined ? {} : { maxOutputTokens: settings.maxOutputTokens }),
       ...(settings.timeoutMs === undefined ? {} : { timeoutMs: settings.timeoutMs }),
+      ...(settings.promptCacheKey === undefined ? {} : { promptCacheKey: settings.promptCacheKey }),
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
     };
     const inner = endpoint.wire === "anthropic" ? new AnthropicLLM(lane) : new OpenAICompatibleLLM(lane);

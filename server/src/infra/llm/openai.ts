@@ -3,6 +3,8 @@
 // one code path whether or not the caller wants deltas, and usage is always requested,
 // because a stream reports usage only when asked (`stream_options.include_usage`;
 // defensive pattern 4) and the context meter depends on it.
+import { createHash } from "node:crypto";
+
 import OpenAI from "openai";
 import type {
   ChatCompletionChunk,
@@ -13,6 +15,7 @@ import type {
 } from "openai/resources/chat/completions";
 import type { CompletionUsage } from "openai/resources/completions";
 
+import { currentLane, type LaneScope } from "./accounting.ts";
 import { abortedError, fromOpenAIError } from "./errors.ts";
 import {
   type ChatMessage,
@@ -37,8 +40,31 @@ export interface OpenAILaneSettings {
   /** Sent as `max_completion_tokens` only when set; vendors differ on the default. */
   readonly maxOutputTokens?: number;
   readonly timeoutMs?: number;
+  /** False: never send `prompt_cache_key` (an endpoint that rejects fields it does not know). */
+  readonly promptCacheKey?: boolean;
   /** The SDK's injection point; tests hand it canned responses. */
   readonly fetch?: typeof fetch;
+}
+
+/**
+ * The cache-routing key of a call: the same for every call of one lane in one room, and
+ * different across lanes (their prompts share no prefix) and rooms. Caches of this wire are
+ * automatic but kept PER SERVER, and without a key consecutive turns of a conversation are
+ * routed anywhere: a live run measured 128 cached tokens of 8,000 at the start of every
+ * turn while hits inside a turn were near-total.
+ *   - OpenAI: `prompt_cache_key`, "used by OpenAI to cache responses for similar requests
+ *     to optimize your cache hit rates" (node_modules/openai/resources/chat/completions/
+ *     completions.d.ts, read 2026-11-27).
+ *   - xAI: "The `prompt_cache_key` field in the request body routes requests with the same
+ *     key to the same server. Since cache entries are stored per-server, this maximizes your
+ *     cache hit rate" — https://docs.x.ai/developers/advanced-api-usage/prompt-caching/
+ *     maximizing-cache-hits (updated 2026-11-23, read 2026-11-27).
+ * A digest, because a room's id is the operator's own naming and no business of a vendor.
+ */
+export function promptCacheKey(scope: LaneScope | undefined): string | undefined {
+  const room = scope?.fields.room;
+  if (scope === undefined || typeof room !== "string" || room === "") return undefined;
+  return createHash("sha256").update(`${scope.lane}\u0000${room}`).digest("hex").slice(0, 32);
 }
 
 // The SDK refuses to construct without a credential, and a self-hosted endpoint may need
@@ -98,6 +124,8 @@ export class OpenAICompatibleLLM implements LLMClient {
     if (effort !== undefined) body.reasoning_effort = effort;
     const cap = options.maxOutputTokens ?? this.#settings.maxOutputTokens;
     if (cap !== undefined) body.max_completion_tokens = cap;
+    const cacheKey = this.#settings.promptCacheKey === false ? undefined : promptCacheKey(currentLane());
+    if (cacheKey !== undefined) body.prompt_cache_key = cacheKey;
     return body;
   }
 }

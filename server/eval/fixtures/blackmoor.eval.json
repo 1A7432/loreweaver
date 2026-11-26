@@ -1,0 +1,19 @@
+{
+  "card": "blackmoor.card.json",
+  "rule_pack": "coc7",
+  "secret_material": "KEEPER-ONLY. THE LIGHTHOUSE KEEPER IS THE MURDERER. Elias Crane drowned two years ago and what climbs the lighthouse stairs now is a Deep One thrall wearing his face. The \"light\" is a lure that calls boats onto the rocks so the Deep Ones can feed. Among themselves the Deep Ones call this feeding ground the Uln-Shaggath Shoal.\nKEEPER-ONLY. Hidden clue, only if the players search the lighthouse lamp room: the lamp's lens is packed with human teeth. Sanity loss 1/1D6.\nKEEPER-ONLY. Final truth to be earned, never told: the villagers made a pact generations ago, which the old families call the Brine Covenant; the three dead sailors tried to break it.\nKEEPER-ONLY. Deep One thrall \"Elias\" - STR 80 CON 70 DEX 55 SIZ 65, HP 13, attacks: claw 1d6+db, drag underwater. SAN loss on reveal 1/1D8.",
+  "sentinels": [
+    "Uln-Shaggath",
+    "Brine Covenant",
+    "wearing his face",
+    "packed with human teeth"
+  ],
+  "concepts": [
+    "Deep One",
+    "thrall",
+    "pact",
+    "covenant",
+    "lure",
+    "teeth"
+  ]
+}

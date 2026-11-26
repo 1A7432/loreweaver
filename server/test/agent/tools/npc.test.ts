@@ -59,7 +59,7 @@ describe("NPC records", () => {
     expect((await room.call(catalog, "set_npc_disposition", { npc: "martha", disposition: "friendly but wary" })).text).toBe("Martha's disposition is now: friendly but wary");
     expect(stored(room, NPC_TYPE, "martha")).toMatchObject({ knowledge: ["The key is under the mat"], location: "The cellar", disposition: "friendly but wary" });
     expect((await room.call(catalog, "npc_learns", { npc: "Nobody", fact: "x" })).code).toBe("npc_not_found");
-    expect((await room.call(catalog, "set_npc_disposition", { npc: "Martha", disposition: "x".repeat(81) })).code).toBe("bad_disposition");
+    expect((await room.call(catalog, "set_npc_disposition", { npc: "Martha", disposition: "x".repeat(201) })).code).toBe("bad_disposition");
   });
 
   test("get_npc and list_npcs show the secrets, flagged Keeper-only", async () => {

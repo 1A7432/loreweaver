@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { type ChatMessage, LLMError, OpenAICompatibleLLM, type ToolDefinition } from "../../../src/infra/llm/index.ts";
+import { type ChatMessage, LLMError, OpenAICompatibleLLM, type ToolDefinition, withLane } from "../../../src/infra/llm/index.ts";
 import { data, FakeHttp } from "./fake_http.ts";
 
 const BASE = "https://llm.example.test/v1";
@@ -247,4 +247,30 @@ test("a call aborted before it starts never reaches the network", async () => {
     .catch((caught: unknown) => caught);
   expect((error as LLMError).code).toBe("aborted");
   expect(http.sent).toHaveLength(0);
+});
+
+test("a call made for a room carries a cache-routing key: stable per lane and room, a digest, and switchable off", async () => {
+  const reply = { events: [chunk({ content: "ok" }, "stop"), data("[DONE]")] };
+  const http = new FakeHttp([reply, reply, reply, reply, reply, reply]);
+  const client = lane(http);
+  const ask = (name: string, room?: string): Promise<unknown> => withLane(name, () => client.chat([{ role: "user", content: "hi" }]), room === undefined ? {} : { room, turn: 3 });
+  await ask("keeper", "The Harbor Table");
+  await ask("keeper", "The Harbor Table");
+  await ask("scribe", "The Harbor Table");
+  await ask("keeper", "another room");
+  // No room, and no lane at all: nothing to route by.
+  await ask("keeper");
+  await client.chat([{ role: "user", content: "hi" }]);
+  const keys = http.sent.map((sent) => (sent.body as { prompt_cache_key?: string }).prompt_cache_key);
+  expect(keys[0]).toMatch(/^[0-9a-f]{32}$/u);
+  expect(keys[1]).toBe(keys[0]);
+  expect(new Set([keys[0], keys[2], keys[3]]).size).toBe(3);
+  expect(keys.slice(4)).toEqual([undefined, undefined]);
+  // The room's own name never leaves.
+  expect(http.sent.map((sent) => sent.rawBody).join("")).not.toContain("Harbor");
+
+  const quiet = new FakeHttp([reply]);
+  const off = new OpenAICompatibleLLM({ baseUrl: BASE, apiKey: "k", model: "m", fetch: quiet.fetch, promptCacheKey: false });
+  await withLane("keeper", () => off.chat([{ role: "user", content: "hi" }]), { room: "r" });
+  expect(quiet.sent[0]?.body).not.toHaveProperty("prompt_cache_key");
 });

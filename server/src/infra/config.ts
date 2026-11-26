@@ -182,6 +182,7 @@ export function loadSettings(env: Environment): Settings {
     const contextWindow = positiveInt(name("CONTEXT_WINDOW"));
     const maxOutputTokens = positiveInt(name("MAX_OUTPUT_TOKENS"));
     const timeoutMs = positiveInt(name("TIMEOUT_MS"));
+    const promptCacheKey = flag(name("PROMPT_CACHE_KEY"));
 
     if (baseUrl !== undefined && !URL.canParse(baseUrl)) {
       problems.push({ variable: name("BASE_URL"), problem: "invalid" });
@@ -198,6 +199,7 @@ export function loadSettings(env: Environment): Settings {
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
     };
 
     const separate = provider !== undefined || baseUrl !== undefined;

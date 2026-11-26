@@ -26,7 +26,8 @@ export const MAX_PUBLIC_DESCRIPTION_CHARS = 500;
 export const MAX_PERSONA_CHARS = 2000;
 export const MAX_STYLE_CHARS = 500;
 export const MAX_SECRET_AGENDA_CHARS = 2000;
-export const MAX_DISPOSITION_CHARS = 80;
+/** Room for an attitude AND its reason: a live Keeper writes "hostile; they tore her map off the wall" (97 characters). */
+export const MAX_DISPOSITION_CHARS = 200;
 export const MAX_LOCATION_CHARS = 120;
 /** Facts one NPC knows; each is one bullet of its actor's prompt. */
 export const MAX_KNOWLEDGE_FACTS = 64;
