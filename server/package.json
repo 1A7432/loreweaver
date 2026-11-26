@@ -10,9 +10,12 @@
     "build": "bun build --compile src/cli/main.ts src/worker/main.ts --outfile dist/loreweaver && ./dist/loreweaver selftest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.14.0",
     "@number0/iroh": "1.2.0",
     "loreweaver": "workspace:*",
-    "loreweaver-protocol": "workspace:*"
+    "loreweaver-protocol": "workspace:*",
+    "openai": "7.65.0",
+    "yaml": "^2.8.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.5",
