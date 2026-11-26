@@ -1,0 +1,10 @@
+{
+  "net.error.bad_frame": "无法识别这条数据。",
+  "net.error.bad_key": "钥匙无效。",
+  "net.error.forbidden": "你没有这个权限。",
+  "net.error.hello_first": "第一帧必须是 hello。",
+  "net.error.input_too_long": "这条消息太长了。",
+  "net.error.invalid_params": "参数不合法。",
+  "net.error.protocol_mismatch": "协议不匹配：服务器是 {server}，客户端是 {client}。",
+  "net.error.unknown_method": "没有这个方法。"
+}

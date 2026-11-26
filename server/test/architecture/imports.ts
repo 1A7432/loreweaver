@@ -10,6 +10,8 @@
 //      content code beside pure engine code and never holds the store.
 //   4. A relative import names its file with the extension, so the tree also loads
 //      under a runtime that strips types without resolving extensions.
+//   5. The only thing imported from outside `src/` by path is data (`.json`): the
+//      message catalogs. Code outside `src/` is reached as a package or not at all.
 
 const LAYERS = ["infra", "core", "agent", "gateway", "net", "cli"] as const;
 const WORKER = "worker";
@@ -19,7 +21,7 @@ const RUNTIME_DIR = "infra/runtime/";
 
 export interface Violation {
   readonly file: string;
-  readonly rule: 1 | 2 | 3 | 4;
+  readonly rule: 1 | 2 | 3 | 4 | 5;
   readonly detail: string;
 }
 
@@ -42,12 +44,17 @@ function layerOf(file: string): string {
   return file.split("/", 1)[0] ?? "";
 }
 
-function resolveRelative(from: string, specifier: string): string {
+/** The target's path relative to `src/`, or null when the import leaves `src/`. */
+function resolveRelative(from: string, specifier: string): string | null {
   const parts = from.split("/").slice(0, -1);
   for (const segment of specifier.split("/")) {
     if (segment === "." || segment === "") continue;
-    if (segment === "..") parts.pop();
-    else parts.push(segment);
+    if (segment === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else {
+      parts.push(segment);
+    }
   }
   return parts.join("/");
 }
@@ -81,6 +88,12 @@ export function checkImports(files: ReadonlyMap<string, string>): Violation[] {
         violations.push({ file, rule: 4, detail: `relative import without an extension: ${specifier}` });
       }
       const target = resolveRelative(file, specifier);
+      if (target === null) {
+        if (!specifier.endsWith(".json")) {
+          violations.push({ file, rule: 5, detail: `imports code from outside src/: ${specifier}` });
+        }
+        continue;
+      }
       targets.push(target);
       const targetLayer = layerOf(target);
       if (targetLayer === layer) continue;

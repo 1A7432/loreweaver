@@ -39,6 +39,11 @@
     "server": {
       "name": "loreweaver-server",
       "version": "3.0.0-alpha.0",
+      "dependencies": {
+        "@number0/iroh": "1.2.0",
+        "loreweaver": "workspace:*",
+        "loreweaver-protocol": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "1.4.5",
         "typescript": "^7.0.2",

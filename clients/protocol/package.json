@@ -35,6 +35,11 @@
       "types": "./dist/types.d.ts",
       "default": "./dist/types.js"
     },
+    "./v3": {
+      "bun": "./src/v3/frames.ts",
+      "types": "./src/v3/frames.ts",
+      "default": "./src/v3/frames.ts"
+    },
     "./client": {
       "bun": "./src/client.ts",
       "types": "./dist/client.d.ts",

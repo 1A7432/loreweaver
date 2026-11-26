@@ -53,6 +53,11 @@ test("a relative import names its extension", () => {
   expect(rules({ "core/a.ts": 'import "./b";', "core/b.ts": "" })).toEqual([4]);
 });
 
+test("from outside src/, only data may be imported by path", () => {
+  expect(rules({ "infra/i18n.ts": 'import en from "../../locales/en/net.json" with { type: "json" }; export const c = en;' })).toEqual([]);
+  expect(rules({ "infra/x.ts": 'import "../../test/helpers.ts";' })).toEqual([5]);
+});
+
 test("the server tree keeps the rules", () => {
   const files = new Map<string, string>();
   for (const entry of readdirSync(SRC, { recursive: true, encoding: "utf8" })) {

@@ -1,0 +1,10 @@
+{
+  "net.error.bad_frame": "That frame could not be read.",
+  "net.error.bad_key": "That key is not recognised.",
+  "net.error.forbidden": "You are not allowed to do that.",
+  "net.error.hello_first": "The first frame must be hello.",
+  "net.error.input_too_long": "That message is too long.",
+  "net.error.invalid_params": "Those parameters are not valid.",
+  "net.error.protocol_mismatch": "Protocol mismatch: this server speaks {server}, the client speaks {client}.",
+  "net.error.unknown_method": "No such method."
+}

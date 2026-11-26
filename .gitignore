@@ -98,3 +98,6 @@ iroh-ticket.txt
 
 # --- 《安土》 marketing footage (generated video/stills for the trailer; never publish from here)
 marketing/
+
+# bun build --compile leaves these beside the entry point when interrupted
+*.bun-build

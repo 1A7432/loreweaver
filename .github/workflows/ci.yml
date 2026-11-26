@@ -76,3 +76,28 @@ jobs:
       - name: server
         working-directory: server
         run: bun run check
+
+  server-binary:
+    # The compiled server on every platform it is released for. The self-test brings up
+    # the parts a single-file build can lose: the room worker thread, loading a module's
+    # TypeScript from disk, the native iroh transport and the database.
+    name: Server binary — build + self-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: build
+        working-directory: server
+        # The two entry points and their order are what `roomWorkerEntry` relies on.
+        run: bun build --compile src/cli/main.ts src/worker/main.ts --outfile dist/loreweaver
+      - name: self-test
+        working-directory: server
+        run: ./dist/loreweaver${{ runner.os == 'Windows' && '.exe' || '' }} selftest
