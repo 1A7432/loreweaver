@@ -188,7 +188,7 @@ describe("opposed", () => {
     const result = runOpposedCheck(coc, "opposed_check", { active: { skill: "spot hidden", sheet: vera() }, passive: { skill: "listen", sheet: npc } }, draws([1, 100, 20], [1, 100, 50]));
     if (!result.ok) throw new Error(result.refusal);
     expect([result.active.canonical, result.active.value, result.passive.canonical, result.passive.value]).toEqual(["侦查", 25, "聆听", 60]);
-    expect([result.active.outcome.rank.tier, result.passive.outcome.rank.tier, result.winner, result.decidedBy]).toEqual([2, 2, "passive", "value"]);
+    expect([result.settle, result.active.outcome?.rank.tier, result.passive.outcome?.rank.tier, result.winner, result.decidedBy]).toEqual(["outcome", 2, 2, "passive", "value"]);
   });
 
   test("a tie in tier and value is a tie; a better tier wins outright", () => {
@@ -204,6 +204,72 @@ describe("opposed", () => {
     expect(runOpposedCheck(coc, "opposed_check", { active: { skill: "a" }, passive: { skill: "b", value: 1 } }, random)).toMatchObject({ refusal: "unknown_skill", side: "active" });
     expect(runOpposedCheck(coc, "opposed_check", { active: { skill: "a", value: 1.5 }, passive: { skill: "b", value: 1 } }, random)).toMatchObject({ refusal: "invalid_value" });
     expect(random.consumed).toBe(0);
+  });
+});
+
+describe("opposed, settled by total (meet-the-target systems)", () => {
+  const dnd: RulePack = builtInPacks()[1]!;
+
+  test("the default follows the comparison: dnd5e (>=) by total, coc7 (<=) by outcome", () => {
+    const settle = (pack: RulePack, id: string) => (pack.subsystems.get(id) as { settle: string }).settle;
+    expect([settle(dnd, "opposed_check"), settle(coc, "opposed_check"), settle(synth, "clash")]).toEqual(["total", "outcome", "total"]);
+  });
+
+  test("the higher total wins; each side's value is its modifier; nothing is graded", () => {
+    const fighter = vera(dnd);
+    const strong = Object.freeze({ ...fighter, attributes: tableWith(fighter.attributes, "STR", 16) });
+    // 运动 derives from STR's modifier: +3 for 16, +0 for 10. 12 + 3 beats 14 + 0.
+    const result = runOpposedCheck(dnd, "opposed_check", { active: { skill: "athletics", sheet: strong }, passive: { skill: "athletics", sheet: fighter } }, draws([1, 20, 12], [1, 20, 14]));
+    if (!result.ok) throw new Error(result.refusal);
+    expect([result.settle, result.active.value, result.active.total, result.passive.value, result.passive.total]).toEqual(["total", 3, 15, 0, 14]);
+    expect([result.active.outcome, result.passive.outcome, result.winner, result.decidedBy]).toEqual([null, null, "active", "total"]);
+    expect(result.active.check.dice).toEqual([12]);
+  });
+
+  test("equal totals are a tie, whatever the values", () => {
+    const result = runOpposedCheck(dnd, "opposed_check", { active: { skill: "a", value: 5 }, passive: { skill: "b", value: 2 } }, draws([1, 20, 10], [1, 20, 13]));
+    expect(result).toMatchObject({ ok: true, winner: "tie", decidedBy: null, active: { total: 15 }, passive: { total: 15 } });
+  });
+
+  test("roll modifiers apply to each side's own roll", () => {
+    const result = runOpposedCheck(
+      dnd,
+      "opposed_check",
+      { active: { skill: "a", value: 0, modifiers: [["advantage", 1]] }, passive: { skill: "b", value: 0, modifiers: [["disadvantage", 1]] } },
+      draws([1, 20, 4], [1, 20, 17], [1, 20, 18], [1, 20, 6]),
+    );
+    expect(result).toMatchObject({ ok: true, active: { total: 17 }, passive: { total: 6 }, winner: "active" });
+    const random = draws();
+    expect(runOpposedCheck(dnd, "opposed_check", { active: { skill: "a", value: 0 }, passive: { skill: "b", value: 0, modifiers: [["bonus", 1]] } }, random)).toMatchObject({
+      refusal: "invalid_modifier",
+      side: "passive",
+      modifier: "bonus",
+    });
+    expect(random.consumed).toBe(0);
+  });
+
+  test("an explicit settle overrides the default, in both directions", () => {
+    const ladder = "ranks: [{id: crit, when: 'dice[0] == 20', success: true, critical: true, tier: 3}, {id: hit, when: 'roll >= target', success: true, tier: 2}, {id: miss, tier: 1}]";
+    const meet = (settle: string) => compileRulePack("meet", `resolution: {roll: 1d20, target: dc, compare: '>=', ${ladder}}\nsubsystems:\n  vs: {template: opposed${settle}}\n`);
+    const under = (settle: string) =>
+      compileRulePack("under", `resolution: {roll: 1d100, compare: '<=', ranks: [{id: ok, when: 'roll <= target', success: true}, {id: no}]}\nsubsystems:\n  vs: {template: opposed${settle}}\n`);
+    // A >= pack told to settle by outcome grades each side against its value (value as DC).
+    const graded = runOpposedCheck(meet(", settle: outcome"), "vs", { active: { skill: "a", value: 10 }, passive: { skill: "b", value: 20 } }, draws([1, 20, 12], [1, 20, 15]));
+    expect(graded).toMatchObject({ ok: true, settle: "outcome", active: { outcome: { rank: { id: "hit" } } }, passive: { outcome: { rank: { id: "miss" } } }, winner: "active", decidedBy: "tier" });
+    expect(runOpposedCheck(meet(""), "vs", { active: { skill: "a", value: 10 }, passive: { skill: "b", value: 20 } }, draws([1, 20, 12], [1, 20, 15]))).toMatchObject({
+      settle: "total",
+      winner: "passive",
+      decidedBy: "total",
+    });
+    // A <= pack told to settle by total adds the values to the rolls.
+    const summed = runOpposedCheck(under(", settle: total"), "vs", { active: { skill: "a", value: 5 }, passive: { skill: "b", value: 50 } }, draws([1, 100, 90], [1, 100, 30]));
+    expect(summed).toMatchObject({ ok: true, settle: "total", active: { total: 95, outcome: null }, passive: { total: 80 }, winner: "active" });
+    expect(runOpposedCheck(under(""), "vs", { active: { skill: "a", value: 5 }, passive: { skill: "b", value: 50 } }, draws([1, 100, 90], [1, 100, 30]))).toMatchObject({
+      settle: "outcome",
+      winner: "passive",
+      decidedBy: "tier",
+    });
+    expect(() => meet(", settle: highest")).toThrow(expect.objectContaining({ code: "BAD_FIELD", path: "subsystems.vs.settle" }));
   });
 });
 

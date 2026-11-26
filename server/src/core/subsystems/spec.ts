@@ -10,7 +10,8 @@
  * - `improvement_check`: roll against a skill; on success it grows (experience ticks);
  * - `resource_spend_adjust`: spend points of an attribute to lower a recorded check's roll
  *   (the Luck family);
- * - `opposed`: two checks compared by outcome tier;
+ * - `opposed`: two checks compared, by outcome tier (roll-under systems) or by total
+ *   (meet-the-target systems; see `settle`);
  * - `table_draw`: one uniform draw from a pack table (madness, omens).
  * A pack key that declares `script` is a script flow, which needs the sandboxed rules
  * script lane; that lane is not built, so such a pack is refused.
@@ -77,8 +78,24 @@ export interface ResourceSpendSpec extends SubsystemBase {
   readonly stat: string;
 }
 
+/**
+ * How an opposed check is settled. `outcome`: each side is graded against its own value
+ * and the better rank wins (CoC). `total`: each side's value is the modifier on its roll
+ * and the higher total wins, with no success/failure rank (D&D 5e contests: "instead of
+ * comparing the total to a DC, they compare the totals of their two checks").
+ */
+export type OpposedSettle = "outcome" | "total";
+
 export interface OpposedSpec extends SubsystemBase {
   readonly template: "opposed";
+  /** As declared (`settle:`), else from the system's comparison: `<=` → outcome, `>=` → total. */
+  readonly settle: OpposedSettle;
+}
+
+/** What the subsystem compiler needs to know about the rest of the pack. */
+export interface SubsystemContext {
+  /** The resolution's comparison; null for a pack without a resolution. */
+  readonly compare: "<=" | ">=" | null;
 }
 
 export interface DrawTable {
@@ -104,7 +121,7 @@ const TEMPLATE_KEYS: Readonly<Record<SubsystemTemplate, readonly string[]>> = {
   check_with_loss: ["stat", "stat_max", "fumble_loss", "loss_ceiling"],
   improvement_check: ["roll", "improve", "cap", "auto_success_above"],
   resource_spend_adjust: ["stat"],
-  opposed: [],
+  opposed: ["settle"],
   table_draw: ["tables", "default"],
 };
 
@@ -151,7 +168,7 @@ function compileTables(r: Reader, value: unknown, path: string): FrozenMap<strin
   return new FrozenMap(tables);
 }
 
-function compileOne(r: Reader, id: string, value: unknown): SubsystemSpec {
+function compileOne(r: Reader, id: string, value: unknown, context: SubsystemContext): SubsystemSpec {
   const path = `subsystems.${id}`;
   const raw = r.mapping(value, path);
   // The script lane runs pack JavaScript in a sandbox. It is not built, and a stand-in
@@ -204,8 +221,11 @@ function compileOne(r: Reader, id: string, value: unknown): SubsystemSpec {
     }
     case "resource_spend_adjust":
       return Object.freeze({ ...base, template, stat: r.text(field(raw, "stat"), `${path}.stat`) });
-    case "opposed":
-      return Object.freeze({ ...base, template });
+    case "opposed": {
+      const settle = given(raw, "settle");
+      if (settle !== undefined && settle !== "outcome" && settle !== "total") r.fail("BAD_FIELD", `${path}.settle`, "must be outcome or total");
+      return Object.freeze({ ...base, template, settle: settle ?? (context.compare === ">=" ? "total" : "outcome") });
+    }
     case "table_draw": {
       const tables = compileTables(r, field(raw, "tables"), `${path}.tables`);
       const defaultRaw = given(raw, "default");
@@ -221,7 +241,7 @@ function compileOne(r: Reader, id: string, value: unknown): SubsystemSpec {
  * Compiles a pack's `subsystems:` section (absent or null: none), in declared order.
  * Throws `RulePackError`.
  */
-export function compileSubsystems(packId: string, section: unknown): FrozenMap<string, SubsystemSpec> {
+export function compileSubsystems(packId: string, section: unknown, context: SubsystemContext = { compare: null }): FrozenMap<string, SubsystemSpec> {
   const r = new Reader(packId);
   const raw = r.optionalMapping(section, "subsystems");
   const ids = Object.keys(raw);
@@ -230,7 +250,7 @@ export function compileSubsystems(packId: string, section: unknown): FrozenMap<s
   for (const id of ids) {
     if (!SUBSYSTEM_NAME.test(id)) r.fail("BAD_ID", `subsystems.${id}`, "a subsystem name must be an identifier that does not start with '_'");
     if (RESERVED_SUBSYSTEM_NAMES.has(id)) r.fail("RESERVED_NAME", `subsystems.${id}`, "this name is reserved for the engine's own tool");
-    specs.push([id, compileOne(r, id, raw[id])]);
+    specs.push([id, compileOne(r, id, raw[id], context)]);
   }
   return new FrozenMap(specs);
 }

@@ -219,7 +219,7 @@ export function compileRulePack(id: string, source: string | Raw, options: Compi
   const resolutionRaw = field(document, "resolution");
   const resolution = resolutionRaw === undefined || resolutionRaw === null ? null : wrapResolution(id, resolutionRaw);
   const sheet = wrapSheet(id, document);
-  const subsystems = compileSubsystems(id, field(document, "subsystems"));
+  const subsystems = compileSubsystems(id, field(document, "subsystems"), { compare: resolution?.compare ?? null });
   checkCrossSections(r, resolution, sheet, subsystems);
 
   const initiativeRaw = field(document, "initiative");

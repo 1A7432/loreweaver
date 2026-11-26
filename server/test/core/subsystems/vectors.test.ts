@@ -36,6 +36,13 @@
 //   sides through the sheet layer and refuses an unknown skill. Such rows are checked for
 //   the refusal or the corrected value, then re-run with the 2.x values stated explicitly
 //   and compared in full.
+// - opposed in a meet-the-target pack (resolution `compare: ">="`: dnd5e, and the literal
+//   `oraclesynth`): settled by TOTAL, as the SRD's contests are ("instead of comparing the
+//   total to a DC, they compare the totals of their two checks"; a tie leaves things as
+//   they were). 2.x graded each side with its own value as the DC (`运动=3` rolled 17 →
+//   success). These rows replay their recorded draws unchanged — one d20 per side, the
+//   same faces — and the NEW result is asserted directly: totals = dice + value, no rank,
+//   higher total wins; the summary counts how often the winner changed.
 import { describe, expect, test } from "bun:test";
 
 import { rankDisplay, tableName } from "../../../src/core/rulepacks/index.ts";
@@ -324,6 +331,8 @@ describe("opposed (opposed_check, clash)", () => {
     const t = tally();
     for (const row of rowsOf("opposed")) {
       const pack = vectorPack(row.pack);
+      const spec = pack.subsystems.get(row.subsystem)!;
+      if (spec.template !== "opposed") throw new Error("template");
       const sheet = sheetOf(pack.sheet, row.sheet_before!);
       const args = row.arguments;
       const skill1 = String(args.skill1 ?? "");
@@ -353,24 +362,49 @@ describe("opposed (opposed_check, clash)", () => {
         expect(rerun.remaining).toBe(0);
       } else {
         expect(random.remaining).toBe(0);
-        t.compared++;
       }
       if (!result.ok) throw new Error(`${label}: ${result.refusal}`);
       const lines = row.reply.split("\n");
-      // "🎯 Active: 侦查=25 rolled 57 → Failure"
+      // "🎯 Active: 侦查=25 rolled 57 → Failure": the value and the dice are unchanged in
+      // either settling (the same one roll per side, from the same recorded draw).
       for (const [line, side] of [[lines[1]!, result.active], [lines[2]!, result.passive]] as const) {
         expect([label, numbersIn(line.slice(line.lastIndexOf("=") + 1))]).toEqual([label, [side.value, side.check.total]]);
-        expect(line.endsWith(rankDisplay(pack, side.outcome.rank.id, row.locale))).toBe(true);
+      }
+      expect(legacyOf(pack.sheet, sheet)).toEqual(row.sheet_after!);
+      if (spec.settle === "total") {
+        // Meet-the-target packs (dnd5e, oraclesynth): 2.x graded each side with its value
+        // as the DC; a contest compares totals (dice + value) and grades neither side.
+        const a = result.active;
+        const p = result.passive;
+        expect([a.total, p.total, a.outcome, p.outcome]).toEqual([a.check.total + a.value, p.check.total + p.value, null, null]);
+        const winner = a.total === p.total ? "tie" : a.total > p.total ? "active" : "passive";
+        expect([label, result.winner, result.decidedBy]).toEqual([label, winner, winner === "tie" ? null : "total"]);
+        const last = lines[3]!;
+        const old = /Tie|平局/.test(last) ? "tie" : /Active|主动方/.test(last) ? "active" : "passive";
+        const key = `settled by total (2.x: value as DC) — ${row.pack}: ${old === winner ? "same winner" : "winner changed"}`;
+        skip(t, key);
+        continue;
+      }
+      for (const [line, side] of [[lines[1]!, result.active], [lines[2]!, result.passive]] as const) {
+        expect(line.endsWith(rankDisplay(pack, side.outcome!.rank.id, row.locale))).toBe(true);
       }
       const last = lines[3]!;
       const winner = /Tie|平局/.test(last) ? "tie" : /Active|主动方/.test(last) ? "active" : "passive";
       const byValue = /higher skill value|技能值高/.test(last);
       expect([label, result.winner, result.decidedBy]).toEqual([label, winner, winner === "tie" ? null : byValue ? "value" : "tier"]);
-      expect(legacyOf(pack.sheet, sheet)).toEqual(row.sheet_after!);
+      if (!differs) t.compared++;
     }
+    // A row can carry two reasons (a dnd5e row whose passive value 2.x also misread).
     expect(t).toEqual({
-      compared: 77,
-      skipped: { "2.x read an unknown skill as a number (refused)": 9, "2.x read the passive skill raw, default 50 (corrected value)": 23 },
+      compared: 61,
+      skipped: {
+        "2.x read an unknown skill as a number (refused)": 9,
+        "2.x read the passive skill raw, default 50 (corrected value)": 23,
+        "settled by total (2.x: value as DC) — dnd5e: same winner": 11,
+        "settled by total (2.x: value as DC) — dnd5e: winner changed": 20,
+        "settled by total (2.x: value as DC) — oraclesynth: same winner": 4,
+        "settled by total (2.x: value as DC) — oraclesynth: winner changed": 4,
+      },
     });
   });
 });
