@@ -213,6 +213,11 @@ function userMessage(locale: string, situation: string, tone: string, target: st
   const parts = [situation];
   if (tone !== "") parts.push(translate(NPC_CATALOG, locale, "npc.actor_user.tone_line", { tone }));
   if (target !== "") parts.push(translate(NPC_CATALOG, locale, "npc.actor_user.target_line", { target }));
+  // New in 3.0 (not from the tuned originals). The record and the situation are written by
+  // the Keeper, whose tool arguments stay in the model's own working language; in a live
+  // Chinese room over an English card the NPC answered in English, and that line goes to
+  // the table as it is.
+  parts.push(translate(NPC_CATALOG, locale, "npc.actor_user.language_line"));
   return parts.join("\n");
 }
 

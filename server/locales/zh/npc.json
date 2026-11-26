@@ -6,5 +6,6 @@
   "npc.actor_system.no_secret_agenda": "（暂无）",
   "npc.actor_system.no_style": "（暂无特别的说话风格备注）",
   "npc.actor_user.target_line": "你正在对……说话/回应：{target}",
-  "npc.actor_user.tone_line": "要求的语气：{tone}"
+  "npc.actor_user.tone_line": "要求的语气：{tone}",
+  "npc.actor_user.language_line": "台词请用中文说——这是这张桌子的语言，不管上面的笔记是用什么语言写的。"
 }

@@ -6,5 +6,6 @@
   "npc.actor_system.no_secret_agenda": "(none noted)",
   "npc.actor_system.no_style": "(no particular speech style noted)",
   "npc.actor_user.target_line": "You are speaking/reacting to: {target}",
-  "npc.actor_user.tone_line": "Requested tone: {tone}"
+  "npc.actor_user.tone_line": "Requested tone: {tone}",
+  "npc.actor_user.language_line": "Speak your line in English — the table's language — whatever language your notes above are written in."
 }

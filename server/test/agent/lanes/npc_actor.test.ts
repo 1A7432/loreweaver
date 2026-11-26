@@ -136,7 +136,9 @@ describe("prompt and call", () => {
     const [system, user] = llm.calls[0] ?? [];
     expect(system?.content.startsWith("你是Martha。")).toBe(true);
     expect(system?.content).toContain("你现在只能采取以下行动：talk only。");
-    expect(user?.content).toBe("The party asks about the cellar.\n要求的语气：nervous\n你正在对……说话/回应：Ada");
+    // The last line is 3.0's own: the record and the situation are the Keeper's (often English) writing,
+    // and the line goes to the table.
+    expect(user?.content).toBe("The party asks about the cellar.\n要求的语气：nervous\n你正在对……说话/回应：Ada\n台词请用中文说——这是这张桌子的语言，不管上面的笔记是用什么语言写的。");
     expect(llm.requests[0]?.options.reasoningEffort).toBe("high");
     expect(lane).toEqual({ lane: "npc", fields: { room: "room-1", npc: "martha" } });
   });
