@@ -1,0 +1,6 @@
+{
+  "prompt.chronicle.fold_instruction": "你在维护一场 TRPG 战役的滚动总述（campaign summary）——记录桌面至今实际发生的史实。给定上一版总述与一批编年记录（从旧到新），写出不超过 {limit} 字符的更新版总述。保留每一个关键玩家抉择、每一个被命名的人物/地点/物品、每一个承诺、线索与未了后果；优先压缩氛围与过渡文字。这份总述面向玩家：只记录桌面见证过的事实——绝不写入 Keeper 秘密或未揭晓的后果。用记录本身的语言书写。只输出更新后的总述正文。",
+  "prompt.chronicle.fold_user_template": "上一版总述（其中的关键事实必须延续）：\n{previous}\n\n待折叠的编年记录（从旧到新）：\n{records}\n\n更新后的战役总述：",
+  "prompt.chronicle.record_line": "- [第 {turn} 回合] {text}",
+  "prompt.chronicle.none_yet": "（暂无）"
+}
