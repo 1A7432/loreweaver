@@ -910,7 +910,11 @@ class KeeperTurn {
       seed: this.#seed("replyPhase"),
       reply: reviewed.text,
       rolls: this.#rolls,
-      clockAdvances: bookkeeping.clockAdvances.map((advance) => ({ amount: advance.moved ? `${advance.minutes} minutes` : advance.to })),
+      // The DELTA, always: a clock face the engine cannot move by itself (a module's own
+      // calendar) is exactly the case where a module needs to know how far time went. The
+      // first version sent the unmoved face's text instead, and the flagship pack's calendar
+      // could not count the Keeper's advances.
+      clockAdvances: bookkeeping.clockAdvances.map((advance) => ({ amount: `${advance.minutes} minutes` })),
       variableWrites,
       who: context.who,
       variables: moduleVariablesJson(services, room),

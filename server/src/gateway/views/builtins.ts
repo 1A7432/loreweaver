@@ -227,8 +227,11 @@ function scene(source: ViewSource, viewer: ViewerContext): SceneView {
   const clock = project<GameClockView>(source, projection, GAME_CLOCK_TYPE, GAME_CLOCK_ID);
   const owner = project<ClockOwnerView>(source, projection, CLOCK_OWNER_TYPE, CLOCK_OWNER_ID)?.owner ?? { kind: "keeper" as const };
   const fight = project<InitiativeView>(source, projection, INITIATIVE_TYPE, INITIATIVE_ID);
-  const clockModule = owner.kind === "module" ? owner.id : null;
-  const moduleClock = clockModule !== null && source.moduleClock?.module === clockModule ? source.moduleClock : null;
+  // A module that keeps the room's clock says so by answering with a reading (the room
+  // passes its latest): that is the authority. The ownership document is a fallback for a
+  // room whose module has not been asked yet.
+  const moduleClock = source.moduleClock ?? null;
+  const clockModule = moduleClock?.module ?? (owner.kind === "module" ? owner.id : null);
   const kept = moduleClock?.time ?? clock?.now ?? "";
   const round = fight !== null && fight.order.length > 0 ? fight.round : (moduleClock?.round ?? null);
   return {

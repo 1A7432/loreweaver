@@ -79,3 +79,12 @@ test("a checkpoint from an exchange of a dead generation is not stored; the work
   expect(resultFor(ada.sent, "again")).toMatchObject({ ok: true, text: "hp 9" });
   expect(b.store.moduleStates(ROOM).get("kitchen")).toEqual({ hp: 9, said: [] });
 });
+
+test("the scene view shows the clock a module keeps, before any turn has run", async () => {
+  const b = setup();
+  const ada = b.join(KEYS.ada);
+  ada.receive({ type: "call", rid: "s", method: "view.subscribe", params: { names: ["scene"] } });
+  await b.settled();
+  // `kitchen` keeps the room's clock (its reading is "hp <n>", its round the lines it heard).
+  expect(views(ada.sent, "scene").at(-1)?.data).toMatchObject({ clockModule: "kitchen", time: "hp 10", round: 0 });
+});

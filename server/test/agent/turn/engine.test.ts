@@ -171,6 +171,29 @@ describe("module exchanges around the reply", () => {
     expect(pending.map((item) => item.text)).toEqual(["NEXT_TURN_FACT"]);
   });
 
+  test("a clock advance reaches the modules as its delta, also when the engine cannot move the clock's face", async () => {
+    const h = new Harness();
+    let advances: unknown = null;
+    // No clock of its own: the Keeper keeps the clock, and this module only listens.
+    const worker = fakeWorker({
+      id: "almanac",
+      events: { replyPhase: true },
+      replyPhase: (event) => {
+        advances = event.clockAdvances;
+        return { effects: [] };
+      },
+    });
+    h.keeper.script([
+      { toolCalls: [toolCall("game_clock", { action: "set", value: "Year 300, the long rain" })] },
+      { toolCalls: [toolCall("game_clock", { action: "advance", value: "+3 days" })] },
+      "The rain does not let up.",
+    ]);
+    await h.turn("We wait it out.", { worker });
+    // The face is not a format the engine can move, so it stays as written — and the module is
+    // still told how far time went, which is the one thing its own calendar needs.
+    expect(advances).toEqual([{ amount: "4320 minutes" }]);
+  });
+
   test("a facts turn: no player line, the pending facts are narrated, its own marks wait", async () => {
     const h = new Harness();
     const waiting: PendingFact = { module: "bell", turn: 0, to: "keeper", importance: "high", text: "FACT_TO_NARRATE the tower falls", data: null };

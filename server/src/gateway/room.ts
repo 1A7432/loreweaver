@@ -739,6 +739,10 @@ export class Room {
     if (this.#moduleViews !== null) return this.#moduleViews;
     const worker = this.#host.moduleWorker(this.id);
     if (worker === null) return NO_MODULE_VIEWS;
+    // The first look at a room with modules asks them once: what views they have, and the
+    // clock one of them may keep — the `scene` view shows it before any turn has run.
+    await this.#renderModules();
+    if (this.#moduleViews !== null) return this.#moduleViews;
     const described = await describeModules(worker);
     for (const problem of described.problems) this.#report(problem);
     const listed = listedModuleViews(described.modules);
