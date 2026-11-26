@@ -100,6 +100,8 @@ export interface TurnResult {
   readonly replyId: string | null;
   /** Usage of the turn's own rounds; check rounds and folds are counted apart. */
   readonly usage: Usage;
+  /** No round reported a prompt size: `usage.inputTokens` is the engine's estimate. */
+  readonly usageEstimated: boolean;
   /** For the Scribe (`ScribeTurnFacts`): the tools the Keeper called, in order. */
   readonly toolsCalled: readonly string[];
   /** Variables written by content code (a module or a lore template) this turn. */
