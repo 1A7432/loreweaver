@@ -49,7 +49,7 @@ export class Hub {
         now: () => this.#deps.clock.now(),
         checkpoints: this.#deps.store.moduleStates(id) as Map<string, Json>,
         onCheckpoint: (module, snapshot) => {
-          this.#deps.store.setModuleState(id, module, snapshot);
+          this.#deps.store.writer(id).setModuleState(module, snapshot);
         },
       });
       this.#workers.set(id, worker);

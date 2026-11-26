@@ -73,7 +73,7 @@ test("a line of speech: answered to the speaker, logged for everyone, then the K
   expect(ada.sent[1]).toEqual({ type: "result", rid: "r1", ok: true });
 
   const [said, reply] = events(ada.sent);
-  expect(said).toMatchObject({ seq: 1, kind: "narrative", data: { speaker: "player", name: "Ada", text: "I open the door.", format: "plain" } });
+  expect(said).toMatchObject({ seq: 1, kind: "narrative", turn: 1, data: { speaker: "player", name: "Ada", text: "I open the door.", format: "plain" } });
   expect(reply).toMatchObject({ seq: 2, kind: "narrative", turn: 1, data: { speaker: "kp", text: "The door creaks open.", format: "markdown" } });
   // The draft bubble carries the reply's id, and its pieces add up to the final text.
   const drafts = ada.sent.flatMap((frame) => (frame.type === "signal" && frame.kind === "draft" && "text" in frame.data ? [frame.data] : []));
@@ -186,10 +186,22 @@ test("a restart loses nothing: the log, the turn count and a module's state come
     expect(back.sent[0]).toMatchObject({ type: "welcome", epoch: 1, head: 2 });
     back.receive({ type: "input", rid: "2", text: "after the restart" });
     await back.until(isIdle);
-    expect(events(back.sent).map((event) => [event.seq, event.turn])).toEqual([[3, undefined], [4, 2]]);
+    // The player's line and the reply that answers it carry the same turn.
+    expect(events(back.sent).map((event) => [event.seq, event.turn])).toEqual([[3, 2], [4, 2]]);
     expect(llm.calls[0]?.[0]?.content).toBe('You are the Keeper.\n\ncounter: turn 2, Ada said "after the restart"');
     after.store.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("lines accepted while a turn is running get their turn numbers at once, in order", async () => {
+  const b = setup({ llm: new ScriptedLLM(["one", "two", "three"]) });
+  const wire = new Wire(b.deps);
+  wire.hello("player-key");
+  for (const [rid, text] of [["1", "a"], ["2", "b"], ["3", "c"]] as const) wire.receive({ type: "input", rid, text });
+  await wire.until((frame) => frame.type === "event" && frame.seq === 6);
+  const log = events(wire.sent).map((event) => [event.seq, event.turn, event.kind === "narrative" ? event.data.speaker : ""]);
+  // All three lines are logged before any reply; each reply lands under its line's turn.
+  expect(log).toEqual([[1, 1, "player"], [2, 2, "player"], [3, 3, "player"], [4, 1, "kp"], [5, 2, "kp"], [6, 3, "kp"]]);
 });

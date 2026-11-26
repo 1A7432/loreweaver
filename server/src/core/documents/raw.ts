@@ -3,7 +3,13 @@
 // this file; everything that sends content outward goes through `views.ts` instead, so
 // a whole payload cannot reach a connection by oversight. The import-rule test holds
 // that line.
-import type { DocumentRow, Store } from "../../infra/store.ts";
+//
+// Writes take a `RoomWriter` (`infra/store.ts`), never a bare room id: the writer carries
+// the room, its generation and the turn the write belongs to, so a document write from a
+// lane whose room has since been undone, reset or replaced is refused (`StaleGeneration`),
+// and every write lands in the undo journal under its own turn.
+import type { DocumentCatalog } from "../../infra/lifecycle/bundle.ts";
+import type { DocumentRow, RoomWriter, Store } from "../../infra/store.ts";
 import type { Document, DocumentTypes, JsonObject, WriteViolation } from "./model.ts";
 
 export class DocumentRefused extends Error {
@@ -59,24 +65,22 @@ export class RawDocuments {
    * Store a payload at the type's current version. Throws `DocumentRefused` when the
    * type's own validation rejects it — nothing is written then.
    */
-  put(room: string, type: string, id: string, data: JsonObject, meta: JsonObject = {}): Document {
+  put(writer: RoomWriter, type: string, id: string, data: JsonObject, meta: JsonObject = {}): Document {
     const definition = this.#types.get(type);
     const violations = definition.validate?.(data) ?? [];
     if (violations.length > 0) throw new DocumentRefused(type, violations);
-    this.#store.docPut(room, type, id, definition.version, JSON.stringify(data), JSON.stringify(meta));
+    writer.docPut(type, id, definition.version, JSON.stringify(data), JSON.stringify(meta));
     return { type, id, version: definition.version, data, meta, corrupt: false };
   }
 
-  delete(room: string, type: string, id: string): void {
-    this.#store.docDelete(room, type, id);
+  /** Whether there was a document to delete. */
+  delete(writer: RoomWriter, type: string, id: string): boolean {
+    return writer.docDelete(type, id);
   }
 
-  deleteType(room: string, type: string): void {
-    this.#store.docDeleteType(room, type);
-  }
-
-  deleteRoom(room: string): void {
-    this.#store.docDeleteRoom(room);
+  /** Delete every document of one type; returns how many went. */
+  deleteType(writer: RoomWriter, type: string): number {
+    return writer.docDeleteType(type);
   }
 
   #read(row: DocumentRow): Document {
@@ -89,4 +93,29 @@ export class RawDocuments {
     }
     return { type: row.type, id: row.id, version: row.version, data, meta, corrupt: false };
   }
+}
+
+/**
+ * What the store's reset and import need to know about document types: each type's
+ * declared lifecycle, and on import the type's own payload check. A stored type the
+ * registry does not know has no lifecycle, and the store refuses to guess one. A payload
+ * that cannot be read at all is carried as it is: the room it came from held it that way
+ * (`Document.corrupt`), and an export → import round trip must not turn damage into a
+ * refusal to load the rest of the room. A readable payload the type rejects, or one
+ * written by a newer version of the type, is refused.
+ */
+export function documentCatalog(types: DocumentTypes): DocumentCatalog {
+  const known = (type: string): boolean => types.names().includes(type);
+  return {
+    lifecycleOf: (type) => (known(type) ? types.get(type).lifecycle : undefined),
+    check: (type, version, data) => {
+      const definition = types.get(type);
+      if (version > definition.version) return "version_ahead";
+      const payload = parseObject(data);
+      if (payload === null) return null;
+      const current = version < definition.version && definition.migrate ? definition.migrate(payload, version) : payload;
+      const violations = definition.validate?.(current) ?? [];
+      return violations.length > 0 ? (violations[0] as WriteViolation).code : null;
+    },
+  };
 }

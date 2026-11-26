@@ -319,7 +319,7 @@ describe("documents: who sees which variables", () => {
   function setup() {
     const store = new Store(openDatabase(":memory:"));
     const types = new DocumentTypes().register(variableTreeDocument).register(moduleVariablesDocument);
-    return { raw: new RawDocuments(store, types), views: new DocumentViews(store, types) };
+    return { raw: new RawDocuments(store, types), views: new DocumentViews(store, types), w: store.writer("r") };
   }
   const ADMIN: Viewer = { grade: "admin", locale: "zh" };
   const PLAYER = playerViewer("zh", "m1");
@@ -327,9 +327,9 @@ describe("documents: who sees which variables", () => {
   const SECRET = "真凶是管家";
 
   test("variable_tree: keeper sees all, admin sees hidden leaves flagged, players see only exposed leaves", () => {
-    const { raw, views } = setup();
+    const { raw, views, w } = setup();
     const declared = tree(`{"悟空": {"好感度": [50, "d"]}, "悟空二号": {"秘密": "${SECRET}"}, "1": 1}`);
-    raw.put("r", "variable_tree", "tree", variableTreeData(declared, ["悟空"]));
+    raw.put(w, "variable_tree", "tree", variableTreeData(declared, ["悟空"]));
 
     const keeper = views.view("r", "variable_tree", "tree", KEEPER) as Record<string, any>;
     expect(keeper.leaves).toEqual([
@@ -351,19 +351,19 @@ describe("documents: who sees which variables", () => {
   });
 
   test("variable_tree: nothing exposed means nothing at all for a player", () => {
-    const { raw, views } = setup();
-    raw.put("r", "variable_tree", "tree", variableTreeData(tree(`{"a": "${SECRET}"}`), []));
+    const { raw, views, w } = setup();
+    raw.put(w, "variable_tree", "tree", variableTreeData(tree(`{"a": "${SECRET}"}`), []));
     expect(views.view("r", "variable_tree", "tree", PLAYER)).toEqual({ leaves: [], treeJson: "{}" });
   });
 
   test("variable_tree: an unreadable payload is refused at write", () => {
-    const { raw } = setup();
-    expect(() => raw.put("r", "variable_tree", "tree", { tree: "{'a': 1}", exposed: [] })).toThrow(DocumentRefused);
-    expect(() => raw.put("r", "variable_tree", "tree", { tree: "{}", exposed: [3] })).toThrow(DocumentRefused);
+    const { raw, w } = setup();
+    expect(() => raw.put(w, "variable_tree", "tree", { tree: "{'a': 1}", exposed: [] })).toThrow(DocumentRefused);
+    expect(() => raw.put(w, "variable_tree", "tree", { tree: "{}", exposed: [3] })).toThrow(DocumentRefused);
   });
 
   test("module_variables: a keeper-only tracker leaves no trace in a player view", () => {
-    const { raw, views } = setup();
+    const { raw, views, w } = setup();
     let state: ModuleVariables = { variables: [] };
     for (const input of [
       { id: "理智", kind: "number", minimum: 0, maximum: 99, default: 80, labels: { en: "Sanity", zh: "理智值" } },
@@ -373,7 +373,7 @@ describe("documents: who sees which variables", () => {
       if (!built.ok) throw new Error(built.problem);
       state = defineVariable(state, built.spec).state;
     }
-    raw.put("r", "module_variables", "variables", moduleVariablesPayload(state));
+    raw.put(w, "module_variables", "variables", moduleVariablesPayload(state));
 
     const keeper = views.view("r", "module_variables", "variables", { grade: "keeper", locale: "en" }) as Record<string, any>;
     expect(keeper.variables).toEqual([
@@ -389,12 +389,12 @@ describe("documents: who sees which variables", () => {
   });
 
   test("module_variables: a payload with an invalid spec, a repeated id or an unfit value is refused", () => {
-    const { raw } = setup();
-    expect(() => raw.put("r", "module_variables", "variables", { variables: [{ spec: { id: "a", kind: "colour" }, value: 1 }] })).toThrow(DocumentRefused);
+    const { raw, w } = setup();
+    expect(() => raw.put(w, "module_variables", "variables", { variables: [{ spec: { id: "a", kind: "colour" }, value: 1 }] })).toThrow(DocumentRefused);
     const a = { spec: { id: "a", kind: "bool", visibility: "player", labels: {}, default: false }, value: false };
-    expect(() => raw.put("r", "module_variables", "variables", { variables: [a, a] })).toThrow(DocumentRefused);
-    expect(() => raw.put("r", "module_variables", "variables", { variables: [{ ...a, value: "maybe" }] })).toThrow(DocumentRefused);
-    expect(raw.put("r", "module_variables", "variables", { variables: [a] }).data).toEqual({ variables: [a] });
+    expect(() => raw.put(w, "module_variables", "variables", { variables: [a, a] })).toThrow(DocumentRefused);
+    expect(() => raw.put(w, "module_variables", "variables", { variables: [{ ...a, value: "maybe" }] })).toThrow(DocumentRefused);
+    expect(raw.put(w, "module_variables", "variables", { variables: [a] }).data).toEqual({ variables: [a] });
   });
 });
 

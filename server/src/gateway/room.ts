@@ -5,7 +5,7 @@ import type { TurnDeps, TurnSink } from "../agent/turn.ts";
 import { runTurn } from "../agent/turn.ts";
 import type { Clock } from "../infra/ids.ts";
 import { Mutex } from "../infra/mutex.ts";
-import type { RoomMeta, Store, StoredEvent } from "../infra/store.ts";
+import type { RoomMeta, RoomWriter, Store, StoredEvent } from "../infra/store.ts";
 
 export interface Member {
   readonly id: string;
@@ -26,8 +26,6 @@ export class Room {
   readonly #members = new Set<Member>();
   readonly #lock = new Mutex();
   readonly #onProblem: (room: string, text: string) => void;
-  /** Turns completed so far. Read from the log, so a restart continues the count. */
-  #turns: number;
 
   constructor(
     id: string,
@@ -41,7 +39,6 @@ export class Room {
     this.#clock = clock;
     this.#turnDeps = turnDeps;
     this.#onProblem = onProblem;
-    this.#turns = store.lastTurn(id);
   }
 
   get meta(): RoomMeta {
@@ -64,10 +61,17 @@ export class Room {
     return this.#store.eventsBefore(this.id, before, limit);
   }
 
-  /** Append to the log, then send to everyone: what is sent is what was stored. */
-  publish<K extends EventKind>(kind: K, id: string, data: EventPayloads[K], turn?: number): void {
+  /**
+   * Append to the log, then send to everyone: what is sent is what was stored. A turn's
+   * events go through that turn's writer; anything else through a writer for the room as
+   * it is now.
+   */
+  publish<K extends EventKind>(kind: K, id: string, data: EventPayloads[K], writer?: RoomWriter): void {
     const draft = { id, ts: this.#clock.now(), kind, data };
-    const stored = this.#store.appendEvent(this.id, turn === undefined ? draft : { ...draft, turn });
+    const stored =
+      writer === undefined
+        ? this.#store.writer(this.id).appendEvent(draft)
+        : writer.appendEvent({ ...draft, turn: writer.turn });
     this.#broadcast(eventFrame(stored));
   }
 
@@ -80,17 +84,22 @@ export class Room {
    * turn already running. Resolves when that turn has finished.
    */
   say(member: Member, text: string): Promise<void> {
-    this.publish("narrative", this.#clock.id(), { speaker: "player", name: member.name, member: member.id, text, format: "plain" });
+    // The turn is allocated when the line is ACCEPTED, here and synchronously, not when
+    // its Keeper turn gets the lock: the line then carries its turn number, so a reply is
+    // paired with the line it answers by `turn` alone, a turn whose reply never landed is
+    // simply a turn with one event, and an undo of the turn takes the line with it. The
+    // counter lives in the store, so a restart continues it.
+    const writer = this.#store.beginTurn(this.id);
+    this.publish("narrative", this.#clock.id(), { speaker: "player", name: member.name, member: member.id, text, format: "plain" }, writer);
     return this.#lock.run(async () => {
-      const turn = ++this.#turns;
-      await runTurn(this.#turnDeps, this.#sink(), { room: this.id, turn, speaker: member.name, text });
+      await runTurn(this.#turnDeps, this.#sink(writer), { room: this.id, turn: writer.turn, speaker: member.name, text });
     });
   }
 
-  #sink(): TurnSink {
+  #sink(writer: RoomWriter): TurnSink {
     return {
-      narrate: (id, turn, data) => {
-        this.publish("narrative", id, data, turn);
+      narrate: (id, _turn, data) => {
+        this.publish("narrative", id, data, writer);
       },
       draft: (id, text) => {
         this.signal({ type: "signal", kind: "draft", data: { id, text } });
