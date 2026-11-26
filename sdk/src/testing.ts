@@ -6,7 +6,7 @@
 // What the test host does NOT do is the engine's half: it applies nothing, and it does
 // not enforce the engine's size limits (see the README for them). Effects come back
 // exactly as the module requested them.
-import type { ClockAdvance, ClockReading, Json, JsonObject, ModuleDefinition, Role, RollResult, VariableWrite, Who } from "./module.ts";
+import type { ClockAdvance, ClockReading, Json, JsonObject, ModuleDefinition, Role, RollResult, RoomSnapshot, VariableWrite, Who } from "./module.ts";
 import {
   type CallValue,
   type CommandOutcome,
@@ -30,6 +30,10 @@ export interface TestHostOptions {
   readonly snapshot?: Json;
   /** Who calls are made as when a call names nobody. Default: a player with no character. */
   readonly who?: Who;
+  /** The room's variables for every call that sets none. Default `{}`. */
+  readonly variables?: JsonObject;
+  /** The room's clock for every call that sets none. Default null. */
+  readonly clock?: ClockReading | null;
   /** The prefix of the seeds the host derives for each call. Default `test`. */
   readonly seed?: string;
   /**
@@ -70,6 +74,16 @@ export interface TurnStartInput {
   readonly clock?: ClockReading | null;
 }
 
+/**
+ * The room a call sees; every field is optional. Defaults: the host's `variables` and
+ * `clock` options (empty variables, null clock), and the last turn started (1 before any).
+ */
+export interface RoomInput {
+  readonly turn?: number;
+  readonly variables?: JsonObject;
+  readonly clock?: ClockReading | null;
+}
+
 export interface ToolCallInput {
   /** Default: `call-<index>`. */
   readonly id?: string;
@@ -86,6 +100,8 @@ export interface ReplyPhaseInput {
   readonly rolls?: readonly RollResult[];
   readonly clockAdvances?: readonly ClockAdvance[];
   readonly variableWrites?: readonly VariableWrite[];
+  readonly variables?: JsonObject;
+  readonly clock?: ClockReading | null;
 }
 
 export interface TestHost {
@@ -96,20 +112,20 @@ export interface TestHost {
   readonly checkpoint: Json | null;
   turnStart(input: TurnStartInput): Promise<TestCall & { readonly clock: Json | null }>;
   /** The verdicts, in call order: `true`, or the first denial's reason. */
-  toolUse(calls: readonly ToolCallInput[], who?: Who): Promise<TestCall & { readonly verdicts: readonly (true | string)[] }>;
+  toolUse(calls: readonly ToolCallInput[], who?: Who, room?: RoomInput): Promise<TestCall & { readonly verdicts: readonly (true | string)[] }>;
   replyPhase(input: ReplyPhaseInput): Promise<TestCall>;
   /** Runs a command as `who`, with the role and `available` checks the engine makes. */
-  command(name: string, args?: JsonObject, who?: Who): Promise<TestCall & { readonly outcome: CommandOutcome }>;
+  command(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCall & { readonly outcome: CommandOutcome }>;
   /** A view's data for `who`; throws when there is no such view or it failed. */
-  view(name: string, who?: Who): Promise<Json>;
+  view(name: string, who?: Who, room?: RoomInput): Promise<Json>;
   /**
    * Whether `who` may use a command: `"role"` when the role forbids it, otherwise what the
    * command's `available` answers (`true` when it has none).
    */
-  available(name: string, who?: Who): Promise<Json>;
-  characters(): Promise<Json>;
+  available(name: string, who?: Who, room?: RoomInput): Promise<Json>;
+  characters(room?: RoomInput): Promise<Json>;
   /** The clock reading, or null when the module does not claim the clock. */
-  clock(): Promise<Json | null>;
+  clock(room?: RoomInput): Promise<Json | null>;
   /** Simulate a restart: a new instance of the module, `load`-ed from the checkpoint. */
   restart(): Promise<void>;
 }
@@ -168,8 +184,16 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     };
   }
 
-  async function renderFor(viewer: Who) {
-    const rendered = await runner.render({ viewers: [viewer] });
+  function snapshot(room: RoomInput = {}): RoomSnapshot {
+    return {
+      turn: room.turn ?? Math.max(lastTurn, 1),
+      variables: room.variables ?? options.variables ?? {},
+      clock: room.clock === undefined ? (options.clock ?? null) : room.clock,
+    };
+  }
+
+  async function renderFor(viewer: Who, room?: RoomInput) {
+    const rendered = await runner.render({ viewers: [viewer], room: snapshot(room) });
     const failure = rendered.failures[0];
     if (failure) throw new Error(`test host: ${failure.error}`);
     return rendered;
@@ -189,18 +213,16 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       const turn = input.turn ?? lastTurn + 1;
       lastTurn = turn;
       const value = await runner.turnStart({
-        turn,
         seed: input.seed ?? `${seedPrefix}:${turn}:turnStart`,
         text: input.text,
         who: input.who ?? defaultWho,
-        variables: input.variables ?? {},
-        clock: input.clock ?? null,
+        ...snapshot({ turn, ...(input.variables ? { variables: input.variables } : {}), ...(input.clock !== undefined ? { clock: input.clock } : {}) }),
       });
       return { ...report(value), clock: value.clock?.reading ?? null };
     },
-    async toolUse(calls, caller) {
+    async toolUse(calls, caller, room) {
       const event = {
-        turn: lastTurn,
+        ...snapshot(room),
         who: caller ?? defaultWho,
         calls: calls.map((call, index) => ({ id: call.id ?? `call-${index}`, name: call.name, args: call.args ?? {} })),
       };
@@ -212,9 +234,9 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       return { ...report(value), verdicts };
     },
     async replyPhase(input) {
-      const turn = input.turn ?? lastTurn;
+      const turn = input.turn ?? Math.max(lastTurn, 1);
       const value = await runner.replyPhase({
-        turn,
+        ...snapshot({ turn, ...(input.variables ? { variables: input.variables } : {}), ...(input.clock !== undefined ? { clock: input.clock } : {}) }),
         seed: input.seed ?? `${seedPrefix}:${turn}:replyPhase`,
         reply: input.reply,
         rolls: input.rolls ?? [],
@@ -224,45 +246,46 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       });
       return report(value);
     },
-    async command(name, args = {}, caller) {
+    async command(name, args = {}, caller, room) {
+      const seen = snapshot(room);
       const value = await runner.command({
         module: description.id,
         command: name,
         args,
         who: caller ?? defaultWho,
-        turn: lastTurn,
-        seed: `${seedPrefix}:${lastTurn}:command:${name}`,
+        seed: `${seedPrefix}:${seen.turn}:command:${name}`,
+        room: seen,
       });
       return { ...report(value), outcome: value.outcome };
     },
-    async view(name, caller) {
-      const rendered = await renderFor(caller ?? defaultWho);
+    async view(name, caller, room) {
+      const rendered = await renderFor(caller ?? defaultWho, room);
       const found = rendered.viewers[0]?.views.find((entry) => entry.view === name);
       if (!found) throw new Error(`test host: no view "${name}"`);
       if ("error" in found) throw new Error(`test host: view "${name}" failed — ${found.error}`);
       return found.data;
     },
-    async available(name, caller) {
+    async available(name, caller, room) {
       const viewer = caller ?? defaultWho;
       const command = description.commands.find((entry) => entry.name === name);
       if (!command) throw new Error(`test host: no command "${name}"`);
       if (!mayUse(command.role, viewer)) return "role";
       if (!command.available) return true;
-      const rendered = await renderFor(viewer);
+      const rendered = await renderFor(viewer, room);
       const found = rendered.viewers[0]?.available.find((entry) => entry.command === name);
       if (!found) throw new Error(`test host: no verdict for "${name}"`);
       if ("error" in found) throw new Error(`test host: available() of "${name}" failed — ${found.error}`);
       return found.verdict;
     },
-    async characters() {
-      const rendered = await renderFor(defaultWho);
+    async characters(room) {
+      const rendered = await renderFor(defaultWho, room);
       const found = rendered.characters[0];
       if (!found) return [];
       if ("error" in found) throw new Error(`test host: characters() failed — ${found.error}`);
       return found.characters;
     },
-    async clock() {
-      const rendered = await renderFor(defaultWho);
+    async clock(room) {
+      const rendered = await renderFor(defaultWho, room);
       const found = rendered.clock;
       if (found === null) return null;
       if ("error" in found) throw new Error(`test host: clock() failed — ${found.error}`);

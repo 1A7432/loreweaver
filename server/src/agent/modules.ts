@@ -9,7 +9,7 @@
 // value's own. What is over a cap is DROPPED, never shortened into something else, and
 // every drop is reported in `problems` for the operator's log (never shown at the table).
 import { charCount } from "loreweaver-protocol/v3";
-import type { Json, JsonObject, ReplyPhaseEvent, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
+import type { Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
 import { isValidName, mayUse } from "loreweaver/runner";
 
 import type { RoomWorker } from "../infra/room_worker.ts";
@@ -36,6 +36,8 @@ export interface ModuleCaps {
   readonly commandDataBytes: number;
   readonly unavailableReasonChars: number;
   readonly argsBytes: number;
+  /** The variables snapshot sent with every exchange: every module copies it for every call. */
+  readonly variablesBytes: number;
   readonly viewBytes: number;
   /** Per module, at load. */
   readonly commands: number;
@@ -72,6 +74,7 @@ export const DEFAULT_CAPS: ModuleCaps = {
   commandDataBytes: 256 * 1024,
   unavailableReasonChars: 500,
   argsBytes: 64 * 1024,
+  variablesBytes: 1024 * 1024,
   viewBytes: 512 * 1024,
   commands: 64,
   views: 32,
@@ -814,6 +817,18 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The snapshot as it may be sent. Variables that are not a JSON object, or are larger than
+ * `caps.variablesBytes`, go out as `{}`: the worker copies the snapshot for every module
+ * and every call, so its size must stay bounded whatever the room has grown into.
+ */
+export function boundedSnapshot<T extends RoomSnapshot>(room: T, caps: ModuleCaps, problems: string[]): T {
+  const variables: unknown = room.variables;
+  if (isRecord(variables) && isJson(variables) && jsonBytes(variables) <= caps.variablesBytes) return room;
+  problems.push(`the room's variables were not sent to the modules: not a JSON object of up to ${caps.variablesBytes} bytes`);
+  return { ...room, variables: {} };
+}
+
 // The validated descriptions per worker, redone only when the worker reports new ones,
 // so load-time problems reach the operator's log once, not on every exchange.
 const accepted = new WeakMap<RoomWorker, { readonly source: unknown; readonly modules: ModuleInfo[] }>();
@@ -844,10 +859,11 @@ export async function describeModules(worker: RoomWorker | null, caps: ModuleCap
 export async function dispatchTurnStart(worker: RoomWorker | null, event: TurnStartEvent, caps: ModuleCaps = DEFAULT_CAPS): Promise<TurnStartOutcome> {
   if (worker === null) return { ...NO_EFFECTS, injections: [], clock: null, problems: [] };
   try {
-    const raw = await worker.turnStart(event);
+    const sent: string[] = [];
+    const raw = await worker.turnStart(boundedSnapshot(event, caps, sent));
     const described = acceptedModules(worker, caps);
     const outcome = validateTurnStart(raw, caps, described.modules);
-    return { ...outcome, problems: [...described.problems, ...outcome.problems] };
+    return { ...outcome, problems: [...sent, ...described.problems, ...outcome.problems] };
   } catch (error) {
     return { ...NO_EFFECTS, injections: [], clock: null, problems: [message(error)] };
   }
@@ -858,7 +874,9 @@ export async function dispatchToolUse(worker: RoomWorker | null, event: ToolUseE
   const allowAll: ToolVerdict[] = event.calls.map(() => ({ allowed: true }));
   if (worker === null) return { verdicts: allowAll, logs: [], problems: [] };
   try {
-    return validateToolUse(await worker.toolUse(event), event.calls, caps);
+    const sent: string[] = [];
+    const outcome = validateToolUse(await worker.toolUse(boundedSnapshot(event, caps, sent)), event.calls, caps);
+    return { ...outcome, problems: [...sent, ...outcome.problems] };
   } catch (error) {
     return { verdicts: allowAll, logs: [], problems: [message(error)] };
   }
@@ -867,7 +885,9 @@ export async function dispatchToolUse(worker: RoomWorker | null, event: ToolUseE
 export async function dispatchReplyPhase(worker: RoomWorker | null, event: ReplyPhaseEvent, caps: ModuleCaps = DEFAULT_CAPS): Promise<ReplyPhaseOutcome> {
   if (worker === null) return { ...NO_EFFECTS, problems: [] };
   try {
-    return validateReplyPhase(await worker.replyPhase(event), caps);
+    const sent: string[] = [];
+    const outcome = validateReplyPhase(await worker.replyPhase(boundedSnapshot(event, caps, sent)), caps);
+    return { ...outcome, problems: [...sent, ...outcome.problems] };
   } catch (error) {
     return { ...NO_EFFECTS, problems: [message(error)] };
   }
@@ -879,8 +899,9 @@ export interface CommandCall {
   /** Raw arguments: checked here to be a JSON object within `caps.argsBytes`. */
   readonly args: unknown;
   readonly who: Who;
-  readonly turn: number;
   readonly seed: string;
+  /** The room when the command is used. */
+  readonly room: RoomSnapshot;
 }
 
 /**
@@ -898,7 +919,8 @@ export async function dispatchCommand(worker: RoomWorker | null, call: CommandCa
     return { status: "refused", reason: "invalid", text: null, problems };
   }
   try {
-    const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, turn: call.turn, seed: call.seed });
+    const room = boundedSnapshot(call.room, caps, problems);
+    const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, seed: call.seed, room });
     const outcome = validateCommand(raw, caps);
     return { ...outcome, problems: [...problems, ...outcome.problems] };
   } catch (error) {
@@ -906,12 +928,19 @@ export async function dispatchCommand(worker: RoomWorker | null, call: CommandCa
   }
 }
 
-export async function dispatchRender(worker: RoomWorker | null, viewers: readonly Who[], caps: ModuleCaps = DEFAULT_CAPS): Promise<RenderOutcome> {
+/** Everything read-only for these viewers, all seeing the same `room`. */
+export async function dispatchRender(
+  worker: RoomWorker | null,
+  viewers: readonly Who[],
+  room: RoomSnapshot,
+  caps: ModuleCaps = DEFAULT_CAPS,
+): Promise<RenderOutcome> {
   const empty = (problems: string[]): RenderOutcome => ({ viewers: viewers.map(() => ({ views: [], commands: [] })), characters: [], clock: null, problems });
   if (worker === null) return empty([]);
   const described = await describeModules(worker, caps);
   try {
-    const outcome = validateRender(await worker.render(viewers), viewers, described.modules, caps);
+    const bounded = boundedSnapshot(room, caps, described.problems);
+    const outcome = validateRender(await worker.render(viewers, bounded), viewers, described.modules, caps);
     return { ...outcome, problems: [...described.problems, ...outcome.problems] };
   } catch (error) {
     return empty([...described.problems, message(error)]);

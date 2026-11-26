@@ -28,12 +28,14 @@ export interface Who {
 }
 
 /** The time a room's clock shows. */
-export interface ClockReading {
+// A type alias, not an interface: an alias of an object type is assignable to `Json`,
+// so a module can return a clock reading inside a view's data as it is.
+export type ClockReading = {
   /** As the table should read it, e.g. "Day 3, dusk". */
   readonly time: string;
   /** A round counter, for rooms that keep one. */
   readonly round?: number;
-}
+};
 
 /** One die roll as the table sees it. */
 export interface RollResult {
@@ -96,7 +98,22 @@ export type ToolUseEffects = Pick<Effects, "deny" | "log">;
 /** What `replyPhase` and a command's `run` may use. */
 export type PhaseEffects = Omit<Effects, "inject" | "deny">;
 
-export interface TurnStartEvent {
+/**
+ * The room as it is when this call starts. A copy, made for each module and each call:
+ * writing to it changes nothing — not the room, not what another module sees. A module
+ * cannot ask the engine for anything, so every call brings it.
+ */
+export interface RoomSnapshot {
+  /** The current turn, counted from 1. */
+  readonly turn: number;
+  /** The room's variables. */
+  readonly variables: JsonObject;
+  /** The room's clock, or null when the room keeps none. */
+  readonly clock: ClockReading | null;
+}
+
+/** Every event is also a room snapshot: `turn`, `variables` and `clock` mean the same in all three. */
+export interface TurnStartEvent extends RoomSnapshot {
   /** The turn now starting, counted from 1. */
   readonly turn: number;
   /** Derived from persisted inputs only: the same room state replays the same seed. */
@@ -104,9 +121,10 @@ export interface TurnStartEvent {
   /** What was said. */
   readonly text: string;
   readonly who: Who;
-  /** The room's variables when the turn started (a copy: writing to it changes nothing). */
-  readonly variables: JsonObject;
-  /** The room's clock, or null when the room keeps none. */
+  /**
+   * The room's clock. When a module claims the clock, this is its `clock()`, read at the
+   * start of this same call.
+   */
   readonly clock: ClockReading | null;
 }
 
@@ -117,7 +135,7 @@ export interface ToolCall {
   readonly args: JsonObject;
 }
 
-export interface ToolUseEvent {
+export interface ToolUseEvent extends RoomSnapshot {
   readonly turn: number;
   readonly who: Who;
   /** Every tool call of this round, in call order. */
@@ -137,7 +155,7 @@ export interface VariableWrite {
   readonly by: string;
 }
 
-export interface ReplyPhaseEvent {
+export interface ReplyPhaseEvent extends RoomSnapshot {
   readonly turn: number;
   readonly seed: string;
   /** The Keeper's reply, as published. */
@@ -182,9 +200,9 @@ export interface CommandSpec {
   /** Who may use it. `player` (default): players and admins. `admin`: admins only. */
   readonly role?: "player" | "admin";
   /** Read-only. `true`, or a reason shown to that viewer. */
-  available?(who: Who): Awaitable<true | string>;
+  available?(who: Who, room: RoomSnapshot): Awaitable<true | string>;
   /** Mutating. */
-  run(args: JsonObject, who: Who, fx: PhaseEffects): Awaitable<CommandResult | void>;
+  run(args: JsonObject, who: Who, fx: PhaseEffects, room: RoomSnapshot): Awaitable<CommandResult | void>;
 }
 
 export interface ViewSpec {
@@ -192,7 +210,7 @@ export interface ViewSpec {
   /** JSON Schema of the data `for` returns. */
   readonly schema: JsonObject;
   /** Read-only: the view's data as this viewer may see it. */
-  for(who: Who): Awaitable<Json>;
+  for(who: Who, room: RoomSnapshot): Awaitable<Json>;
 }
 
 /** A module's definition, as its entry file's default export. */
@@ -210,9 +228,9 @@ export interface ModuleDefinition {
    */
   save?(): Json;
   /** Read-only: the characters members can be seated as. */
-  characters?(): Awaitable<readonly PlayableCharacter[]>;
+  characters?(room: RoomSnapshot): Awaitable<readonly PlayableCharacter[]>;
   /** Read-only. Defining it claims the room's clock; only one module of a room may. */
-  clock?(): Awaitable<ClockReading>;
+  clock?(room: RoomSnapshot): Awaitable<ClockReading>;
   readonly on?: {
     turnStart?(event: TurnStartEvent, fx: TurnStartEffects): Awaitable<void>;
     /** Read-only. */

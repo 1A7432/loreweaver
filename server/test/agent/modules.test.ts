@@ -6,6 +6,7 @@ import {
   DEFAULT_CAPS,
   dispatchCommand,
   dispatchRender,
+  dispatchReplyPhase,
   dispatchToolUse,
   dispatchTurnStart,
   describeModules,
@@ -24,6 +25,8 @@ import { fixtureModule, WORKER_ENTRY } from "../helpers.ts";
 const ada: Who = { member: { id: "m-ada", name: "Ada", role: "player" }, character: { id: "hero", name: "Hero" } };
 const mo: Who = { member: { id: "m-mo", name: "Mo", role: "admin" }, character: null };
 const eve: Who = { member: { id: "m-eve", name: "Eve", role: "observer" }, character: null };
+
+const ROOM = { turn: 1, variables: {}, clock: null };
 
 const workers: RoomWorker[] = [];
 afterEach(async () => {
@@ -393,7 +396,7 @@ test("dispatch: a command left out at load is refused without a round trip, and 
   expect(first.modules[0]?.commands.map((entry) => entry.name)).toEqual(["ok"]);
   expect(first.problems).toHaveLength(5);
   expect((await describeModules(w)).problems).toEqual([]);
-  const base = { module: "bad_names", who: ada, turn: 1, seed: "s" };
+  const base = { module: "bad_names", who: ada, seed: "s", room: ROOM };
   expect(await dispatchCommand(w, { ...base, command: "constructor", args: {} })).toMatchObject({ status: "refused", reason: "unknown" });
   expect(await dispatchCommand(w, { ...base, command: "ok", args: [] })).toMatchObject({ status: "refused", reason: "invalid" });
   expect(await dispatchCommand(w, { ...base, command: "ok", args: { big: x(70_000) } })).toMatchObject({ status: "refused", reason: "invalid" });
@@ -405,19 +408,64 @@ test("dispatch: a command left out at load is refused without a round trip, and 
 
 test("dispatch: render and tool veto through a real worker; a hung veto allows every call", async () => {
   const w = worker(["kitchen"]);
-  const rendered = await dispatchRender(w, [ada, eve]);
+  const rendered = await dispatchRender(w, [ada, eve], ROOM);
   expect(rendered.viewers[0]?.views.map((view) => view.view)).toEqual(["status", "scratch"]);
   expect(rendered.viewers[1]?.commands.every((entry) => !entry.availability.available)).toBe(true);
   expect(rendered.characters.map((character) => character.id)).toEqual(["hero"]);
   expect(rendered.clock).toEqual({ module: "kitchen", time: "hp 10", round: 0 });
   expect(rendered.problems).toEqual([]);
 
-  const veto = await dispatchToolUse(w, { turn: 1, who: ada, calls: [{ id: "a", name: "forbidden", args: {} }, { id: "b", name: "look", args: {} }] });
+  const veto = await dispatchToolUse(w, { ...ROOM, who: ada, calls: [{ id: "a", name: "forbidden", args: {} }, { id: "b", name: "look", args: {} }] });
   expect(veto.verdicts).toEqual([{ allowed: false, denials: [{ module: "kitchen", reason: "not here" }] }, { allowed: true }]);
 
-  const hung = await dispatchToolUse(worker(["moody"], { timeoutMs: 200 }), { turn: 1, who: ada, calls: [{ id: "a", name: "spin", args: {} }] });
+  const hung = await dispatchToolUse(worker(["moody"], { timeoutMs: 200 }), { ...ROOM, who: ada, calls: [{ id: "a", name: "spin", args: {} }] });
   expect(hung.verdicts).toEqual([{ allowed: true }]);
   expect(hung.problems).toEqual([expect.stringContaining("toolUse did not answer within 200 ms")]);
-  const none = await dispatchToolUse(null, { turn: 1, who: ada, calls: [{ id: "a", name: "x", args: {} }] });
+  const none = await dispatchToolUse(null, { ...ROOM, who: ada, calls: [{ id: "a", name: "x", args: {} }] });
   expect(none).toEqual({ verdicts: [{ allowed: true }], logs: [], problems: [] });
+});
+
+test("the room snapshot: one module writing to its copy never changes what the next module sees", async () => {
+  const w = worker(["scribbler", "peeker"]);
+  const variables = { hp: 7, name: "Ada" };
+  const started = await dispatchTurnStart(w, { turn: 2, seed: "s", text: "x", who: ada, variables, clock: null });
+  expect(started.injections).toEqual(['turnStart 2 {"hp":7,"name":"Ada"}']);
+  expect(variables).toEqual({ hp: 7, name: "Ada" });
+
+  const replied = await dispatchReplyPhase(w, {
+    turn: 2,
+    seed: "s",
+    reply: "r",
+    rolls: [],
+    clockAdvances: [],
+    variableWrites: [],
+    who: ada,
+    variables,
+    clock: { time: "dusk" },
+  });
+  expect(replied.logs).toEqual([{ module: "peeker", text: 'replyPhase 2 {"hp":7,"name":"Ada"} dusk' }]);
+
+  const room = { turn: 3, variables, clock: { time: "night", round: 4 } };
+  const rendered = await dispatchRender(w, [ada, mo], room);
+  expect(rendered.viewers.map((viewer) => viewer.views.find((view) => view.view === "vars")?.data)).toEqual([
+    { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 } },
+    { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 } },
+  ]);
+  const used = await dispatchCommand(w, { module: "peeker", command: "vars", args: {}, who: ada, seed: "s", room });
+  expect(used).toMatchObject({ status: "ok", result: { data: { hp: 7, name: "Ada" } } });
+});
+
+test("a variables snapshot over the cap is not sent: the modules see {} and the operator is told", async () => {
+  const w = worker(["peeker"]);
+  const huge = { blob: x(DEFAULT_CAPS.variablesBytes) };
+  const started = await dispatchTurnStart(w, { turn: 1, seed: "s", text: "x", who: ada, variables: huge, clock: null });
+  expect(started.injections).toEqual(["turnStart 1 {}"]);
+  expect(started.problems).toEqual([`the room's variables were not sent to the modules: not a JSON object of up to ${DEFAULT_CAPS.variablesBytes} bytes`]);
+
+  const caps = { ...DEFAULT_CAPS, variablesBytes: 10 };
+  const rendered = await dispatchRender(w, [ada], { turn: 1, variables: { a: "long enough" }, clock: null }, caps);
+  expect(rendered.viewers[0]?.views[0]?.data).toEqual({ turn: 1, variables: {}, clock: null });
+  expect(rendered.problems).toHaveLength(1);
+  const fits = await dispatchRender(w, [ada], { turn: 1, variables: { a: 1 }, clock: null }, caps);
+  expect(fits.viewers[0]?.views[0]?.data).toEqual({ turn: 1, variables: { a: 1 }, clock: null });
 });

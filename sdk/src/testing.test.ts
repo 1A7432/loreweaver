@@ -144,3 +144,29 @@ test("argument keys named like prototype properties are plain data", async () =>
   expect(echoed.outcome).toEqual({ status: "ok", result: { data: { keys: ["__proto__", "constructor"], args } } });
   expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 });
+
+test("the room snapshot: per call, with defaults of turn 1, no variables and no clock", async () => {
+  const host = createTestHost(
+    defineModule({
+      id: "mirror",
+      characters: (room) => [{ id: "c", name: `turn ${room.turn}` }],
+      clock: (room) => ({ time: room.clock ? `after ${room.clock.time}` : "start" }),
+      on: {
+        replyPhase(event, fx) {
+          fx.log(`${event.turn} ${JSON.stringify(event.variables)} ${event.clock?.time ?? "none"}`);
+        },
+      },
+      commands: { show: { title: "Show", run: (_args, _who, _fx, room) => ({ data: room.variables }) } },
+      views: { vars: { schema: {}, for: (_who, room) => room.variables } },
+    }),
+    { variables: { mood: "calm" } },
+  );
+  expect(await host.view("vars")).toEqual({ mood: "calm" });
+  expect(await host.view("vars", undefined, { variables: { mood: "tense" } })).toEqual({ mood: "tense" });
+  expect((await host.command("show", {}, undefined, { variables: { x: 1 } })).outcome).toEqual({ status: "ok", result: { data: { x: 1 } } });
+  expect(await host.characters()).toEqual([{ id: "c", name: "turn 1" }]);
+  expect(await host.clock()).toEqual({ time: "start" });
+  expect(await host.clock({ clock: { time: "noon" } })).toEqual({ time: "after noon" });
+  const replied = await host.replyPhase({ reply: "r", variables: { a: 2 }, clock: { time: "dusk" } });
+  expect(replied.logs).toEqual(['1 {"a":2} dusk']);
+});

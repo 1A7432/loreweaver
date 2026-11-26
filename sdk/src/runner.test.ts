@@ -74,6 +74,10 @@ function runner(...definitions: ModuleDefinition[]): ModuleRunner {
   return created;
 }
 
+function room(turn: number, variables: Record<string, Json> = {}) {
+  return { turn, variables, clock: null };
+}
+
 function turn(text: string, number = 1) {
   return { turn: number, seed: `s${number}`, text, who: ada, variables: {}, clock: null };
 }
@@ -104,11 +108,11 @@ test("a throwing call loses its effects and its state; the sibling keeps both", 
   expect(value.effects).toEqual([]);
   expect(r.checkpointOf("a")).toEqual({ count: 1 });
 
-  const failed = await r.command({ module: "a", command: "bump", args: { fail: true }, who: ada, turn: 2, seed: "c" });
+  const failed = await r.command({ module: "a", command: "bump", args: { fail: true }, who: ada, seed: "c", room: room(2) });
   expect(failed.outcome).toEqual({ status: "failed", error: "Error: bump failed" });
   expect(failed.effects).toEqual([]);
   expect(failed.checkpoints).toEqual({});
-  const ok = await r.command({ module: "b", command: "bump", args: { by: 5 }, who: ada, turn: 2, seed: "c" });
+  const ok = await r.command({ module: "b", command: "bump", args: { by: 5 }, who: ada, seed: "c", room: room(2) });
   expect(ok.outcome).toEqual({ status: "ok", result: { text: "6" } });
   expect(ok.checkpoints).toEqual({ b: { count: 6 } });
   const next = await r.turnStart(turn("two", 3));
@@ -118,13 +122,13 @@ test("a throwing call loses its effects and its state; the sibling keeps both", 
 test("read-only calls leave no trace, even when the handler mutates", async () => {
   const r = runner(counterModule("a"));
   await r.turnStart(turn("one"));
-  const rendered = await r.render({ viewers: [ada, mo] });
+  const rendered = await r.render({ viewers: [ada, mo], room: room(1) });
   // Each view call starts from the checkpoint: the second viewer does not see the first's change.
   expect(rendered.viewers.map((viewer) => viewer.views)).toEqual([
     [{ module: "a", view: "count", data: 1001 }],
     [{ module: "a", view: "count", data: 1001 }],
   ]);
-  const veto = await r.toolUse({ turn: 1, who: ada, calls: [{ id: "c1", name: "forbidden", args: {} }] });
+  const veto = await r.toolUse({ ...room(1), who: ada, calls: [{ id: "c1", name: "forbidden", args: {} }] });
   expect(veto.effects).toEqual([{ module: "a", kind: "deny", callId: "c1", reason: "no" }]);
   expect(veto.checkpoints).toEqual({});
   const after = await r.turnStart(turn("two", 2));
@@ -150,13 +154,13 @@ test("an effect used where it does not belong is dropped and reported, not throw
       },
     }),
   );
-  const veto = await r.toolUse({ turn: 1, who: ada, calls: [] });
+  const veto = await r.toolUse({ ...room(1), who: ada, calls: [] });
   expect(veto.failures).toEqual([]);
   expect(veto.refused).toEqual([
     { module: "misplaced", kind: "inject", reason: "wrong_place" },
     { module: "misplaced", kind: "fact", reason: "wrong_place" },
   ]);
-  const reply = await r.replyPhase({ turn: 1, seed: "s", reply: "r", rolls: [], clockAdvances: [], variableWrites: [], who: ada });
+  const reply = await r.replyPhase({ ...room(1), seed: "s", reply: "r", rolls: [], clockAdvances: [], variableWrites: [], who: ada });
   expect(reply.refused).toEqual([
     { module: "misplaced", kind: "inject", reason: "wrong_place" },
     { module: "misplaced", kind: "setVar", reason: "not_json" },
@@ -198,7 +202,7 @@ test("load: two clock claims name both; a bad id or a malformed table fails the 
 test("command names are looked up as own, valid names only", async () => {
   const r = runner(counterModule("a"));
   for (const command of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
-    const value = await r.command({ module: "a", command, args: {}, who: ada, turn: 1, seed: "s" });
+    const value = await r.command({ module: "a", command, args: {}, who: ada, seed: "s", room: room(1) });
     expect(value.outcome).toEqual({ status: "refused", reason: "unknown" });
   }
 });
@@ -217,9 +221,62 @@ test("a restore that fails marks the module broken until the next load", async (
       on: { turnStart() {} },
     }),
   );
-  const rendered = await r.render({ viewers: [ada] });
+  const rendered = await r.render({ viewers: [ada], room: room(1) });
   expect(rendered.broken).toEqual(["fragile"]);
   const value = await r.turnStart(turn("x"));
   expect(value.failures).toEqual([{ module: "fragile", error: "module is broken" }]);
   expect(loads).toBe(1);
+});
+
+test("each module gets its own copy of the room: a write by one never reaches the next", async () => {
+  const seen: Json[] = [];
+  const scribbler = (id: string) =>
+    defineModule({
+      id,
+      on: {
+        turnStart(event) {
+          seen.push(structuredClone(event.variables));
+          (event.variables as Record<string, Json>).hp = 0;
+          (event as { clock: unknown }).clock = { time: "scribbled" };
+        },
+        toolUse(event) {
+          seen.push(structuredClone(event.variables));
+          (event.variables as Record<string, Json>).hp = 0;
+        },
+      },
+      commands: {
+        peek: {
+          title: "Peek",
+          available(_who, room) {
+            (room.variables as Record<string, Json>).hp = -1;
+            return true;
+          },
+          run: (_args, _who, _fx, room) => ({ data: room.variables }),
+        },
+      },
+      views: {
+        hp: {
+          schema: {},
+          for(_who, room) {
+            const hp = room.variables.hp ?? null;
+            (room.variables as Record<string, Json>).hp = 0;
+            return hp;
+          },
+        },
+      },
+    });
+  const r = runner(scribbler("first"), scribbler("second"));
+  const variables = { hp: 7 };
+  await r.turnStart({ ...turn("x"), variables });
+  await r.toolUse({ ...room(1, variables), who: ada, calls: [] });
+  expect(seen).toEqual([{ hp: 7 }, { hp: 7 }, { hp: 7 }, { hp: 7 }]);
+  expect(variables).toEqual({ hp: 7 });
+
+  const peek = await r.command({ module: "second", command: "peek", args: {}, who: ada, seed: "s", room: room(1, variables) });
+  expect(peek.outcome).toEqual({ status: "ok", result: { data: { hp: 7 } } });
+  const rendered = await r.render({ viewers: [ada, mo], room: room(1, variables) });
+  expect(rendered.viewers.map((viewer) => viewer.views.map((view) => ("data" in view ? view.data : null)))).toEqual([
+    [7, 7],
+    [7, 7],
+  ]);
 });

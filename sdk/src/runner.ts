@@ -12,6 +12,13 @@
 // - one module's failure never touches another module's call.
 // It does not guard against a module that never returns: the host ends the whole thread.
 //
+// Every handler gets its own structured clone of the event and of the room snapshot:
+// one module writing to `event.variables` cannot change what the next module sees, and
+// nothing a module does to its copy reaches the engine. Cloning rather than freezing,
+// because modules are strict-mode code where a write to a frozen object THROWS: a
+// harmless scribble would fail the whole call. The engine caps the snapshot's size, which
+// bounds what the copies cost.
+//
 // Everything this file returns is plain JSON-shaped data, safe to structured-clone across
 // a thread boundary. It runs no dice of its own: the host injects the engine's.
 import type {
@@ -23,6 +30,7 @@ import type {
   JsonObject,
   ModuleDefinition,
   ReplyPhaseEvent,
+  RoomSnapshot,
   RollResult,
   ToolUseEvent,
   TurnStartEvent,
@@ -152,8 +160,9 @@ export interface CommandRequest {
   readonly command: string;
   readonly args: JsonObject;
   readonly who: Who;
-  readonly turn: number;
   readonly seed: string;
+  /** The room when the command is used: the same copy for `available` and `run`. */
+  readonly room: RoomSnapshot;
 }
 
 export type CommandOutcome =
@@ -168,6 +177,8 @@ export interface CommandValue extends CallValue {
 
 export interface RenderRequest {
   readonly viewers: readonly Who[];
+  /** The room, once for every viewer. */
+  readonly room: RoomSnapshot;
 }
 
 export type ViewRender =
@@ -486,7 +497,8 @@ export class ModuleRunner {
     const claimer = this.#modules.find((instance) => typeof instance.definition.clock === "function");
     // The clock is read inside the same exchange, so turn start stays one round trip.
     if (claimer && !claimer.broken && handlers.length > 0) {
-      const read = await this.#read(claimer, out, () => claimer.definition.clock?.());
+      const room: RoomSnapshot = { turn: event.turn, variables: event.variables, clock: event.clock };
+      const read = await this.#read(claimer, out, () => claimer.definition.clock?.(structuredClone(room)));
       if ("value" in read) {
         clock = { module: claimer.id, reading: read.value };
         if (isClockReading(read.value)) given = read.value;
@@ -548,13 +560,13 @@ export class ModuleRunner {
     if (!mayUse(spec.role, request.who)) return { ...out, outcome: { status: "refused", reason: "role" } };
     if (this.#skipBroken(instance, out)) return { ...out, outcome: { status: "failed", error: "module is broken" } };
     if (typeof spec.available === "function") {
-      const verdict = await this.#read(instance, out, () => spec.available?.(structuredClone(request.who)));
+      const verdict = await this.#read(instance, out, () => spec.available?.(structuredClone(request.who), structuredClone(request.room)));
       if (!("value" in verdict)) return { ...out, outcome: { status: "failed", error: verdict.error } };
       if (verdict.value !== true) return { ...out, outcome: { status: "refused", reason: "unavailable", text: verdict.value } };
     }
     let result: Json = {};
     const done = await this.#mutate(instance, "command", request.seed, out, async (fx) => {
-      const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(request.who), fx);
+      const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(request.who), fx, structuredClone(request.room));
       if (value === undefined) return;
       const json = toJson(value);
       // Inside the call: an answer JSON cannot carry fails the call like a throw would.
@@ -586,24 +598,24 @@ export class ModuleRunner {
         for (const name of viewNames) {
           const spec = lookup<ViewSpec>(definition.views, name);
           if (!spec || typeof spec.for !== "function") continue;
-          const read = await this.#read(instance, out, () => spec.for(structuredClone(who)));
+          const read = await this.#read(instance, out, () => spec.for(structuredClone(who), structuredClone(request.room)));
           views.push("value" in read ? { module: instance.id, view: name, data: read.value } : { module: instance.id, view: name, error: read.error });
         }
         for (const name of commandNames) {
           const spec = lookup<CommandSpec>(definition.commands, name);
           if (!spec || typeof spec.available !== "function") continue;
-          const read = await this.#read(instance, out, () => spec.available?.(structuredClone(who)));
+          const read = await this.#read(instance, out, () => spec.available?.(structuredClone(who), structuredClone(request.room)));
           available.push(
             "value" in read ? { module: instance.id, command: name, verdict: read.value } : { module: instance.id, command: name, error: read.error },
           );
         }
       }
       if (typeof definition.characters === "function") {
-        const read = await this.#read(instance, out, () => definition.characters?.());
+        const read = await this.#read(instance, out, () => definition.characters?.(structuredClone(request.room)));
         characters.push("value" in read ? { module: instance.id, characters: read.value } : { module: instance.id, error: read.error });
       }
       if (typeof definition.clock === "function") {
-        const read = await this.#read(instance, out, () => definition.clock?.());
+        const read = await this.#read(instance, out, () => definition.clock?.(structuredClone(request.room)));
         clock = "value" in read ? { module: instance.id, reading: read.value } : { module: instance.id, error: read.error };
       }
     }

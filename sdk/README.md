@@ -110,6 +110,29 @@ member with no `character` is a spectator. A module never keeps its own seating:
 lists the characters that can be played (`characters()`), and the engine maps members to
 them.
 
+## The room snapshot
+
+A module cannot ask the engine anything, so every call brings the room with it:
+
+```ts
+interface RoomSnapshot {
+  turn: number;                 // the current turn, from 1
+  variables: JsonObject;        // the room's variables
+  clock: ClockReading | null;   // the room's clock, or null when it keeps none
+}
+```
+
+It is the room as it is when the call starts. Every event *is* a snapshot (`turn`,
+`variables` and `clock` are fields of all three events), and every other handler gets
+one as its **last** parameter: `run(args, who, fx, room)`, `available(who, room)`,
+`for(who, room)`, `characters(room)`, `clock(room)`. A handler that does not need it
+simply leaves the parameter out.
+
+The snapshot is a **copy, made for each module and each call**: writing to it changes
+nothing, neither the room nor what the next module sees. To change a variable, ask with
+`fx.setVar`. The engine does not send a variables snapshot larger than 1 MB; a room past
+that sends `{}` and tells the operator.
+
 ## The contract
 
 ```ts
@@ -119,8 +142,8 @@ defineModule({
   load(snapshot) {},
   save() { return snapshot; },
 
-  characters() { return [{ id, name, blurb?, resources?: [{ id, label, value, max? }] }]; },
-  clock() { return { time: "Day 3, dusk", round?: 2 }; },
+  characters(room) { return [{ id, name, blurb?, resources?: [{ id, label, value, max? }] }]; },
+  clock(room) { return { time: "Day 3, dusk", round?: 2 }; },
 
   on: {
     turnStart(event, fx) {},
@@ -128,8 +151,8 @@ defineModule({
     replyPhase(event, fx) {},
   },
 
-  commands: { attack: { title, description?, params?, text?, role?, available?(who), run(args, who, fx) } },
-  views: { status: { title?, schema, for(who) } },
+  commands: { attack: { title, description?, params?, text?, role?, available?(who, room), run(args, who, fx, room) } },
+  views: { status: { title?, schema, for(who, room) } },
 });
 ```
 
@@ -147,23 +170,26 @@ Every part is optional except `id`. Module ids, command names and view names mus
 | `seed` | Derived from persisted inputs only: the same room state replays the same seed. |
 | `text` | What was said. |
 | `who` | Who said it. |
-| `variables` | The room's variables when the turn started (a copy). |
+| `variables` | The room's variables when the turn started (a copy, see above). |
 | `clock` | The room's clock reading, or null. When a module claims the clock, this is its `clock()`, read at the start of this same call. |
 
 This is the only place `fx.inject` works: it adds a section to *this* turn's Keeper
 prompt.
 
 **`toolUse(event, fx)`** — read-only. The Keeper is about to use tools. `event.calls` is
-every tool call of this round, in call order (`{ id, name, args }`); refuse one with
+every tool call of this round, in call order (`{ id, name, args }`), with the room's
+`turn`, `variables` and `clock` alongside; refuse one with
 `fx.deny(call.id, reason)`. Several modules may deny the same call; a call no module
 denies goes ahead. Only `fx.deny` and `fx.log` work here.
 
 **`replyPhase(event, fx)`** — mutating. The Keeper has replied. Fields: `turn`, `seed`,
-`reply` (the published text), `rolls` (dice rolled during the turn), `clockAdvances`
+`variables`, `clock`, `reply` (the published text), `rolls` (dice rolled during the turn), `clockAdvances`
 (`{ amount, reason? }`), `variableWrites` (`{ path, value, by }`, where `by` is `keeper`
 or a module id), `who`.
 
 Each module gets its own copy of the event: changing it tells the next module nothing.
+The variables are as they were when the exchange started: writes requested earlier in
+the same exchange (by `fx.setVar`) are not in them yet.
 
 ### Commands
 
@@ -175,8 +201,8 @@ commands: {
     params: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     text: ["attack {target}"],
     role: "player",
-    available(who) { return who.character ? true : "Take a seat at the table first."; },
-    run(args, who, fx) {
+    available(who, room) { return who.character ? true : "Take a seat at the table first."; },
+    run(args, who, fx, room) {
       const roll = fx.roll("1d20+3", "attack");
       fx.fact({ text: `${who.character?.name} attacks ${String(args.target)}: ${roll.total}` });
       return { text: roll.total >= 12 ? "A hit." : "A miss." };
@@ -189,10 +215,10 @@ commands: {
 - `text` lists text forms the engine's parser can match; it is data, nothing more.
 - `role`: `player` (default) — players and admins may use it; `admin` — admins only.
   Observers use no command. The engine checks the role before your code runs.
-- `available(who)` (read-only) narrows it further: `true`, or a reason shown to that
+- `available(who, room)` (read-only) narrows it further: `true`, or a reason shown to that
   member. It is asked when the engine renders what each member can do, and again at the
   moment of use.
-- `run(args, who, fx)` is mutating. What it returns (`{ text?, data? }`) answers the
+- `run(args, who, fx, room)` is mutating. What it returns (`{ text?, data? }`) answers the
   member who used the command, and nobody else. To tell the table, use `fx.fact`.
 
 Commands are addressed as `<module id>/<command name>`.
@@ -204,20 +230,21 @@ views: {
   sheet: {
     title: "Your sheet",
     schema: { type: "object" },
-    for(who) { return who.character ? sheets[who.character.id] ?? null : null; },
+    for(who, room) { return who.character ? sheets[who.character.id] ?? null : null; },
   },
 },
 ```
 
-`for(who)` is read-only and computed **per viewer**: it is how private information
+`for(who, room)` is read-only and computed **per viewer**: it is how private information
 reaches one member. Return what that viewer may see and nothing more.
 
 ### Characters and the clock
 
-`characters()` (read-only) lists the characters members can be seated as, with optional
+`characters(room)` (read-only) lists the characters members can be seated as, with optional
 resources (`{ id, label, value, max? }`) for the client to show.
 
-`clock()` (read-only) returns the room's current time. Defining it **claims the room's
+`clock(room)` (read-only) returns the room's current time (`room.clock` is the last
+reading the engine has). Defining it **claims the room's
 clock**: only one module of a room may, and two claims fail the room's load, naming both
 modules.
 
@@ -276,6 +303,7 @@ are per module per call unless noted.
 | Titles / descriptions | 200 / 2,000 characters; text forms 16 of 200 characters; schemas 64 KB |
 | Characters | 64 per module; id and name 200 characters; blurb 2,000; 16 resources each |
 | Clock reading | `time` 200 characters |
+| Variables snapshot sent to modules | 1 MB (larger: `{}` is sent instead) |
 
 ## Testing a module
 
@@ -311,6 +339,7 @@ test("shouting raises the alarm, and the alarm survives a restart", async () => 
 | `snapshot` | Start from this checkpoint (as `load`) instead of `create`. |
 | `who` | Who calls are made as when a call names nobody (default: a player with no character). |
 | `seed` | Prefix of the seeds the host derives (default `test`). |
+| `variables`, `clock` | The room snapshot for calls that set none (default `{}` and null). |
 | `fresh` | Returns a new instance of the module, for `restart()`. Import the entry file with a changing query string, as above: without it `restart()` reuses the same object, and state that `load` forgets to assign would wrongly survive. |
 
 The host:
@@ -318,12 +347,12 @@ The host:
 | | |
 | --- | --- |
 | `turnStart({ text, who?, turn?, seed?, variables?, clock? })` | Fires the event. `turn` defaults to one past the last. |
-| `toolUse(calls, who?)` | `calls` are `{ id?, name, args? }`; returns `verdicts` in call order: `true` or the first denial's reason. |
-| `replyPhase({ reply, who?, turn?, seed?, rolls?, clockAdvances?, variableWrites? })` | Fires the event. |
-| `command(name, args?, who?)` | Runs a command with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. |
-| `view(name, who?)` | The view's data for `who`; throws if it failed. |
-| `available(name, who?)` | `"role"` when the role forbids it, else what `available` answers. |
-| `characters()`, `clock()` | The read-only answers. |
+| `toolUse(calls, who?, room?)` | `calls` are `{ id?, name, args? }`; returns `verdicts` in call order: `true` or the first denial's reason. |
+| `replyPhase({ reply, who?, turn?, seed?, variables?, clock?, rolls?, clockAdvances?, variableWrites? })` | Fires the event. |
+| `command(name, args?, who?, room?)` | Runs a command with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. |
+| `view(name, who?, room?)` | The view's data for `who`; throws if it failed. |
+| `available(name, who?, room?)` | `"role"` when the role forbids it, else what `available` answers. |
+| `characters(room?)`, `clock(room?)` | The read-only answers. |
 | `checkpoint` | The current checkpoint: what a restart would load. |
 | `description` | The static description the engine reads at load. |
 | `restart()` | A new instance, `load`-ed from the checkpoint. |
@@ -332,6 +361,9 @@ Every call returns what it did: `effects` (in order; empty when the call failed)
 `refused` (effects dropped as misplaced or malformed), `error` (when it threw),
 `checkpoint` (after the call), and shortcuts `injected`, `facts`, `writes`, `blocks`,
 `rolls`, `logs`. `who(name, { id?, role?, character? })` builds a `Who`.
+
+`room` is `{ turn?, variables?, clock? }`: what you leave out comes from the options, and
+`turn` from the last turn started (1 before any).
 
 The test host does not apply effects and does not enforce the engine's limits above;
 check them in your own tests if you come near them.

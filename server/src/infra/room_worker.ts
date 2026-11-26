@@ -7,7 +7,7 @@
 // the modules gave at load are kept for the life of this handle (they depend on the module
 // files alone), so an exchange no module handles is answered here without a round trip —
 // even when the worker is not running, without starting one.
-import type { Json, ReplyPhaseEvent, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
+import type { Json, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
 
 import type { WorkerHandle } from "./runtime/worker.ts";
 import type {
@@ -148,10 +148,13 @@ export class RoomWorker {
     );
   }
 
-  /** Every read-only output (views, command availability, characters, clock) for these viewers. */
-  render(viewers: readonly Who[]): Promise<RenderValue> {
+  /**
+   * Every read-only output (views, command availability, characters, clock) for these
+   * viewers, all seeing the same room.
+   */
+  render(viewers: readonly Who[], room: RoomSnapshot): Promise<RenderValue> {
     return this.#call(
-      { op: "render", request: { viewers } },
+      { op: "render", request: { viewers, room } },
       (module) =>
         module.characters || module.clock || (viewers.length > 0 && (module.views.length > 0 || module.commands.some((command) => command.available))),
       () => ({ viewers: viewers.map(() => ({ views: [], available: [] })), characters: [], clock: null, failures: [], broken: [] }),

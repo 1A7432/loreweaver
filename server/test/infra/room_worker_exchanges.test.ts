@@ -50,16 +50,18 @@ function worker(modules: string[], options: Partial<RoomWorkerOptions> & { spawn
   return created;
 }
 
+const ROOM = { turn: 1, variables: {}, clock: null };
+
 function turn(number: number, text: string) {
   return { turn: number, seed: `room:${number}:turnStart`, text, who: ada, variables: {}, clock: null };
 }
 
 function reply(number: number, text = "the end") {
-  return { turn: number, seed: `room:${number}:replyPhase`, reply: text, rolls: [], clockAdvances: [], variableWrites: [], who: ada };
+  return { turn: number, seed: `room:${number}:replyPhase`, reply: text, rolls: [], clockAdvances: [], variableWrites: [], who: ada, variables: {}, clock: null };
 }
 
 function command(name: string, args: Record<string, Json> = {}, who: Who = ada) {
-  return { module: "kitchen", command: name, args, who, turn: 1, seed: `room:1:command:${name}` };
+  return { module: "kitchen", command: name, args, who, seed: `room:1:command:${name}`, room: ROOM };
 }
 
 test("load describes every module; a fresh module's state is kept at once", async () => {
@@ -123,11 +125,11 @@ test("a command that throws loses its effects and its state; the sibling module 
 test("read-only exchanges leave no trace, even when their handlers mutate", async () => {
   const w = worker(["kitchen"]);
   await w.turnStart(turn(1, "one"));
-  const veto = await w.toolUse({ turn: 1, who: ada, calls: [{ id: "c1", name: "forbidden", args: {} }, { id: "c2", name: "look", args: {} }] });
+  const veto = await w.toolUse({ ...ROOM, who: ada, calls: [{ id: "c1", name: "forbidden", args: {} }, { id: "c2", name: "look", args: {} }] });
   expect(veto.effects).toEqual([{ module: "kitchen", kind: "deny", callId: "c1", reason: "not here" }]);
   expect(veto.checkpoints).toEqual({});
 
-  const rendered = await w.render([ada, mo]);
+  const rendered = await w.render([ada, mo], ROOM);
   // Each call starts from the checkpoint: hp 10, plus the view's own 1000, for each viewer.
   expect(rendered.viewers).toEqual([
     {
@@ -162,15 +164,15 @@ test("an exchange no module handles is answered without a round trip, even with 
   const { stats, spawn } = counting();
   const w = worker(["counter"], { spawn });
   await w.turnStart(turn(1, "one"));
-  expect((await w.toolUse({ turn: 1, who: ada, calls: [{ id: "c", name: "x", args: {} }] })).effects).toEqual([]);
+  expect((await w.toolUse({ ...ROOM, who: ada, calls: [{ id: "c", name: "x", args: {} }] })).effects).toEqual([]);
   expect((await w.replyPhase(reply(1))).effects).toEqual([]);
   expect((await w.command({ ...command("hit"), module: "counter" })).outcome).toEqual({ status: "refused", reason: "unknown" });
-  expect((await w.render([ada])).viewers).toEqual([{ views: [], available: [] }]);
+  expect((await w.render([ada], ROOM)).viewers).toEqual([{ views: [], available: [] }]);
   expect(stats.ops).toEqual(["load", "turnStart"]);
 
   await w.stop();
-  await w.toolUse({ turn: 1, who: ada, calls: [] });
-  await w.render([ada]);
+  await w.toolUse({ ...ROOM, who: ada, calls: [] });
+  await w.render([ada], ROOM);
   expect(stats.spawns).toBe(1);
   // A handled exchange starts a new worker from the checkpoints.
   expect((await w.turnStart(turn(2, "two"))).checkpoints).toEqual({ counter: { turns: 2 } });
@@ -181,13 +183,13 @@ test("an exchange no module handles is answered without a round trip, even with 
 test("cold start: every mutating call ends the worker, which shows a save() that drops state", async () => {
   const warm = worker(["kitchen"]);
   await warm.command(command("hit"));
-  expect((await warm.render([ada])).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 1 });
+  expect((await warm.render([ada], ROOM)).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 1 });
 
   const { stats, spawn } = counting();
   const cold = worker(["kitchen"], { coldStart: true, spawn });
   await cold.command(command("hit"));
   expect(cold.running).toBe(false);
-  expect((await cold.render([ada])).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 0 });
+  expect((await cold.render([ada], ROOM)).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 0 });
   // A read-only exchange does not end the worker.
   expect(cold.running).toBe(true);
   expect(stats.spawns).toBe(2);
