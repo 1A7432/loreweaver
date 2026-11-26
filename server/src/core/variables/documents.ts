@@ -96,6 +96,8 @@ function validateTree(data: JsonObject): WriteViolation[] {
 
 export const variableTreeDocument: DocumentType<VariableTreeView> = {
   name: VARIABLE_TREE_TYPE,
+  // A reset of the whole room removes the imported world, and its variables with it.
+  lifecycle: { reset: "all" },
   version: 1,
   project: projectTree,
   validate: validateTree,
@@ -178,6 +180,8 @@ function validateModuleVariables(data: JsonObject): WriteViolation[] {
 
 export const moduleVariablesDocument: DocumentType<ModuleVariablesView> = {
   name: MODULE_VARIABLES_TYPE,
+  // A reset of the whole room removes the imported world, and its variables with it.
+  lifecycle: { reset: "all" },
   version: 1,
   project: projectModuleVariables,
   validate: validateModuleVariables,

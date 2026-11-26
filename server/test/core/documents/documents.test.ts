@@ -9,6 +9,7 @@ import { Store } from "../../../src/infra/store.ts";
 // a part only the Keeper (and the NPC itself) may see.
 const npc: DocumentType<{ name: string; secret?: string }> = {
   name: "npc",
+  lifecycle: { reset: "story" },
   version: 2,
   project(document: Document, viewer: Viewer) {
     const name = String(document.data.name ?? "");
@@ -26,6 +27,7 @@ const npc: DocumentType<{ name: string; secret?: string }> = {
 // A type that simply does not exist for the table.
 const note: DocumentType<{ text: string }> = {
   name: "keeper_note",
+  lifecycle: { reset: "story" },
   version: 1,
   project: (document, viewer) => (viewer.grade === "keeper" ? { text: String(document.data.text ?? "") } : null),
 };

@@ -76,9 +76,80 @@ export interface RewindData {
   epoch: number;
 }
 
+/**
+ * A graded check's result, neutral to the rule system: `id` is the system's own rank
+ * word (presentation only — never branch on it), `label` is already in the room's
+ * language, and a client colours by the flags and may shade by `tier` (higher is better).
+ */
+export interface Outcome {
+  id: string;
+  label: string;
+  success: boolean;
+  critical: boolean;
+  fumble: boolean;
+  tier: number;
+  margin?: number;
+}
+
+/** One roll or check, as the table saw it. Never carries Keeper-only information. */
+export interface DiceData {
+  actor: string;
+  kind: "roll" | "check" | "subsystem" | "opposed" | "init";
+  /** The notation rolled, canonical form. */
+  expr: string;
+  rolls: number[];
+  total: number;
+  target?: number;
+  effectiveTarget?: number;
+  /** A rule subsystem's stable id and its name in the room's language. */
+  subsystem?: string;
+  subsystemLabel?: string;
+  outcome?: Outcome;
+  /** System-declared extras a client may show verbatim and never needs to understand. */
+  detail?: Record<string, unknown>;
+}
+
+export type Block =
+  | { kind: "meter"; label: string; value: number; min: number; max: number }
+  | { kind: "stat"; label: string; value: number | string | boolean }
+  | { kind: "badge"; label: string; tone?: "info" | "warn" | "danger" }
+  | { kind: "text"; text: string; style?: "quote" | "warning" }
+  | { kind: "divider" }
+  | { kind: "choices"; prompt?: string; options: { id: string; label: string; command: string; args?: Record<string, unknown> }[] }
+  | { kind: "image"; hash: string; mime?: string; size?: number; caption?: string; alt?: string }
+  | { kind: "letter"; body: string; from?: string; to?: string; date?: string }
+  | { kind: "clipping"; headline: string; body: string; source?: string; date?: string }
+  | { kind: "map_pin"; hash: string; mime?: string; size?: number; label: string; x: number; y: number; note?: string }
+  | { kind: "title_card"; title: string; subtitle?: string; act?: string };
+
+/** Declarative blocks set into the story: a module's card, the Stage Director's staging. */
+export interface BlocksData {
+  blocks: Block[];
+  /** May update the earlier `blocks` event with the same id in place. */
+  replace?: boolean;
+}
+
+export interface MediaData {
+  hash: string;
+  mime: string;
+  size: number;
+  name: string;
+  /** The member who shared it, or the server. */
+  from: string;
+}
+
+export interface ResetData {
+  scope: "story" | "chars" | "all";
+  epoch: number;
+}
+
 export interface EventPayloads {
   narrative: NarrativeData;
+  dice: DiceData;
+  blocks: BlocksData;
+  media: MediaData;
   rewind: RewindData;
+  reset: ResetData;
 }
 
 export type EventKind = keyof EventPayloads;
@@ -99,7 +170,23 @@ export type EventFrame = {
 export interface SignalPayloads {
   /** Streaming text for the bubble the `narrative` event with the same id replaces. */
   draft: { id: string; text: string } | { id: string; discard: true };
-  turn: { status: "busy"; actor: string; round?: number } | { status: "idle" };
+  turn:
+    | { status: "busy"; actor: string; activity?: "reading" | "dice" | "cast" | "bookkeeping"; round?: number }
+    | { status: "idle" };
+  /** A playback intent; the bytes are fetched by hash over the byte channel. */
+  audio: {
+    id: string;
+    action: "play" | "stop" | "pause" | "resume" | "volume";
+    layer: "bgm" | "ambience" | "sfx";
+    hash?: string;
+    mime?: string;
+    title?: string;
+    loop?: boolean;
+    volume?: number;
+    fadeMs?: number;
+  };
+  /** An out-of-band line for the table: a turn that failed, a long operation under way. */
+  notice: { level: "info" | "warn"; code?: string; text: string; spinner?: boolean };
 }
 
 export type SignalKind = keyof SignalPayloads;

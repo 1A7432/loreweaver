@@ -60,8 +60,20 @@ export interface WriteViolation {
   readonly path: string;
 }
 
+/**
+ * What a campaign reset does to a kind of room data. The scopes nest: `story` clears what
+ * play produced (history, notes, NPC state), `chars` also clears characters, `all` also
+ * clears the imported world. `never` data survives every reset — and has to say why, so
+ * that surviving is a decision and not an omission.
+ */
+export type Lifecycle =
+  | { readonly reset: "story" | "chars" | "all" }
+  | { readonly reset: "never"; readonly because: string };
+
 export interface DocumentType<View = Json> {
   readonly name: string;
+  /** How this type's documents end; every type declares it (see `Lifecycle`). */
+  readonly lifecycle: Lifecycle;
   /** Current schema version; written on every document of this type. */
   readonly version: number;
   /** The view for this viewer, or null when the document is invisible to them. */

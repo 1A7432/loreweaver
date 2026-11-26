@@ -9,6 +9,7 @@ export {
   type DocumentType,
   type Json,
   type JsonObject,
+  type Lifecycle,
   type Viewer,
   type WriteViolation,
 } from "./model.ts";
