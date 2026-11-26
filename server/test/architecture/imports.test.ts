@@ -55,6 +55,7 @@ test("a relative import names its extension", () => {
 
 test("from outside src/, only data may be imported by path", () => {
   expect(rules({ "infra/i18n.ts": 'import en from "../../locales/en/net.json" with { type: "json" }; export const c = en;' })).toEqual([]);
+  expect(rules({ "core/packs.ts": 'import coc from "../../../rulepacks/coc7.yaml" with { type: "text" }; export const c = coc;' })).toEqual([]);
   expect(rules({ "infra/x.ts": 'import "../../test/helpers.ts";' })).toEqual([5]);
 });
 

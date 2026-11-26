@@ -10,8 +10,9 @@
 //      content code beside pure engine code and never holds the store.
 //   4. A relative import names its file with the extension, so the tree also loads
 //      under a runtime that strips types without resolving extensions.
-//   5. The only thing imported from outside `src/` by path is data (`.json`): the
-//      message catalogs. Code outside `src/` is reached as a package or not at all.
+//   5. The only thing imported from outside `src/` by path is data — message catalogs
+//      (`.json`) and the built-in content a compiled binary must carry (`.yaml`, `.md`,
+//      `.txt`). Code outside `src/` is reached as a package or not at all.
 
 const LAYERS = ["infra", "core", "agent", "gateway", "net", "cli"] as const;
 const WORKER = "worker";
@@ -84,12 +85,12 @@ export function checkImports(files: ReadonlyMap<string, string>): Violation[] {
         }
         continue;
       }
-      if (!/\.(ts|json)$/.test(specifier)) {
+      if (!/\.(ts|json|yaml|md|txt)$/.test(specifier)) {
         violations.push({ file, rule: 4, detail: `relative import without an extension: ${specifier}` });
       }
       const target = resolveRelative(file, specifier);
       if (target === null) {
-        if (!specifier.endsWith(".json")) {
+        if (!/\.(json|yaml|md|txt)$/.test(specifier)) {
           violations.push({ file, rule: 5, detail: `imports code from outside src/: ${specifier}` });
         }
         continue;
