@@ -2,6 +2,13 @@
 //
 //   bun eval/playtest.ts --turns 12 --players 2 [--pressure] [--locale zh] [--out <dir>]
 //
+// Against an installed pack instead of the fixture card (the pack's own files stay where
+// they are — nothing of a pack is copied into this repository):
+//   … --data-dir <dir with installed packs> --enable <pack id> [--skills a,b] [--system <rule
+//     system>] --world <pack>:<card path>[,<pack>:<card path>…] [--sentinel-file <path>]
+// The hidden truths the judge holds the Keeper against are then the secret lore entries the
+// world import wrote; sentinels come from the file (one per line), or none are searched.
+//
 // The settings are the server's own (`TRPG_*`, from the process environment); nothing here
 // reads a credential — the configured clients are built by `createLLM` and used as they are.
 // It composes the server the way `serve` does (`composeHub`), imports a public fixture world
@@ -31,15 +38,19 @@ import { importWorld } from "../src/agent/card_import.ts";
 import { WHISPERS_KEY } from "../src/agent/lanes/scribe.ts";
 import { diceRolled, diceToolNames, replyStatesARoll } from "../src/agent/turn/checks.ts";
 import { composeHub } from "../src/cli/compose.ts";
+import { loadInstalledPacks } from "../src/cli/packs.ts";
 import { parseCard } from "../src/core/card/index.ts";
 import { CHRONICLE_RECORD_TYPE } from "../src/core/chronicle/index.ts";
 import { SeededRandom } from "../src/core/random.ts";
 import { builtInPacks } from "../src/core/rulepacks/index.ts";
+import { LORE_ENTRY_TYPE, readLoreEntry } from "../src/core/lore/index.ts";
+import { assemblePacks, RoomPacks } from "../src/gateway/packs.ts";
 import { REVIEW_OFF } from "../src/gateway/review.ts";
 import type { Member, Room } from "../src/gateway/room.ts";
 import { loadSettings } from "../src/infra/config.ts";
 import { systemClock } from "../src/infra/ids.ts";
 import { type ChatMessage, type ChatOptions, type ChatResult, createLLM, currentLane, type LLMClient, LLMError } from "../src/infra/llm/index.ts";
+import { MediaStore } from "../src/infra/media/index.ts";
 import { openDatabase } from "../src/infra/runtime/sqlite.ts";
 import { roomWorkerEntry, spawnWorker } from "../src/infra/runtime/worker.ts";
 import { Store } from "../src/infra/store.ts";
@@ -60,6 +71,13 @@ const WINDOW = Number(argument("window", "0"));
 const STAMP = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const OUT = argument("out", join(import.meta.dir, "../../playtest", `v3-${STAMP}`));
 const FIXTURE_DIR = join(import.meta.dir, "fixtures");
+const DATA_DIR = argument("data-dir", "");
+const list = (name: string): string[] => argument(name, "").split(",").map((item) => item.trim()).filter((item) => item !== "");
+const ENABLE = list("enable");
+const SKILLS = list("skills");
+const SYSTEM = argument("system", "");
+const WORLD = list("world");
+const SENTINEL_FILE = argument("sentinel-file", "");
 const ROOM = "playtest";
 
 interface EvalFixture {
@@ -69,7 +87,18 @@ interface EvalFixture {
   readonly sentinels: readonly string[];
   readonly concepts: readonly string[];
 }
-const fixture = JSON.parse(readFileSync(join(FIXTURE_DIR, argument("fixture", "blackmoor.eval.json")), "utf8")) as EvalFixture;
+const fixtureFile = JSON.parse(readFileSync(join(FIXTURE_DIR, argument("fixture", "blackmoor.eval.json")), "utf8")) as EvalFixture;
+/** What the run is judged against. With `--world` it is filled from the room after the import. */
+const fixture: { card: string; rule_pack: string; secret_material: string; sentinels: readonly string[]; concepts: readonly string[] } =
+  WORLD.length === 0
+    ? fixtureFile
+    : {
+        card: "",
+        rule_pack: SYSTEM,
+        secret_material: "",
+        sentinels: SENTINEL_FILE === "" ? [] : readFileSync(SENTINEL_FILE, "utf8").split("\n").map((line) => line.trim()).filter((line) => line !== ""),
+        concepts: [],
+      };
 
 // ---------------------------------------------------------------- recording
 
@@ -144,7 +173,12 @@ if (settings.llm === undefined) {
 const configured = createLLM(settings.llm);
 const probe = new ProbeLLM(configured);
 const reports: string[] = [];
-const store = new Store(openDatabase(join(OUT, "room.db")), { undoDepth: settings.store.undoDepth });
+const database = openDatabase(join(OUT, "room.db"));
+const store = new Store(database, { undoDepth: settings.store.undoDepth });
+const media = new MediaStore(OUT, database, { clock: systemClock });
+const installed = DATA_DIR === "" ? null : loadInstalledPacks(DATA_DIR);
+const assembled = installed === null ? null : assemblePacks(installed.packs);
+for (const note of [...(installed?.notes ?? []), ...(assembled?.notes ?? [])]) record("pack_note", { note });
 const { hub, services } = composeHub({
   settings,
   store,
@@ -157,9 +191,13 @@ const { hub, services } = composeHub({
   },
   // No modules, but the room's lore is assembled in its worker.
   spawnWorker: () => spawnWorker(roomWorkerEntry()),
-  modulesFor: () => [],
+  ...(DATA_DIR === "" ? { modulesFor: () => [] } : {}),
   review: REVIEW_OFF,
-  defaultRulePack: fixture.rule_pack,
+  defaultRulePack: fixture.rule_pack === "" ? null : fixture.rule_pack,
+  media,
+  ...(installed === null || assembled === null
+    ? {}
+    : { roomPacks: new RoomPacks({ packs: installed.packs, skills: assembled.skills, media, report: (_room, text) => record("pack_report", { text }) }), packs: assembled.ruleSystems }),
 });
 
 // ---------------------------------------------------------------- the judge and the players
@@ -274,15 +312,15 @@ interface Seat {
   cursor: number;
 }
 
-function seat(index: number, archetype: readonly [string, string]): Seat {
+function seat(index: number, archetype: readonly [string, string], role: Member["role"] = "player"): Seat {
   const frames: ServerFrame[] = [];
   const arrived: number[] = [];
-  const name = ["Ada", "Bao", "Cyr", "Dee"][index] as string;
+  const name = role === "admin" ? "Root" : (["Ada", "Bao", "Cyr", "Dee"][index] as string);
   const member: Member = {
-    connection: `conn-${index}`,
-    id: `member-${index}`,
+    connection: `conn-${role}-${index}`,
+    id: `member-${role}-${index}`,
     name,
-    role: "player",
+    role,
     locale: LOCALE,
     send: (frame) => {
       frames.push(frame);
@@ -333,8 +371,26 @@ function tableText(frames: readonly ServerFrame[]): string {
 const started = Date.now();
 const room = hub.room(ROOM);
 
-// The fixture world, imported as the admin's action.
-{
+// The room's admin: sets the table up, then only watches (and is NOT a player seat).
+const admin = seat(0, ["Admin", "the room's admin"], "admin");
+room.join(admin.member);
+async function adminRun(id: string, args: unknown): Promise<void> {
+  // The room's own rate limit applies to its admin too (a burst, then one input every 2 s).
+  await Bun.sleep(2_100);
+  const answer = await command(room, admin.member, id, args);
+  record("setup", { id, args: args as Record<string, unknown>, ok: answer.ok, code: answer.code ?? null, text: (answer.text ?? "").slice(0, 400) });
+  if (!answer.ok) {
+    console.error(`setup refused: ${id} ${JSON.stringify(args)} → ${answer.code ?? "?"}`);
+    process.exit(1);
+  }
+  await settle(room);
+}
+for (const id of ENABLE) await adminRun("pack", { op: "enable", id });
+if (SYSTEM !== "") await adminRun("rule", { system: SYSTEM });
+for (const id of SKILLS) await adminRun("skill", { op: "enable", id });
+
+if (WORLD.length === 0) {
+  // The fixture world, imported as the admin's action.
   const writer = store.writer(ROOM);
   const card = parseCard(new Uint8Array(readFileSync(join(FIXTURE_DIR, fixture.card))), fixture.card);
   const imported = importWorld(
@@ -347,15 +403,33 @@ const room = hub.room(ROOM);
     console.error(`world import refused: ${imported.code}`);
     process.exit(1);
   }
+} else {
+  for (const item of WORLD) {
+    const at = item.indexOf(":");
+    await adminRun("import", { pack: item.slice(0, at), card: item.slice(at + 1), as: "world" });
+  }
+  // The hidden truths: what the import stored as secret lore. Never written to the summary.
+  const secrets = services.documents
+    .list(ROOM, LORE_ENTRY_TYPE)
+    .map((document) => readLoreEntry(document))
+    .filter((entry) => entry !== null && entry.secret)
+    .map((entry) => entry?.content ?? "");
+  fixture.secret_material = secrets.join("\n").slice(0, 12_000);
+  record("secret_material", { entries: secrets.length, chars: fixture.secret_material.length });
+  if (secrets.length === 0) console.error("note: the imported world has no secret entries; the secrecy judge has nothing to hold the Keeper against");
 }
 
 const archetypes = [...ARCHETYPES.slice(0, PRESSURE ? PLAYERS - 1 : PLAYERS), ...(PRESSURE ? [PROBER] : [])];
 const seats = archetypes.map((archetype, index) => seat(index, archetype));
 for (const each of seats) {
   room.join(each.member);
-  const made = await command(room, each.member, "new_character", { system: fixture.rule_pack, name: `${each.member.name} ${["Hale", "Lin", "Voss", "Marsh"][seats.indexOf(each)]}` });
+  const made = await command(room, each.member, "new_character", { system: room.pack?.id ?? fixture.rule_pack, name: `${each.member.name} ${["Hale", "Lin", "Voss", "Marsh"][seats.indexOf(each)]}` });
   record("character", { member: each.member.name, ...made });
-  const subscribed = await room.viewSubscribe(each.member, ["me", "party", "scene", "variables", "characters", "room", "usage"]);
+  // Every view this player may subscribe to — the built-ins, the panels and each module's
+  // own: whatever a player's connection can receive is searched for sentinels.
+  const offered = (await room.viewList(each.member)).map((listing) => listing.name);
+  record("views", { member: each.member.name, names: offered });
+  const subscribed = await room.viewSubscribe(each.member, offered);
   for (const frame of subscribed.frames) each.member.send(frame);
 }
 await settle(room);
