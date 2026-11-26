@@ -59,6 +59,15 @@ test("from outside src/, only data may be imported by path", () => {
   expect(rules({ "infra/x.ts": 'import "../../test/helpers.ts";' })).toEqual([5]);
 });
 
+test("only core and the Keeper's tools read stored documents whole", () => {
+  const raw = { "core/documents/raw.ts": "export const x = 1;" };
+  expect(rules({ ...raw, "gateway/room.ts": 'import "../core/documents/raw.ts";' })).toEqual([6]);
+  expect(rules({ ...raw, "net/session.ts": 'import "../core/documents/raw.ts";' })).toEqual([6]);
+  expect(rules({ ...raw, "agent/tools.ts": 'import "../core/documents/raw.ts";' })).toEqual([]);
+  expect(rules({ ...raw, "core/lore.ts": 'import "./documents/raw.ts";' })).toEqual([]);
+  expect(rules({ "core/documents/views.ts": "", "gateway/room.ts": 'import "../core/documents/views.ts";' })).toEqual([]);
+});
+
 test("the server tree keeps the rules", () => {
   const files = new Map<string, string>();
   for (const entry of readdirSync(SRC, { recursive: true, encoding: "utf8" })) {

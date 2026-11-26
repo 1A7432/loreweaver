@@ -13,16 +13,22 @@
 //   5. The only thing imported from outside `src/` by path is data — message catalogs
 //      (`.json`) and the built-in content a compiled binary must carry (`.yaml`, `.md`,
 //      `.txt`). Code outside `src/` is reached as a package or not at all.
+//   6. Stored documents are read whole only by the code that defines what they mean
+//      (`core/`) and by the Keeper's tools (`agent/`). The gateway, the transports and
+//      the worker reach room content through projections (`core/documents/views.ts`),
+//      so a whole payload cannot reach a connection by oversight (iron rule 3).
 
 const LAYERS = ["infra", "core", "agent", "gateway", "net", "cli"] as const;
 const WORKER = "worker";
 const WORKER_MAY_IMPORT = new Set(["infra", "core", WORKER]);
 const WORKER_FORBIDDEN_SPECIFIERS = new Set(["bun:sqlite"]);
 const RUNTIME_DIR = "infra/runtime/";
+const RAW_DOCUMENTS = "core/documents/raw.ts";
+const RAW_DOCUMENT_READERS = new Set(["core", "agent"]);
 
 export interface Violation {
   readonly file: string;
-  readonly rule: 1 | 2 | 3 | 4 | 5;
+  readonly rule: 1 | 2 | 3 | 4 | 5 | 6;
   readonly detail: string;
 }
 
@@ -96,6 +102,9 @@ export function checkImports(files: ReadonlyMap<string, string>): Violation[] {
         continue;
       }
       targets.push(target);
+      if (target === RAW_DOCUMENTS && !RAW_DOCUMENT_READERS.has(layer)) {
+        violations.push({ file, rule: 6, detail: `${layer} reads stored documents directly: ${target}` });
+      }
       const targetLayer = layerOf(target);
       if (targetLayer === layer) continue;
       if (targetLayer === WORKER) {
