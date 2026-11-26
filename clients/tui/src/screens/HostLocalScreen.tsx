@@ -1,39 +1,44 @@
 import { useEffect, useRef, useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { bringUpServer, type LogKind } from "../hostLocal"
+import { stripControlChars } from "loreweaver-protocol/v3"
+import { bringUpServer, HostLocalError, type BringUp, type BringUpLine, type HostHandle } from "../hostLocal"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 
 interface Line {
   id: number
   text: string
-  kind: LogKind
+  kind: BringUpLine["kind"]
 }
 
 export interface HostLocalScreenProps {
   theme: Palette
   locale: string
   localServerHome: string
-  // Called once the server is up; hands back its Iroh ticket, keeper key, and a stop().
-  onReady: (host: string, key: string, stop: () => void) => void
+  /** The admin key kept from an earlier start in this folder. */
+  knownKey?: string
+  /** Injected by tests; the real bring-up otherwise. */
+  bringUp?: BringUp
+  /** A server this client started earlier and is stopping: two must never share a data folder. */
+  after?: Promise<unknown>
+  // Called once the server is up, with its ticket, an admin key and a way to stop it.
+  onReady: (handle: HostHandle) => void
   onBack: () => void
 }
 
 const MAX_LINES = 500
 const VISIBLE = 22
 
-// One-click host: runs the bring-up pipeline (fetch/uv/deps/serve) and streams every step's
-// terminal output here, then hands the ready server to the shell to log in as Keeper.
-export function HostLocalScreen({ theme, locale, localServerHome, onReady, onBack }: HostLocalScreenProps) {
+// Starts a local server and streams every step of the bring-up here, then hands the ready server
+// to the shell, which dials it as the room's admin.
+export function HostLocalScreen({ theme, locale, localServerHome, knownKey, bringUp = bringUpServer, after, onReady, onBack }: HostLocalScreenProps) {
   const [lines, setLines] = useState<Line[]>([])
   const [error, setError] = useState<string>()
   const [done, setDone] = useState(false)
   const started = useRef(false)
   const nextId = useRef(0)
-  // `onReady` is a fresh inline closure each render; hold it in a ref so the bring-up effect can
-  // run exactly once (empty deps) without re-firing — and re-running its abort cleanup — on every
-  // parent re-render.
+  // `onReady` is a fresh closure each render; a ref lets the bring-up run exactly once.
   const onReadyRef = useRef(onReady)
   onReadyRef.current = onReady
 
@@ -46,24 +51,27 @@ export function HostLocalScreen({ theme, locale, localServerHome, onReady, onBac
     started.current = true
     const controller = new AbortController()
     let cancelled = false
-    const log = (text: string, kind: LogKind) =>
-      setLines((prev) => [...prev, { id: nextId.current++, text, kind }].slice(-MAX_LINES))
-    bringUpServer(log, controller.signal, { localServerHome })
+    const log = (line: BringUpLine) => {
+      const text = line.key ? tt(locale, line.key, line.vars) : stripControlChars(line.text ?? "")
+      setLines((prev) => [...prev, { id: nextId.current++, text, kind: line.kind }].slice(-MAX_LINES))
+    }
+    Promise.resolve(after)
+      .catch(() => undefined)
+      .then(() => bringUp(log, controller.signal, { localServerHome, ...(knownKey ? { knownKey } : {}) }))
       .then((handle) => {
-        // The user hit Esc while we were bringing the server up: don't yank them back into the
-        // connect flow — tear the just-started server down instead of leaking it.
+        // Esc while the server was coming up: tear it down instead of leaking it.
         if (cancelled) {
-          handle.stop()
+          void handle.stop()
           return
         }
         setDone(true)
-        onReadyRef.current(handle.host, handle.key, handle.stop)
+        onReadyRef.current(handle)
       })
-      .catch((err) => {
+      .catch((caught: unknown) => {
         if (cancelled) return
-        const message = err instanceof Error ? err.message : String(err)
+        const message = caught instanceof HostLocalError ? tt(locale, caught.key, caught.vars) : caught instanceof Error ? caught.message : String(caught)
         setError(message)
-        log(message, "fail")
+        log({ kind: "fail", text: message })
       })
     return () => {
       cancelled = true
@@ -71,16 +79,8 @@ export function HostLocalScreen({ theme, locale, localServerHome, onReady, onBac
     }
   }, [])
 
-  const colorFor = (kind: LogKind): string =>
-    kind === "step"
-      ? theme.accent
-      : kind === "ok"
-        ? theme.success
-        : kind === "fail"
-          ? theme.fumble
-          : kind === "err"
-            ? theme.dim
-            : theme.fg
+  const colorFor = (kind: Line["kind"]): string =>
+    kind === "step" ? theme.accent : kind === "ok" ? theme.success : kind === "fail" ? theme.fumble : theme.fg
 
   const visible = lines.slice(-VISIBLE)
 

@@ -1,46 +1,44 @@
-import { stripControlChars, type ModuleVariable } from "loreweaver-protocol"
+import { stripControlChars, type VariablesView, type ViewModuleVariable, type ViewTreeLeaf } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"
 import { FitText } from "./FitText"
 
 export interface VariablesPanelProps {
-  variables?: ModuleVariable[]
+  variables?: VariablesView | null
   theme: Palette
   locale?: string
 }
 
 // Matches PartyRoster's compact vitals width: variable labels are arbitrary-length
-// module data (unlike the fixed "HP"/"MP"/"SAN"), so the narrower bar leaves the
-// label + value room inside the 24–32-col sidebar before `truncate` kicks in.
+// module data, so the narrower bar leaves the label + value room inside the 24–32-col
+// sidebar before the row is cut.
 const VARIABLE_BAR_WIDTH = 6
 
-// A keeper-only (not-yet-`.var expose`d) imported-card leaf is prefixed with a lock and
-// drawn dim, per the protocol's "render hidden rows visually locked/dimmed, never as
-// player data". Only keeper connections ever receive one — players are filtered
-// server-side — but on the keeper's own screen an unexposed module internal must never
-// look like something the table can already see. Single-width BMP glyph like the
-// panel's other markers (✓/✗) — an emoji lock would be double-width and terminal
-// support for its advance width is inconsistent.
+// A variable players do not see (`hidden`, sent to an admin only) is prefixed with this mark
+// and drawn dim: on the admin's own screen something the table cannot see must never look
+// like table data. A single-width BMP glyph like the panel's other markers (✓/✗).
 const HIDDEN_GLYPH = "⊘"
 
 /** A "number" variable renders a bar only when the server bounded it (both ends). */
-export function isBounded(variable: ModuleVariable): boolean {
+export function isBounded(variable: ViewModuleVariable): boolean {
   return variable.kind === "number" && typeof variable.min === "number" && typeof variable.max === "number"
 }
 
-/** One sidebar line of text per variable, exported so tests can pin the formatting
- * without a renderer. Bounded numbers reuse CharacterPanel's exact `bar` glyphs
- * (rescaled to the min..max span); bool gets a check/cross + localized yes/no;
- * everything else is a `label: value` one-liner (an enum shows its `value_label` when
- * the server sent one). Label and value are untrusted
- * server text — control characters are stripped like every other panel does. */
-export function variableLine(variable: ModuleVariable, locale?: string): string {
+/** The text a non-bar, non-bool variable shows for its value: an enum's server-named option
+ * (`valueLabel`) when present, else the raw value. */
+export function variableValueText(variable: ViewModuleVariable): string {
+  if (variable.kind === "enum" && typeof variable.valueLabel === "string" && variable.valueLabel) return variable.valueLabel
+  return String(variable.value)
+}
+
+/** One sidebar line per module variable. Bounded numbers reuse CharacterPanel's `bar` glyphs
+ * (rescaled to the min..max span); bool gets a check/cross + localized yes/no; everything else
+ * is a `label: value` one-liner. Server text is control-stripped. */
+export function variableLine(variable: ViewModuleVariable, locale?: string): string {
   const label = `${variable.hidden ? HIDDEN_GLYPH : ""}${stripControlChars(variable.label)}`
   if (variable.kind === "bool") {
-    return variable.value
-      ? `${label} ✓ ${tt(locale, "vars.yes")}`
-      : `${label} ✗ ${tt(locale, "vars.no")}`
+    return variable.value ? `${label} ✓ ${tt(locale, "vars.yes")}` : `${label} ✗ ${tt(locale, "vars.no")}`
   }
   if (isBounded(variable)) {
     const min = variable.min as number
@@ -51,30 +49,31 @@ export function variableLine(variable: ModuleVariable, locale?: string): string 
   return `${label}: ${stripControlChars(variableValueText(variable))}`
 }
 
-/** The text a non-bar, non-bool variable shows for its value: an enum's server-named
- * option (protocol 2.5 `value_label`) when present, else the raw value — what an older
- * server, or a pack that names nothing, always showed. Only the DISPLAY changes; the
- * raw `value` is still what conditions and commands use. */
-export function variableValueText(variable: ModuleVariable): string {
-  if (variable.kind === "enum" && typeof variable.value_label === "string" && variable.value_label) {
-    return variable.value_label
-  }
-  return String(variable.value)
+/** One sidebar line per variable-tree leaf: `path: value` (a list joins with commas). */
+export function leafLine(leaf: ViewTreeLeaf): string {
+  const value = Array.isArray(leaf.value) ? leaf.value.map((item) => String(item)).join(", ") : String(leaf.value)
+  return `${leaf.hidden ? HIDDEN_GLYPH : ""}${stripControlChars(leaf.path)}: ${stripControlChars(value)}`
 }
 
-/** The module-variables ("trackers") sidebar panel: one truncating line per
- * player-visible variable from `state.variables`, in received (definition) order —
- * never sorted. Renders nothing at all when the room has none. */
+/** The room-variables sidebar panel: module variables then the variable tree, in the order the
+ * `variables` view sent them — never sorted. Renders nothing at all when there are none. */
 export function VariablesPanel({ variables, theme, locale }: VariablesPanelProps) {
-  if (!variables || variables.length === 0) return null
+  const module = variables?.module ?? []
+  const tree = variables?.tree ?? []
+  if (module.length === 0 && tree.length === 0) return null
   return (
     // flexShrink=0 like CharacterPanel: in a tight sidebar column yoga would
     // otherwise squash this panel and composite its rows on top of each other.
     <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
       <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "vars.title")}</text>
-      {variables.map((variable) => (
-        <FitText key={variable.id} fg={variable.hidden ? theme.dim : theme.fg} cut="middle">
+      {module.map((variable) => (
+        <FitText key={`m-${variable.id}`} fg={variable.hidden ? theme.dim : theme.fg} cut="middle">
           {variableLine(variable, locale)}
+        </FitText>
+      ))}
+      {tree.map((leaf) => (
+        <FitText key={`t-${leaf.path}`} fg={leaf.hidden ? theme.dim : theme.fg} cut="middle">
+          {leafLine(leaf)}
         </FitText>
       ))}
     </box>

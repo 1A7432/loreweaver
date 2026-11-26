@@ -1,510 +1,153 @@
-import { describe, expect, test } from "bun:test"
-import { testRender } from "@opentui/react/test-utils"
-import { act } from "react"
-import {
-  FrameType,
-  PROTOCOL_VERSION,
-  type CharacterState,
-  type RuleSystemEntry,
-  type ServerFrame,
-  type WelcomeFrame,
-} from "loreweaver-protocol"
-import App, { type AppClient } from "../App"
+import { afterEach, describe, expect, test } from "bun:test"
+import type { Connection } from "../connection"
+import { FakeServer, liveRender, pump, waitFor, waitForScreen } from "../testkit"
+import { themes } from "../themes"
+import { CharacterScreen } from "./CharacterScreen"
 
-// Same MockClient shape as App.test.tsx: connect/join are recorded, sent input is
-// captured, and push() delivers server frames like the real socket would.
-class MockClient implements AppClient {
-  connectCalls: string[] = []
-  joinCalls: Array<[string, string | undefined]> = []
-  sent: string[] = []
-  closed = 0
-  private listeners = new Set<(frame: ServerFrame) => void>()
+const harnesses: Array<{ renderer: { destroy(): void } }> = []
+const connections: Connection[] = []
+afterEach(() => {
+  for (const connection of connections.splice(0)) connection.stop()
+  for (const harness of harnesses.splice(0)) harness.renderer.destroy()
+})
 
-  connect(url: string): Promise<void> {
-    this.connectCalls.push(url)
-    return Promise.resolve()
-  }
-  join(key: string, name?: string): void {
-    this.joinCalls.push([key, name])
-  }
-  sendInput(text: string): void {
-    this.sent.push(text)
-  }
-  onMessage(cb: (frame: ServerFrame) => void): () => void {
-    this.listeners.add(cb)
-    return () => this.listeners.delete(cb)
-  }
-  close(): void {
-    this.closed += 1
-  }
-  adminGetConfig(): void {}
-  adminSetModel(_provider: string, _chatModel?: string): void {}
-  adminListKeys(): void {}
-  adminMintKey(_room: string, _name?: string, _role?: string): void {}
-  adminUpdateKey(_id: string, _room?: string, _name?: string, _role?: string): void {}
-  adminDeleteKey(_id: string): void {}
-  adminDeleteRoom(_room: string): void {}
-  adminExportRoom(_room: string, _path?: string): void {}
-  adminImportRoom(_path: string, _room?: string): void {}
-  adminDeleteRoomData(_room: string, _backup?: boolean, _path?: string): void {}
-  adminResetRoom(_room: string): void {}
-  adminUpdateServer(): void {}
-  adminListSkills(): void {}
-  adminEnableSkill(_id: string, _on: boolean): void {}
-  adminListRules(): void {}
-  adminGenerate(_kind: string, _description: string): void {}
-
-  push(frame: ServerFrame): void {
-    for (const listener of this.listeners) listener(frame)
-  }
-}
-
-const PLAYER_WELCOME: WelcomeFrame = {
-  type: FrameType.Welcome,
-  protocol: PROTOCOL_VERSION,
-  room: "shuxue",
-  you: { id: "p1", name: "漱雪", role: "player" },
-  locale: "zh",
-  server: "mock",
-}
-
-// Shaped like the real `state` frame (protocol 2.3, `net/state.py::_rule_systems`):
-// canonical pack ids, and the dot-command word only for a system whose pack declares
-// one. `wod` declares none — it can be described into or imported into, never rolled.
-const SYSTEMS: RuleSystemEntry[] = [
-  { id: "coc7", make_char: "coc" },
-  { id: "dnd5e", make_char: "dnd" },
-  { id: "wod" },
-]
-
-// Attributes arrive as RAW STORAGE KEYS, vitals and derived leaves included — the
-// same payload `.st <key> <n>` accepts back. Vitals ride the protocol-2.0 generic
-// `resources` list, which carries its own labels.
-const SHEET: CharacterState = {
-  name: "漱雪",
-  system: "coc7",
-  resources: [
-    { id: "hp", label: "HP", value: 12, max: 12 },
-    { id: "mp", label: "MP", value: 13, max: 13 },
-    { id: "san", label: "SAN", value: 65, max: 99 },
+const ME_NONE = { member: { id: "m1", name: "Ada", role: "player", roleLabel: "Investigator" }, character: null }
+const SHEET = {
+  id: "ch-1",
+  name: "Ada Lovelace",
+  pack: "coc7",
+  status: [],
+  resources: [{ id: "hp", label: "HP", value: 11, max: 13 }],
+  attributes: [
+    { key: "STR", label: "STR", value: 45 },
+    { key: "APP", label: "外貌", value: 60 },
   ],
-  attributes: {
-    STR: 55,
-    CON: 60,
-    SIZ: 65,
-    DEX: 70,
-    APP: 50,
-    INT: 75,
-    POW: 65,
-    EDU: 80,
-    LUC: 45,
-  },
-  status_effects: [],
+  skills: [{ key: "Spot Hidden", label: "Spot Hidden", value: 60 }],
+}
+const ME_SHEET = { ...ME_NONE, character: SHEET }
+const SYSTEMS = { claimable: [], systems: [{ id: "dnd5e", label: "D&D 5e", active: false }, { id: "coc7", label: "Call of Cthulhu 7e", active: true }], mine: null }
+
+async function open(server: FakeServer, onBack: () => void = () => {}) {
+  const connection = server.connect()
+  connections.push(connection)
+  await connection.start()
+  await waitFor("the views", () => connection.session.getSnapshot().views.has("me") && connection.session.getSnapshot().views.has("characters"))
+  const harness = await liveRender(<CharacterScreen connection={connection} theme={themes.lamplight} themeName="lamplight" locale="en" onBack={onBack} />, { width: 110, height: 34 })
+  harnesses.push(harness)
+  const screen = (what: string, has: (frame: string) => boolean) => waitForScreen(harness, what, has)
+  const calls = () => server.current.calls("command.run").map((call) => call.params)
+  return { connection, harness, screen, calls }
 }
 
-function stateFrame(extra: Partial<{ character: CharacterState; systems: RuleSystemEntry[] }> = {}): ServerFrame {
-  const { character, systems } = { systems: SYSTEMS, ...extra }
-  return {
-    type: FrameType.State,
-    character,
-    party: [],
-    initiative: [],
-    online: 1,
-    ...(systems ? { systems } : {}),
-  }
-}
-
-function renderApp(client: MockClient, width = 110, height = 34) {
-  return testRender(<App client={client} prefill={{}} />, { width, height })
-}
-
-// Menu-row / button boxes stretch to fill their column's width (same layout the
-// already-proven MainMenu mouse test relies on), so a click anywhere across a
-// row's line hits it; x=6 mirrors App.test.tsx's own working coordinate.
-const CLICK_X = 6
-
-/** Join the room, land a `state` frame, then keyboard-navigate into "我的角色". */
-async function openCharacterScreen(client: MockClient, width = 110, height = 34, frame: ServerFrame = stateFrame()) {
-  const harness = await renderApp(client, width, height)
-  await harness.flush()
-  act(() => client.push(PLAYER_WELCOME))
-  await harness.waitForFrame((text) => text.includes("我的角色"))
-  act(() => client.push(frame))
-  await harness.flush()
-
-  await act(async () => harness.mockInput.pressArrow("down"))
-  await harness.flush()
-  await act(async () => harness.mockInput.pressEnter())
-  await harness.flush()
-  return harness
-}
-
-describe("CharacterScreen system picker (protocol 2.3)", () => {
-  test("the picker lists exactly the server's systems; roll mode drops the ones with no make_char word", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
-
-    // Roll mode (the default): only a system whose pack declares a make-character
-    // word can be rolled, so `wod` is not offered here.
-    const roll = await waitForFrame((text) => text.includes("规则系统"))
-    expect(roll).toContain("coc7")
-    expect(roll).toContain("dnd5e")
-    expect(roll).not.toContain("wod")
-    // Ids verbatim off the wire — the client invents no display names.
-    expect(roll).not.toContain("CoC 7")
-    expect(roll).not.toContain("D&D")
-    // The manual/point-buy lane is gone: its budgets live in a pack's constraints
-    // and no frame carries them.
-    expect(roll).not.toContain("手动设置")
-
-    // Description mode can target any system the server reported.
-    await act(async () => mockInput.pressArrow("down"))
-    await flush()
-    const persona = await waitForFrame((text) => text.includes("wod"))
-    expect(persona).toContain("coc7")
-    expect(persona).toContain("dnd5e")
-    expect(persona).toContain("wod")
-
-    act(() => renderer.destroy())
+describe("CharacterScreen", () => {
+  test("no character: create with new_character and the chosen system's id, then land on the sheet", async () => {
+    const server = new FakeServer()
+    server.views.set("me", ME_NONE)
+    server.views.set("characters", SYSTEMS)
+    server.onCall = (method, params) => {
+      if (method === "command.run" && params.id === "new_character") {
+        server.view("me", ME_SHEET)
+        return { ok: true, data: { id: "ch-1" } }
+      }
+      return { ok: true }
+    }
+    const { harness, screen, calls } = await open(server)
+    const form = await screen("the create form", (text) => text.includes("Call of Cthulhu 7e"))
+    // The room's own system is offered first.
+    expect(form.indexOf("Call of Cthulhu 7e")).toBeLessThan(form.indexOf("D&D 5e"))
+    harness.mockInput.pressEnter()
+    await pump()
+    await harness.mockInput.typeText("Ada Lovelace")
+    harness.mockInput.pressEnter()
+    await waitFor("the command", () => calls().length === 1)
+    expect(calls()[0]).toEqual({ id: "new_character", args: { system: "coc7", name: "Ada Lovelace" } })
+    const sheet = await screen("the sheet and its actions", (text) => text.includes("Edit the sheet") && text.includes("Ada Lovelace"))
+    expect(sheet).toContain("外貌")
+    expect(sheet).toContain("Spot Hidden")
   })
 
-  test("a server that reports no systems gets a plain message instead of a create form", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame } = await openCharacterScreen(
-      client,
-      110,
-      34,
-      // A pre-2.3 server: no `systems` on the frame at all.
-      stateFrame({ systems: undefined as unknown as RuleSystemEntry[] }),
-    )
-    await flush()
-
-    const frame = await waitForFrame((text) => text.includes("服务端没有报告任何规则系统"))
-    // No method picker, no system picker, no submit button — nothing to guess with.
-    expect(frame).not.toContain("建卡方式")
-    expect(frame).not.toContain("自动掷骰")
-    expect(frame).not.toContain("coc7")
-    expect(client.sent).toEqual([])
-
-    act(() => renderer.destroy())
-  })
-})
-
-describe("CharacterScreen creation commands", () => {
-  test("roll sends `.<make_char> <name>` using the picked system's own word", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
-    await waitForFrame((t) => t.includes("规则系统"))
-
-    // Tab from method -> system -> name, type a name, submit.
-    await act(async () => {
-      mockInput.pressTab()
-      mockInput.pressTab()
-    })
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("漱雪")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-
-    // The first offered system (coc7) declares `coc`, so that is the word sent —
-    // the client never spells a rule system out of its own knowledge.
-    expect(client.sent).toEqual([".coc 漱雪"])
-
-    // Awaiting the reply plays the dice-tumble flicker (bounded, not a spinner) —
-    // dice glyphs only, no per-system characteristic labels.
-    const rolling = await waitForFrame((t) => t.includes("掷骰中"))
-    expect(rolling).toContain("漱雪…")
-    // Generic dice faces, never a system's characteristic names.
-    expect(rolling).not.toContain("STR")
-    expect(rolling).not.toContain("力量")
-
-    // The server replies with a refreshed `state` frame — there is no scoped
-    // response, so the UI reacts to this arrival, not to a return value.
-    act(() => client.push(stateFrame({ character: SHEET })))
-    await flush()
-
-    // The roll "lands": the landed sheet names its OWN attributes (storage keys off
-    // the wire), which is the only place attribute names come from.
-    const landed = await waitForFrame((t) => t.includes("落定"))
-    expect(landed).toContain("漱雪")
-    expect(landed).toContain("STR 55")
-
-    // After the bounded landing flourish the screen drops back into view mode.
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)))
-    await flush()
-    const settled = await waitForFrame((t) => t.includes("重掷 / 新建"))
-    expect(settled).not.toContain("建卡方式")
-    expect(settled).toContain("STR 55")
-
-    act(() => renderer.destroy())
+  test("a refused creation keeps the form and shows the server's reason", async () => {
+    const server = new FakeServer()
+    server.views.set("me", ME_NONE)
+    server.views.set("characters", SYSTEMS)
+    server.onCall = () => ({ ok: false, code: "name_taken", message: "Someone at this table is already called Ada." })
+    const { harness, screen } = await open(server)
+    await screen("the create form", (text) => text.includes("Call of Cthulhu 7e"))
+    harness.mockInput.pressEnter()
+    await pump()
+    await harness.mockInput.typeText("Ada")
+    harness.mockInput.pressEnter()
+    const frame = await screen("the reason", (text) => text.includes("already called Ada."))
+    expect(frame).toContain("Rule system")
   })
 
-  test("picking the second system rolls with ITS word, not the first one's", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
-    await waitForFrame((t) => t.includes("规则系统"))
-
-    // Enter on the method select hands focus to the system picker; down = dnd5e.
-    await act(async () => mockInput.pressEnter())
-    await flush()
-    await act(async () => mockInput.pressArrow("down"))
-    await flush()
-    await act(async () => mockInput.pressTab())
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("米拉")
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    expect(client.sent).toEqual([".dnd 米拉"])
-
-    act(() => renderer.destroy())
+  test("edit the sheet: pick a stat, type a value, sheet set with a typed write", async () => {
+    const server = new FakeServer()
+    server.views.set("me", ME_SHEET)
+    server.views.set("characters", { ...SYSTEMS, mine: "ch-1" })
+    server.onCall = () => ({ ok: true, text: "Ada Lovelace: STR 70" })
+    const { harness, screen, calls } = await open(server)
+    await screen("the actions", (text) => text.includes("Edit the sheet"))
+    harness.mockInput.pressArrow("down")
+    await pump()
+    harness.mockInput.pressEnter()
+    await screen("the editor", (text) => text.includes("Pick a value"))
+    await pump()
+    harness.mockInput.pressEnter()
+    await pump()
+    await harness.mockInput.typeText("70")
+    await screen("the typed value", (text) => text.includes("70"))
+    harness.mockInput.pressEnter()
+    await waitFor("the write", () => calls().length === 1)
+    expect(calls()[0]).toEqual({ id: "sheet", args: { op: "set", writes: [{ name: "STR", op: "=", value: "70" }] } })
+    await screen("the answer", (text) => text.includes("Ada Lovelace: STR 70"))
   })
 
-  test("mouse click with a blank name sends the bare make-char word", async () => {
-    const client = new MockClient()
-    const harness = await renderApp(client)
-    await harness.flush()
-    act(() => client.push(PLAYER_WELCOME))
-    const menu = await harness.waitForFrame((t) => t.includes("我的角色"))
-    act(() => client.push(stateFrame()))
-    await harness.flush()
-    const menuRowY = menu.split("\n").findIndex((line) => line.includes("我的角色"))
-    expect(menuRowY).toBeGreaterThan(0)
-
-    await act(async () => {
-      await harness.mockMouse.click(CLICK_X, menuRowY)
-    })
-    await harness.flush()
-
-    const form = await harness.waitForFrame((t) => t.includes("⚄ 自动掷骰"))
-    const buttonRowY = form.split("\n").findIndex((line) => line.includes("⚄ 自动掷骰"))
-    expect(buttonRowY).toBeGreaterThan(0)
-
-    await act(async () => {
-      await harness.mockMouse.click(CLICK_X, buttonRowY)
-    })
-    await harness.flush()
-
-    expect(client.sent).toEqual([".coc"])
-
-    act(() => harness.renderer.destroy())
+  test("rename, release and a confirmed delete are the rename, pc release and sheet clear commands", async () => {
+    const server = new FakeServer()
+    server.views.set("me", ME_SHEET)
+    server.views.set("characters", { ...SYSTEMS, mine: "ch-1" })
+    const { harness, screen, calls } = await open(server)
+    await screen("the actions", (text) => text.includes("Rename"))
+    const go = async (downs: number) => {
+      for (let i = 0; i < downs; i += 1) {
+        harness.mockInput.pressArrow("down")
+        await pump()
+      }
+      harness.mockInput.pressEnter()
+      await pump()
+    }
+    await go(2)
+    await screen("the rename field", (text) => text.includes("Enter rename"))
+    for (let i = 0; i < 12; i += 1) harness.mockInput.pressBackspace()
+    await harness.mockInput.typeText("Ada King")
+    harness.mockInput.pressEnter()
+    await waitFor("the rename", () => calls().length === 1)
+    expect(calls()[0]).toEqual({ id: "rename", args: { name: "Ada King" } })
+    await screen("back on the actions", (text) => text.includes("Release my character"))
+    await go(4)
+    await waitFor("the release", () => calls().length === 2)
+    expect(calls()[1]).toEqual({ id: "pc", args: { op: "release" } })
+    await screen("back on the actions", (text) => text.includes("Delete my character"))
+    await go(5)
+    await screen("the confirmation", (text) => text.includes("Confirm delete character"))
+    harness.mockInput.pressEnter()
+    await waitFor("the delete", () => calls().length === 3)
+    expect(calls()[2]).toEqual({ id: "sheet", args: { op: "clear" } })
   })
 
-  test("description mode sends `.genchar <systemId> <name> | <description>`", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
-    await waitForFrame((t) => t.includes("建卡方式"))
-
-    await act(async () => mockInput.pressArrow("down"))
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-
-    await act(async () => mockInput.pressTab())
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("阿达")
-    })
-    await flush()
-    await act(async () => mockInput.pressTab())
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("冷静的医生,在雾港调查失踪案")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-
-    // The canonical system ID goes on the wire, not a dialect word.
-    expect(client.sent).toEqual([".genchar coc7 阿达 | 冷静的医生,在雾港调查失踪案"])
-
-    await act(async () => mockInput.pressEscape())
-    await flush()
-    act(() => renderer.destroy())
-  })
-
-  test("import mode sends `.import <path> <systemId> pc`", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client)
-    await waitForFrame((t) => t.includes("建卡方式"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-    await waitForFrame((t) => t.includes("⚄ 导入"))
-
-    await act(async () => mockInput.pressTab())
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("/cards/ada.json")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-
-    expect(client.sent).toEqual([".import /cards/ada.json coc7 pc"])
-    const sent = await waitForFrame((t) => t.includes("已发送"))
-    expect(sent).toContain(".import /cards/ada.json coc7 pc")
-
-    await act(async () => mockInput.pressEscape())
-    await flush()
-    act(() => renderer.destroy())
-  })
-
-  test("80 columns gives the creation form full width and clears it when the sheet lands", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(client, 80, 24)
-
-    const create = await waitForFrame((text) => text.includes("建卡方式") && text.includes("规则系统"))
-    expect(create).not.toContain("CHARACTER")
-    expect(create.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
-
-    await act(async () => {
-      mockInput.pressTab()
-      mockInput.pressTab()
-    })
-    await flush()
-    await act(async () => {
-      await mockInput.typeText("八十列调查员")
-      mockInput.pressEnter()
-    })
-    await flush()
-
-    act(() => client.push(stateFrame({ character: { ...SHEET, name: "八十列调查员" } })))
-    await flush()
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)))
-    await flush()
-
-    const settled = await waitForFrame((text) => text.includes("重掷 / 新建"))
-    expect(settled).not.toContain("建卡方式")
-    expect(settled.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
-
-    act(() => renderer.destroy())
-  })
-})
-
-describe("CharacterScreen view actions", () => {
-  test("微调 sends the free-text `.st <text>` exactly as typed", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(
-      client,
-      80,
-      24,
-      stateFrame({ character: SHEET }),
-    )
-
-    const view = await waitForFrame((t) => t.includes("重掷 / 新建"))
-    expect(view).toContain("微调")
-
-    await act(async () => mockInput.pressArrow("down"))
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-    const tweak = await waitForFrame((t) => t.includes("微调指令"))
-    expect(tweak).toContain("⚄ 应用")
-    expect(tweak.split("\n").every((line) => Bun.stringWidth(line) <= 80)).toBe(true)
-
-    await act(async () => {
-      await mockInput.typeText("力量60 侦查70")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-
-    expect(client.sent).toEqual([".st 力量60 侦查70"])
-    const sent = await waitForFrame((t) => t.includes("已发送"))
-    expect(sent).toContain(".st 力量60 侦查70")
-
-    act(() => renderer.destroy())
-  })
-
-  test("重算 sends the canonical `.st finalize`", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(
-      client,
-      110,
-      34,
-      stateFrame({ character: SHEET }),
-    )
-    await waitForFrame((t) => t.includes("重掷 / 新建"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-
-    // The canonical word, never a locale dialect one: a client issuing the command
-    // programmatically has no locale to speak.
-    expect(client.sent).toEqual([".st finalize"])
-
-    act(() => renderer.destroy())
-  })
-
-  test("delete needs a second confirmation before it sends `.st delete`", async () => {
-    const client = new MockClient()
-    const { renderer, flush, waitForFrame, mockInput } = await openCharacterScreen(
-      client,
-      110,
-      34,
-      stateFrame({ character: SHEET }),
-    )
-    await waitForFrame((t) => t.includes("删除当前角色"))
-
-    await act(async () => {
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-      mockInput.pressArrow("down")
-    })
-    await flush()
-    await act(async () => mockInput.pressEnter())
-    await flush()
-    expect(client.sent).not.toContain(".st delete")
-    await waitForFrame((t) => t.includes("确认删除角色"))
-
-    await act(async () => mockInput.pressEnter())
-    await flush()
-    expect(client.sent).toEqual([".st delete"])
-
-    act(() => renderer.destroy())
-  })
-
-  test("the sheet view renders the wire's own attribute keys, in wire order, knowing no system", async () => {
-    // Protocol 2.3: the server sends the pack's declared characteristics only, in the
-    // pack's order — so a community pack's own keys render exactly like CoC's, and this
-    // client keeps no table of what to hide or how to sort.
-    const client = new MockClient()
-    const { renderer, waitForFrame } = await openCharacterScreen(
-      client,
-      110,
-      34,
-      stateFrame({
-        character: {
-          ...SHEET,
-          system: "homebrew",
-          attributes: { 根值: 12, Grit: 3, STR: 55 },
-        },
-      }),
-    )
-
-    const frame = await waitForFrame((t) => t.includes("属性 / ATTRIBUTES"))
-    expect(frame).toContain("根值")
-    expect(frame).toContain("Grit")
-    expect(frame.indexOf("根值")).toBeLessThan(frame.indexOf("Grit"))
-    expect(frame.indexOf("Grit")).toBeLessThan(frame.indexOf("STR"))
-    expect(frame).toMatch(/STR\s+55/)
-
-    act(() => renderer.destroy())
+  test("from the actions: claim lists the characters on offer and runs pc claim", async () => {
+    const server = new FakeServer()
+    server.views.set("me", ME_SHEET)
+    server.views.set("characters", { ...SYSTEMS, mine: "ch-1", claimable: [{ id: "pre-7", name: "Professor Armitage", blurb: "Head librarian.", source: { kind: "pack", id: "p" }, player: null }] })
+    const { harness, screen, calls } = await open(server)
+    await screen("the actions", (text) => text.includes("Claim a ready-made character"))
+    harness.mockInput.pressArrow("down")
+    await pump()
+    harness.mockInput.pressEnter()
+    await screen("the offer", (text) => text.includes("Professor Armitage") && text.includes("Head librarian."))
+    harness.mockInput.pressEnter()
+    await waitFor("the claim", () => calls().length === 1)
+    expect(calls()[0]).toEqual({ id: "pc", args: { op: "claim", name: "pre-7" } })
   })
 })

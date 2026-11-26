@@ -6,8 +6,7 @@ import type { SavedServer } from "../connectMemory"
 import { MaskedInput } from "../components/MaskedInput"
 import type { Palette } from "../themes"
 
-// Prefilled defaults come from CLI args (see index.tsx); the host falls back to
-// the local dev server and the name to a generic investigator.
+// Prefilled defaults come from CLI args and the remembered connect file (see index.tsx).
 export interface ConnectDefaults {
   host?: string
   key?: string
@@ -27,11 +26,11 @@ export interface ConnectScreenProps {
   onLocaleChange?: (locale: TuiLocale) => void
   // One-click local server install/state directory; edited on the connect screen and persisted.
   onLocalServerHomeChange?: (path: string) => void
-  // Spawn a local server and log in as Keeper (one-click host & play).
+  // Start a local server and join it as the room's admin (one-click host & play).
   onHostLocal?: () => void
-  // The shell owns the client: it awaits connect(url) then join(key,name) and
-  // advances to the menu when `welcome` arrives.
-  onSubmit: (url: string, key: string, name: string) => void
+  // The shell owns the connection: it dials the ticket with the key and advances to the
+  // menu when the welcome arrives.
+  onSubmit: (ticket: string, key: string, name: string) => void
   // Remove a saved-server row (the "✕" affordance). Optional: without it the rows render
   // with no delete control at all (a caller that hasn't wired persistence yet).
   onForgetServer?: (entry: SavedServer) => void
@@ -230,7 +229,8 @@ export function ConnectScreen({
 
         {error ? (
           <box marginTop={1}>
-            <text fg={theme.fumble} wrapMode="none" truncate>{error}</text>
+            {/* Wrapped, never cut: the reason is the part the person has to act on. */}
+            <text fg={theme.fumble}>{error}</text>
           </box>
         ) : null}
 

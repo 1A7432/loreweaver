@@ -1,33 +1,31 @@
-import {
-  FrameType,
-  isPingFrame,
-  isServerFrame,
-  type ClientFrame,
-  type ClientInfo,
-  type MediaFrame,
-  type MediaPayload,
-  type MediaUpload,
-  type ServerFrame,
-} from "loreweaver-protocol"
+// The protocol 3.0 carrier: peer-to-peer QUIC over iroh, dialled by ticket.
+//
+// One connection carries ONE bidirectional stream: the control stream, newline-delimited JSON,
+// one compact object per line, in both directions. The server never pings — the client does
+// (`connection.ts`). There are no media streams yet: the byte channel is not built on the server.
+// This file only moves lines; what they mean is the protocol `Session`'s business.
+import { PROTOCOL_MAJOR, type ClientFrame } from "loreweaver-protocol/v3"
 
-// The ALPN + newline framing MUST match net/iroh_server.py. A QUIC bidi stream is a raw byte
-// stream (no message boundaries), so every frame is one compact JSON object + "\n".
-const ALPN = "loreweaver/tui/1"
+/** The ALPN carries the protocol major: a 2.x server refuses the connection instead of misreading it. */
+export const ALPN = `loreweaver/${PROTOCOL_MAJOR}`
 const NEWLINE = 10
-/** Same 20 MiB cap the OneBot attachment path uses; refuse before reading the body. */
-export const MAX_IROH_MEDIA_BYTES = 20 * 1024 * 1024
-const enc = new TextEncoder()
-const dec = new TextDecoder()
-const toBytes = (text: string): number[] => Array.from(enc.encode(text))
+const READ_CHUNK = 64 * 1024
+/** How long a close waits for queued lines before hanging up anyway. */
+const CLOSE_DRAIN_MS = 2_000
+/** A line longer than this is not a frame anyone sends: the connection is dropped instead of buffering it. */
+export const MAX_LINE_BYTES = 8 * 1024 * 1024
 
-// A minimal structural subset of `@number0/iroh`'s real surface — just enough for a link to
-// dial and transfer. Kept loose (not the native module's own classes) so tests can inject a
-// plain-object mock via `loadIroh` without pulling in the native module at all.
+const encoder = new TextEncoder()
+const bytes = (text: string): number[] => Array.from(encoder.encode(text))
+
+// The structural subset of `@number0/iroh` this file uses. Loose on purpose, so a test can hand
+// in a plain-object double without loading the native module.
 export interface IrohRecvStreamLike {
   read(sizeLimit: number): Promise<number[] | null>
 }
 export interface IrohSendStreamLike {
   writeAll(buf: number[]): Promise<void>
+  finish?(): Promise<void>
 }
 export interface IrohConnectionLike {
   openBi(): Promise<{ send: IrohSendStreamLike; recv: IrohRecvStreamLike }>
@@ -40,304 +38,201 @@ export interface IrohEndpointLike {
 }
 export interface IrohEndpointBuilderLike {
   bind(): Promise<IrohEndpointLike>
+  bindAddr?(addr: string): void
+  relayMode?(mode: unknown): void
 }
 export interface IrohModuleLike {
   Endpoint: { builder(): IrohEndpointBuilderLike }
   presetN0(builder: IrohEndpointBuilderLike): void
+  presetMinimal?(builder: IrohEndpointBuilderLike): void
+  RelayMode?: { disabled(): unknown }
   EndpointTicket: { fromString(ticket: string): { endpointAddr(): unknown } }
 }
 
 export type LoadIroh = () => Promise<IrohModuleLike>
 
+// Imported lazily: nothing native is loaded until a ticket is actually dialled.
 export const defaultLoadIroh: LoadIroh = () => import("@number0/iroh") as unknown as Promise<IrohModuleLike>
 
-export async function bindIrohEndpoint(loadIroh: LoadIroh): Promise<{
-  iroh: IrohModuleLike
-  endpoint: IrohEndpointLike
-}> {
-  const iroh = await loadIroh()
+/**
+ * `n0`: the public relays — what a remote ticket needs. `local`: loopback only, no relay — for a
+ * server this client started itself with `serve --local` (works with no network at all) and for tests.
+ */
+export type IrohMode = "n0" | "local"
+
+/** What a dialled connection offers its owner. */
+export interface Transport {
+  /** One frame, written as one line; writes are serialised so lines never interleave. */
+  send(frame: ClientFrame): void
+  /** Start reading: `onValue` once per parsed line, `onEnd` once when the stream ends or breaks. */
+  start(onValue: (value: unknown) => void, onEnd: (reason: string) => void): void
+  /** Close the connection and its endpoint. `onEnd` is NOT called for a close asked for here. */
+  close(): void
+}
+
+export type Dialer = (ticket: string) => Promise<Transport>
+
+/** An iroh ticket: base32, starting `endpoint`. Only the shape is checked; the dial decides the rest. */
+export function looksLikeTicket(value: string): boolean {
+  return /^endpoint[a-z0-9]{20,}$/.test(value.trim())
+}
+
+function closeQuietly(endpoint: IrohEndpointLike | undefined): void {
+  try {
+    const closing = endpoint?.close?.()
+    if (closing && typeof (closing as Promise<unknown>).catch === "function") void (closing as Promise<unknown>).catch(() => {})
+  } catch {
+    // already gone
+  }
+}
+
+async function bindEndpoint(iroh: IrohModuleLike, mode: IrohMode): Promise<IrohEndpointLike> {
   const builder = iroh.Endpoint.builder()
+  if (mode === "local" && iroh.presetMinimal && iroh.RelayMode && builder.bindAddr && builder.relayMode) {
+    iroh.presetMinimal(builder)
+    builder.relayMode(iroh.RelayMode.disabled())
+    builder.bindAddr("127.0.0.1:0")
+    return builder.bind()
+  }
   iroh.presetN0(builder)
   const endpoint = await builder.bind()
   await endpoint.online()
-  return { iroh, endpoint }
+  return endpoint
 }
 
-export function ticketAddr(iroh: IrohModuleLike, ticket: string): unknown {
-  return iroh.EndpointTicket.fromString(ticket.trim()).endpointAddr()
+export interface DialOptions {
+  mode?: IrohMode
+  loadIroh?: LoadIroh
 }
 
-export function closeIrohEndpoint(endpoint: IrohEndpointLike | undefined): void {
+/** Dial `ticket` and open the control stream. Rejects when the peer cannot be reached. */
+export async function dialIroh(ticket: string, options: DialOptions = {}): Promise<Transport> {
+  const iroh = await (options.loadIroh ?? defaultLoadIroh)()
+  const endpoint = await bindEndpoint(iroh, options.mode ?? "n0")
   try {
-    const result = endpoint?.close?.()
-    // The real `Endpoint.close()` returns a Promise; swallow a rejection so it never
-    // surfaces as an unhandled promise rejection during teardown.
-    if (result && typeof (result as Promise<unknown>).catch === "function") {
-      void (result as Promise<unknown>).catch(() => {})
-    }
-  } catch {
-    // ignore — already gone
+    const addr = iroh.EndpointTicket.fromString(ticket.trim()).endpointAddr()
+    const connection = await endpoint.connect(addr, bytes(ALPN))
+    const stream = await connection.openBi()
+    return new ControlStream(endpoint, connection, stream.send, stream.recv)
+  } catch (error) {
+    closeQuietly(endpoint)
+    throw error
   }
 }
 
-/**
- * One QUIC connection's control stream + media streams. Owners (`IrohClient`, `LinkPool`)
- * bind the endpoint and decide when to redial; this class never binds an endpoint and never
- * redials. Each instance starts a FRESH write chain (F13): a pending `writeAll` against a
- * dead stream must not silence the next connection.
- */
-export class IrohLink {
-  private sendStream: IrohSendStreamLike | undefined
-  private connection: IrohConnectionLike | undefined
-  private recv: IrohRecvStreamLike | undefined
-  private writeChain: Promise<void> = Promise.resolve()
-  private closed = false
-  private ended = false
-  private started = false
-  private readonly handlers = new Set<(frame: ServerFrame) => void>()
-  private readonly unexpectedEndHandlers = new Set<() => void>()
+/** A dialler bound to one mode. */
+export function irohDialer(options: DialOptions = {}): Dialer {
+  return (ticket) => dialIroh(ticket, options)
+}
 
-  private constructor(connection: IrohConnectionLike, send: IrohSendStreamLike, recv: IrohRecvStreamLike) {
-    this.connection = connection
-    this.sendStream = send
-    this.recv = recv
-  }
+/** The control stream of one connection. Each instance starts a fresh write chain. */
+export class ControlStream implements Transport {
+  #endpoint: IrohEndpointLike | undefined
+  #connection: IrohConnectionLike | undefined
+  #send: IrohSendStreamLike | undefined
+  readonly #recv: IrohRecvStreamLike
+  #writes: Promise<void> = Promise.resolve()
+  #closed = false
+  #started = false
 
-  static async open(endpoint: IrohEndpointLike, addr: unknown): Promise<IrohLink> {
-    const conn = await connectWithRetry(endpoint, addr, toBytes(ALPN))
-    const bi = await conn.openBi()
-    return new IrohLink(conn, bi.send, bi.recv)
-  }
-
-  /** Begin the control-stream read loop. Call after handlers are attached and join is sent. */
-  start(): void {
-    if (this.started || this.closed || !this.recv) return
-    this.started = true
-    void this.readLoop(this.recv)
-  }
-
-  get isClosed(): boolean {
-    return this.closed
-  }
-
-  /** False once `close()` ran or the control-stream read loop ended (EOF / reset). */
-  get isAlive(): boolean {
-    return !this.closed && !this.ended
+  constructor(endpoint: IrohEndpointLike | undefined, connection: IrohConnectionLike, send: IrohSendStreamLike, recv: IrohRecvStreamLike) {
+    this.#endpoint = endpoint
+    this.#connection = connection
+    this.#send = send
+    this.#recv = recv
   }
 
   send(frame: ClientFrame): void {
-    const line = toBytes(`${JSON.stringify(frame)}\n`)
-    // Serialize writes: interleaved writeAll on one QUIC stream would corrupt the framing.
-    // `this.sendStream` is read at write-time (not capture-time), so a write queued just
-    // before close naturally no-ops once the stream is cleared.
-    this.writeChain = this.writeChain.then(() => this.sendStream?.writeAll(line)).catch(() => {})
+    const send = this.#send
+    if (this.#closed || send === undefined) return
+    const line = bytes(`${JSON.stringify(frame)}\n`)
+    // A line queued before `close()` still goes out: close waits for the queue, then hangs up.
+    // A failed write leaves the chain usable for the next line (the read side notices a dead link).
+    this.#writes = this.#writes.then(() => send.writeAll(line)).catch(() => {})
   }
 
-  join(key: string, name?: string, clientInfo?: ClientInfo): void {
-    this.send({
-      type: FrameType.Join,
-      key,
-      ...(name ? { name } : {}),
-      ...(clientInfo ? { client: clientInfo } : {}),
-    })
-  }
-
-  sendInput(text: string): void {
-    this.send({ type: FrameType.Input, text })
-  }
-
-  async uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined> {
-    const accept = await this.offerMedia({
-      type: FrameType.MediaOffer,
-      name: upload.name,
-      mime: upload.mime,
-      size: upload.bytes.byteLength,
-      sha256: upload.sha256,
-    })
-    if (accept.existing) return accept.media
-    if (!accept.upload_id) return accept.media
-    const stream = await this.openMediaStream()
-    await stream.send.writeAll(toBytes(`${JSON.stringify({ op: "put", upload_id: accept.upload_id })}\n`))
-    for (let offset = 0; offset < upload.bytes.byteLength; offset += 65536) {
-      await stream.send.writeAll(Array.from(upload.bytes.subarray(offset, offset + 65536)))
-    }
-    // The server confirms the stored blob with a `put_ok` line, or reports a localized error
-    // line (hash/size mismatch, unsafe SVG, …) — surface it instead of pretending success.
-    const reply = await new IrohMediaReader(stream.recv).readHeader()
-    if (reply.op !== "put_ok") throw new Error(String(reply.message ?? "Iroh media upload was not acknowledged."))
-    return accept.media
-  }
-
-  async getMedia(hash: string): Promise<MediaPayload> {
-    const stream = await this.openMediaStream()
-    await stream.send.writeAll(toBytes(`${JSON.stringify({ op: "get", hash })}\n`))
-    const reader = new IrohMediaReader(stream.recv)
-    const header = await reader.readHeader()
-    // An error reply is a `{type:"error"}` line with no body — without this check it would
-    // silently read as an empty zero-byte payload.
-    if (header.op !== "get") throw new Error(String(header.message ?? "Iroh media download failed."))
-    const size = Number(header.size ?? 0)
-    if (!Number.isFinite(size) || size < 0 || size > MAX_IROH_MEDIA_BYTES) {
-      throw new Error("Iroh media download exceeds the size cap.")
-    }
-    const bytes = await reader.readExact(size)
-    return {
-      hash: String(header.hash ?? hash),
-      mime: String(header.mime ?? ""),
-      name: String(header.name ?? ""),
-      bytes,
-    }
-  }
-
-  onMessage(cb: (frame: ServerFrame) => void): () => void {
-    this.handlers.add(cb)
-    return () => this.handlers.delete(cb)
-  }
-
-  onUnexpectedEnd(cb: () => void): () => void {
-    this.unexpectedEndHandlers.add(cb)
-    return () => this.unexpectedEndHandlers.delete(cb)
+  start(onValue: (value: unknown) => void, onEnd: (reason: string) => void): void {
+    if (this.#started || this.#closed) return
+    this.#started = true
+    void this.#read(onValue, onEnd)
   }
 
   close(): void {
-    this.closed = true
-    this.sendStream = undefined
-    this.recv = undefined
-    try {
-      this.connection?.close?.(0n, [])
-    } catch {
-      // ignore — already gone
-    }
-    this.connection = undefined
-  }
-
-  private async readLoop(recv: IrohRecvStreamLike): Promise<void> {
-    let buffer = new Uint8Array(0)
-    try {
-      while (!this.closed) {
-        const chunk = await recv.read(65536)
-        if (!chunk || chunk.length === 0) break // EOF / reset
-        buffer = concat(buffer, Uint8Array.from(chunk))
-        let nl: number
-        while ((nl = buffer.indexOf(NEWLINE)) >= 0) {
-          this.dispatch(dec.decode(buffer.subarray(0, nl)))
-          buffer = buffer.subarray(nl + 1)
-        }
-      }
-    } catch {
-      // stream closed / reset — nothing more to read
-    }
-    if (!this.closed) {
-      this.ended = true
-      for (const handler of this.unexpectedEndHandlers) {
+    if (this.#closed) return
+    this.#closed = true
+    const send = this.#send
+    const connection = this.#connection
+    const endpoint = this.#endpoint
+    this.#send = undefined
+    this.#connection = undefined
+    this.#endpoint = undefined
+    // Let queued lines go out, then hang up — but never wait on a write stuck on a dead link.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const drained = Promise.race([
+      this.#writes.then(() => send?.finish?.()),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, CLOSE_DRAIN_MS)
+      }),
+    ])
+    void drained
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timer)
         try {
-          handler()
+          connection?.close?.(0n, bytes("bye"))
         } catch {
-          // a throwing subscriber must not reject the voided read loop
+          // already gone
+        }
+        closeQuietly(endpoint)
+      })
+  }
+
+  async #read(onValue: (value: unknown) => void, onEnd: (reason: string) => void): Promise<void> {
+    const decoder = new TextDecoder("utf-8")
+    let pending: Uint8Array = new Uint8Array(0)
+    let reason = "stream ended"
+    try {
+      while (!this.#closed) {
+        const chunk = await this.#recv.read(READ_CHUNK)
+        if (!chunk || chunk.length === 0) break
+        pending = concat(pending, Uint8Array.from(chunk))
+        let newline: number
+        while ((newline = pending.indexOf(NEWLINE)) >= 0) {
+          const line = decoder.decode(pending.subarray(0, newline))
+          pending = pending.subarray(newline + 1)
+          if (this.#closed) return
+          deliver(line, onValue)
+        }
+        if (pending.length > MAX_LINE_BYTES) {
+          reason = "line too long"
+          break
         }
       }
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error)
     }
-  }
-
-  private dispatch(text: string): void {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      return // untrusted transport: a non-JSON line must never throw out of the read loop
-    }
-    if (isPingFrame(parsed)) {
-      this.send({ type: FrameType.Pong, t: parsed.t })
-      return
-    }
-    if (!isServerFrame(parsed)) return
-    for (const handler of this.handlers) handler(parsed)
-  }
-
-  private offerMedia(frame: ClientFrame & { type: typeof FrameType.MediaOffer }): Promise<Extract<ServerFrame, { type: "media_accept" }>> {
-    return new Promise((resolve, reject) => {
-      const off = this.onMessage((reply) => {
-        if (reply.type === FrameType.MediaAccept) {
-          off()
-          resolve(reply)
-        } else if (reply.type === FrameType.Error) {
-          off()
-          reject(new Error(reply.message))
-        }
-      })
-      this.send(frame)
-    })
-  }
-
-  private async openMediaStream(): Promise<{ send: IrohSendStreamLike; recv: IrohRecvStreamLike }> {
-    if (!this.connection) throw new Error("Iroh connection is not open.")
-    return await this.connection.openBi()
+    if (this.#closed) return
+    this.close()
+    onEnd(reason)
   }
 }
 
-async function connectWithRetry(
-  endpoint: IrohEndpointLike,
-  addr: unknown,
-  alpn: number[],
-  tries = 2,
-): Promise<IrohConnectionLike> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < tries; attempt++) {
-    try {
-      return await endpoint.connect(addr, alpn)
-    } catch (error) {
-      lastError = error // p2p first-connect can flake on relay warm-up — one retry
-    }
+function deliver(line: string, onValue: (value: unknown) => void): void {
+  if (line.trim().length === 0) return
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch {
+    // An unreadable line is dropped; the protocol decoder is the judge of everything else.
+    return
   }
-  throw lastError instanceof Error ? lastError : new Error("Iroh connection failed.")
+  onValue(value)
 }
 
 function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
+  if (a.length === 0) return b
   const out = new Uint8Array(a.length + b.length)
   out.set(a, 0)
   out.set(b, a.length)
   return out
-}
-
-class IrohMediaReader {
-  private buffer = new Uint8Array(0)
-
-  constructor(private readonly recv: IrohRecvStreamLike) {}
-
-  async readHeader(): Promise<Record<string, unknown>> {
-    while (true) {
-      const nl = this.buffer.indexOf(NEWLINE)
-      if (nl >= 0) {
-        const line = this.buffer.subarray(0, nl)
-        this.buffer = this.buffer.subarray(nl + 1)
-        const parsed = JSON.parse(dec.decode(line))
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>
-        throw new Error("Invalid media header.")
-      }
-      const chunk = await this.recv.read(65536)
-      if (!chunk || chunk.length === 0) throw new Error("Iroh media stream ended before header.")
-      this.buffer = concat(this.buffer, Uint8Array.from(chunk))
-    }
-  }
-
-  async readExact(size: number): Promise<Uint8Array> {
-    const out = new Uint8Array(size)
-    let offset = 0
-    if (this.buffer.byteLength > 0) {
-      const take = Math.min(size, this.buffer.byteLength)
-      out.set(this.buffer.subarray(0, take), 0)
-      this.buffer = this.buffer.subarray(take)
-      offset += take
-    }
-    while (offset < size) {
-      const chunk = await this.recv.read(Math.min(65536, size - offset))
-      if (!chunk || chunk.length === 0) throw new Error("Iroh media stream ended before body.")
-      const bytes = Uint8Array.from(chunk)
-      const take = Math.min(size - offset, bytes.byteLength)
-      out.set(bytes.subarray(0, take), offset)
-      offset += take
-      if (take < bytes.byteLength) this.buffer = concat(bytes.subarray(take), this.buffer)
-    }
-    return out
-  }
 }

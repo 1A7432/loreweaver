@@ -1,378 +1,159 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useKeyboard, useTerminalDimensions, useTimeline } from "@opentui/react"
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import {
-  FrameType,
-  stripControlChars,
-  type ConnectionStatus,
-  type DiceFrame,
-  type MediaFrame,
-  type MediaPayload,
-  type MediaUpload,
-  type PackCardEntry,
-  type PresenceFrame,
-  type ServerFrame,
-  type StateFrame,
-  type TurnStatusFrame,
-  type UiFrame,
-  type UiManifestPanel,
-  type WelcomeFrame,
-} from "loreweaver-protocol"
-import { HeaderBar } from "./components/HeaderBar"
-import { lastChoicesFrameIndex, NarrativeLog, type LogFrame } from "./components/NarrativeLog"
-import { PanelsPanel } from "./components/PanelsPanel"
-import { PartyRoster } from "./components/PartyRoster"
+import { stripControlChars } from "loreweaver-protocol/v3"
+import { HeaderBar, type LinkStatus } from "./components/HeaderBar"
+import { NarrativeLog } from "./components/NarrativeLog"
+import { PartyRoster, freeClaimables } from "./components/PartyRoster"
 import { ScenePanel } from "./components/ScenePanel"
 import { StatusBar } from "./components/StatusBar"
-import { UiPanel } from "./components/UiPanel"
+import type { UiChoice } from "./components/UiBlocks"
 import { VariablesPanel } from "./components/VariablesPanel"
-import { tt } from "./i18n"
-import { viewImage, type RendererLike } from "./imageViewer"
+import type { Connection, ConnectionState } from "./connection"
+import { useConnectionState, useSnapshot, viewData } from "./hooks"
+import { tt, type MessageKey } from "./i18n"
 import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
 import { sidebarCollapsed, sidebarWidth } from "./layout"
-import { droppedImagePath, openMedia, readAudioUpload, readUpload, type HalfBlockLine } from "./media"
+import { lastChoicesIndex, logItems, type Cleared } from "./log"
 import type { Palette, ThemeName } from "./themes"
 import { usesAppClipboardCopy } from "./copy"
 import { writeTranscript } from "./transcript"
-import { saveReport } from "./report"
-
-// The game view needs only these three from the client. `WsClient` (and the
-// shell's wider `AppClient`) satisfies it structurally; tests inject a mock.
-// `close?` is optional and used only to stop the reconnect loop on a `bad_key`.
-export interface GameClient {
-  onMessage(cb: (frame: ServerFrame) => void): () => void
-  sendInput(text: string): void
-  uploadMedia(upload: MediaUpload): Promise<MediaFrame | undefined>
-  getMedia(hash: string): Promise<MediaPayload>
-  setAvatar(hash: string): void
-  close?(code?: number, reason?: string): void
-  // v2.2, optional so a minimal mock still mounts: asks which card files installed
-  // packs ship; the unicast `pack_cards` reply feeds the sidebar import picker.
-  listPackCards?(): void
-}
+import type { SessionSnapshot } from "loreweaver-protocol/v3"
 
 export interface GameViewProps {
-  client: GameClient
-  welcome: WelcomeFrame
+  connection: Connection
+  /** This client's language (the room's may differ: events are in the room's). */
+  locale: string
   theme: Palette
   themeName: ThemeName
-  // The room log already accumulated by the shell (App) before this view mounted
-  // — the join-time history replay + anything that arrived while on the menu. The
-  // server delivers those frames right after `welcome`, long before the player
-  // opens the game view, so without seeding here they'd be lost. Seeds the local
-  // log ONCE on mount; live frames from here on are appended by `onMessage` below.
-  initialFrames?: LogFrame[]
-  // The shell's last state/presence snapshot at mount time (see the seeding note below).
-  initialState?: StateFrame
-  initialPresence?: PresenceFrame
-  initialTurnStatus?: TurnStatusFrame
-  // Threaded from the shell's `client.onStatus?.(...)` subscription (App.tsx); undefined when
-  // the client doesn't implement `onStatus` — the HeaderBar then renders no indicator at all.
-  connectionStatus?: ConnectionStatus
-  renderer?: RendererLike
-  busyTimeoutMs?: number
-  // Transient confirmation for a Ctrl+C clipboard copy. The App shell owns that key
-  // (the same press means quit when nothing is selected), so the outcome is handed
-  // down rather than produced here.
+  // Transient confirmation for a Ctrl+C clipboard copy. The App shell owns that key (the same
+  // press means quit when nothing is selected), so the outcome is handed down.
   copyNotice?: string
-  // Selects the copy hint in the help line: macOS copies with the terminal's own
-  // Cmd+C, everywhere else with the in-app Ctrl+C. See `copy.ts`.
+  // Selects the copy hint in the help line: macOS copies with the terminal's own Cmd+C,
+  // everywhere else with the in-app Ctrl+C. See `copy.ts`.
   platform?: string
-  // Injected by tests so an export can be asserted without touching the real
-  // `~/.loreweaver/transcripts`.
+  // Injected by tests so an export can be asserted without touching `~/.loreweaver/transcripts`.
   transcriptDir?: string
-  // Injected by tests: where a v2.4 `report` frame's file is saved (default: report.ts).
-  reportDir?: string
+  /** Open the command list (F7). */
+  onCommands?: () => void
 }
 
-// Cap a single streaming message so a hostile/runaway stream can't grow the
-// merged text without bound (memory / render blowup).
-const MAX_STREAM_TEXT = 20_000
-export const ROOM_BUSY_TIMEOUT_MS = 120_000
-
-export function completesSubmission(frame: ServerFrame): boolean {
-  if (frame.type === FrameType.Error || frame.type === FrameType.Dice) return true
-  // `.panel` and a normal message while `.bot off` both complete with only a
-  // state snapshot. Treat it as terminal for the local submit spinner.
-  if (frame.type === FrameType.State) return true
-  if (frame.type === FrameType.System) return !frame.spinner
-  if (frame.type === FrameType.TurnStatus) return frame.status === "idle"
-  // Protocol 2.0: deltas never complete a turn; the closing `narrative` (full
-  // final text, same id) does.
-  if (frame.type !== FrameType.Narrative) return false
-  return frame.speaker === "kp" || frame.speaker === "system"
+/** The link as the header shows it. */
+export function linkStatus(snapshot: SessionSnapshot, state: ConnectionState): LinkStatus {
+  if (snapshot.status === "ended" || state.phase === "ended") return "offline"
+  if (snapshot.status === "online" && state.phase === "online") return "online"
+  return "reconnecting"
 }
 
-export function appendFrame(frames: LogFrame[], frame: LogFrame): LogFrame[] {
-  if (frame.type === FrameType.NarrativeDelta) {
-    // Accumulate deltas sharing an id into one draft bubble.
-    const index = frames.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
-    if (index === -1) {
-      const draft: LogFrame = {
-        type: FrameType.Narrative,
-        id: frame.id,
-        speaker: frame.speaker,
-        ...(frame.name ? { name: frame.name } : {}),
-        text: frame.text.slice(0, MAX_STREAM_TEXT),
-        format: "markdown",
-        draft: true,
-      }
-      return [...frames, draft].slice(-200)
-    }
-    const next = [...frames]
-    const existing = next[index]
-    if (existing.type !== FrameType.Narrative) return next
-    next[index] = { ...existing, text: (existing.text + frame.text).slice(0, MAX_STREAM_TEXT) }
-    return next
-  }
-  if (frame.type === FrameType.Narrative) {
-    // The closing narrative (same id) REPLACES the accumulated draft with the
-    // full final text; an empty final drops an abandoned draft outright.
-    const index = frames.findIndex((item) => item.type === FrameType.Narrative && item.id === frame.id)
-    if (index !== -1) {
-      const next = [...frames]
-      if (!frame.text) {
-        next.splice(index, 1)
-        return next
-      }
-      next[index] = { ...frame, draft: false }
-      return next
-    }
-    if (!frame.text) return frames
-  }
-  return [...frames, frame].slice(-200)
-}
+const ACTIVITY_KEYS: ReadonlyMap<string, MessageKey> = new Map<string, MessageKey>([
+  ["reading", "log.activity.reading"],
+  ["dice", "log.activity.dice"],
+  ["cast", "log.activity.cast"],
+  ["bookkeeping", "log.activity.bookkeeping"],
+])
 
 function keyName(event: KeyEvent): string {
   return typeof event.name === "string" ? event.name.toLowerCase() : ""
 }
 
-function hasCtrl(event: KeyEvent): boolean {
-  return Boolean(event.ctrl)
-}
-
-export function GameView({
-  client,
-  welcome,
-  theme,
-  themeName,
-  initialFrames,
-  initialState,
-  initialPresence,
-  initialTurnStatus,
-  connectionStatus,
-  renderer,
-  busyTimeoutMs = ROOM_BUSY_TIMEOUT_MS,
-  copyNotice,
-  platform = process.platform,
-  transcriptDir,
-  reportDir,
-}: GameViewProps) {
+export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, onCommands }: GameViewProps) {
+  const snapshot = useSnapshot(connection)
+  const local = useConnectionState(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const narrow = sidebarCollapsed(terminalWidth)
-  const locale = welcome.locale
-  // Seed from the shell's last-seen frames: the server sends state/presence right after
-  // `join` (while the player is still on the menu), so without this the panels open on
-  // "empty party / no scene / 0 online" until the first turn completes.
-  // Presence and state frames BOTH carry an online count; whichever arrived last
-  // wins, and every surface (header + status bar) reads this one merged value so
-  // the two can never disagree after a disconnect.
-  const [onlineCount, setOnlineCount] = useState(initialPresence?.online ?? initialState?.online ?? 0)
-  const [turnStatus, setTurnStatus] = useState<TurnStatusFrame | undefined>(initialTurnStatus)
-  const [stateFrame, setStateFrame] = useState<StateFrame>(
-    initialState ?? { type: FrameType.State, party: [], initiative: [], online: 0 },
-  )
-  const [frames, setFrames] = useState<LogFrame[]>(() => initialFrames ?? [])
-  // v1.7 sidebar hook-UI regions, keyed by the frame's `id` ("" when absent): the
-  // latest frame per key wins, so a region a hook re-emits replaces itself.
-  const [sidebarUi, setSidebarUi] = useState<Record<string, UiFrame>>({})
-  // v1.8 module-panel manifest: this viewer's complete panel list, full-replace
-  // semantics (an empty frame legitimately clears every panel).
-  const [panelManifest, setPanelManifest] = useState<UiManifestPanel[]>([])
-  // v2.2: the card files installed packs ship (the unicast `pack_cards` reply);
-  // empty hides the sidebar import picker entirely.
-  const [packCards, setPackCards] = useState<PackCardEntry[]>([])
+  const room = snapshot.welcome?.room.id ?? ""
+  const me = viewData(snapshot, "me")
+  const party = viewData(snapshot, "party")
+  const characters = viewData(snapshot, "characters")
+  const online = (party?.members ?? []).filter((member) => member.online).length
+
+  const [cleared, setCleared] = useState<Cleared | null>(null)
   const [command, setCommand] = useState("")
   const [inputError, setInputError] = useState<string>()
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const [inputVersion, setInputVersion] = useState(0)
   const [showHelp, setShowHelp] = useState(false)
-  const [selectedMedia, setSelectedMedia] = useState<MediaFrame | undefined>()
-  const [viewerLines, setViewerLines] = useState<HalfBlockLine[] | undefined>()
-  // True from the moment the player submits until the Keeper's reply lands, so the
-  // narrative log can show an animated "构思中" liveness indicator meanwhile.
-  const [kpWorking, setKpWorking] = useState(false)
+  const [revealSeq, setRevealSeq] = useState<number>()
   const [revealTicks, setRevealTicks] = useState(3)
   const [critFlash, setCritFlash] = useState(false)
-  // Whether the party roster (vs the chat input) currently owns Enter — see
-  // components/PartyRoster.tsx. Tab toggles it; the chat `<input>`'s own
-  // `focused` prop below is kept the logical opposite so Enter is never
-  // handled by both at once.
+  // Whether the party roster / the latest choices select (vs the chat input) owns Enter. Tab
+  // cycles; the chat `<input>`'s own `focused` prop is kept the logical opposite.
   const [rosterFocused, setRosterFocused] = useState(false)
-  // Whether the latest inline choices select (v1.7 ui frame) owns the keyboard —
-  // third stop of the Tab cycle; the chat input's `focused` is the complement.
   const [choicesFocused, setChoicesFocused] = useState(false)
   const [narrowSidebarOpen, setNarrowSidebarOpen] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
+  // Narratives that replaced a draft streamed in front of this player (see NarrativeLog).
+  const streamed = useRef(new Set<string>())
+  for (const draft of snapshot.drafts) streamed.current.add(draft.id)
 
+  const items = useMemo(() => logItems(snapshot.events, snapshot.drafts, local.lines, cleared), [snapshot.events, snapshot.drafts, local.lines, cleared])
   const diceTimeline = useTimeline({ duration: 360, loop: false, autoplay: false })
   const showSidebar = !narrow || narrowSidebarOpen
   const inputState = inputLimitState(command)
-  const hasChoices = lastChoicesFrameIndex(frames) !== -1
-  // The roster is a Tab stop when it has something Enter can act on: an own
-  // character to expand/collapse, or (v1.9) an unclaimed pregen to claim.
-  const rosterFocusable = Boolean(stateFrame.character) || (stateFrame.pregens ?? []).some((entry) => !entry.claimed_by)
-  const roomBusy = turnStatus?.status === "busy"
-  const workingLabel = roomBusy
-    ? tt(locale, "log.workingFor", { actor: stripControlChars(turnStatus.actor) })
-    : tt(locale, "log.working")
+  const hasChoices = lastChoicesIndex(items) !== -1
+  const rosterFocusable = Boolean(me?.character) || freeClaimables(characters).length > 0
+  const turn = snapshot.turn
+  const busy = turn?.status === "busy"
+  const working = busy || local.pending > 0
+  const workingLabel =
+    turn?.status === "busy"
+      ? `${tt(locale, "log.workingFor", { actor: stripControlChars(turn.actor) })}${turn.activity ? ` · ${tt(locale, ACTIVITY_KEYS.get(turn.activity) ?? "log.working")}` : ""}`
+      : tt(locale, "log.working")
+  const topHint = cleared ? tt(locale, "log.clearedHint") : snapshot.gap !== null || !snapshot.complete ? tt(locale, "log.olderHint") : undefined
 
   useEffect(() => {
     if (!showSidebar) setRosterFocused(false)
   }, [showSidebar])
 
-  // When the last choices frame scrolls out of the capped log (or the log is
-  // cleared), focus must fall back to the chat input, never stay stranded.
+  // When the last choices block leaves the log, focus falls back to the chat input.
   useEffect(() => {
     if (!hasChoices) setChoicesFocused(false)
   }, [hasChoices])
 
+  // The dice reveal: the newest roll that arrives while this view is open tumbles, then settles;
+  // a critical flashes. Rolls already in the log when the view opened do not animate.
+  let latestDice: number | undefined
+  for (let index = snapshot.events.length - 1; index >= 0; index -= 1) {
+    const event = snapshot.events[index]
+    if (event?.kind === "dice") {
+      latestDice = event.seq
+      break
+    }
+  }
+  const seenDice = useRef<{ ready: boolean; seq?: number }>({ ready: false })
   useEffect(() => {
-    if (!roomBusy) return
-    const id = setTimeout(() => {
-      setTurnStatus({ type: FrameType.TurnStatus, status: "idle" })
-      setKpWorking(false)
-    }, busyTimeoutMs)
-    return () => clearTimeout(id)
-  }, [roomBusy, turnStatus, busyTimeoutMs])
+    const previous = seenDice.current
+    seenDice.current = { ready: true, seq: latestDice ?? previous.seq }
+    if (!previous.ready || latestDice === undefined) return
+    if (previous.seq !== undefined && latestDice <= previous.seq) return
+    setRevealSeq(latestDice)
+    setRevealTicks(0)
+    diceTimeline.items.length = 0
+    diceTimeline.add(
+      { tick: 0 },
+      {
+        tick: 3,
+        duration: 360,
+        onUpdate: (animation: { targets: Array<{ tick: number }> }) => setRevealTicks(Math.round(animation.targets[0].tick)),
+      },
+    )
+    diceTimeline.restart()
+    const event = snapshot.events.find((entry) => entry.seq === latestDice)
+    if (event?.kind === "dice" && event.data.outcome?.critical) {
+      setCritFlash(true)
+      const id = setTimeout(() => setCritFlash(false), 220)
+      return () => clearTimeout(id)
+    }
+  }, [latestDice])
 
-  useEffect(() => {
-    return client.onMessage((frame) => {
-      if (frame.type === FrameType.Presence) {
-        setOnlineCount(frame.online)
-        return
-      }
-      if (frame.type === FrameType.State) {
-        // A reset-flagged state frame follows a campaign wipe: clear the live chat log
-        // (and the wiped campaign's sidebar UI regions) so the wiped story doesn't
-        // linger next to the fresh (empty) panel.
-        if (frame.reset) {
-          setFrames([])
-          setSidebarUi({})
-        }
-        setStateFrame(frame)
-        setOnlineCount(frame.online)
-        if (completesSubmission(frame)) setKpWorking(false)
-        return
-      }
-      if (frame.type === FrameType.TurnStatus) {
-        setTurnStatus(frame)
-        if (frame.status === "idle") setKpWorking(false)
-        return
-      }
-      if (frame.type === FrameType.Ui) {
-        // v1.7 declarative hook UI: sidebar frames replace their region (keyed by
-        // id); inline frames ride the narrative log like any other story frame.
-        if (frame.panel === "sidebar") {
-          setSidebarUi((current) => ({ ...current, [frame.id ?? ""]: frame }))
-        } else {
-          setFrames((current) => appendFrame(current, frame))
-        }
-        return
-      }
-      if (frame.type === FrameType.UiManifest) {
-        // v1.8 module panels: the frame IS this viewer's whole list (full replace).
-        // `panel_event` frames go unhandled by design — they feed tier-2 panel code,
-        // which the TUI does not run (it renders fallbacks instead).
-        setPanelManifest(frame.panels)
-        return
-      }
-      if (frame.type === FrameType.Report) {
-        // v2.4: a session report addressed to THIS connection. Fetch + verify + save it;
-        // never render the HTML here (protocol rule) — the line names the saved file so
-        // the player can open it in their browser.
-        const variant = frame.variant
-        saveReport(client, frame, { dir: reportDir })
-          .then((path) => {
-            const key = variant === "reveal" ? "report.savedReveal" : "report.saved"
-            setFrames((current) =>
-              appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, key, { path }) }),
-            )
-          })
-          .catch((error: unknown) => {
-            const reason = error instanceof Error ? error.message : String(error)
-            setFrames((current) =>
-              appendFrame(current, {
-                type: FrameType.System,
-                level: "warn",
-                text: tt(locale, "report.failed", { error: stripControlChars(reason) }),
-              }),
-            )
-          })
-        return
-      }
-      if (frame.type === FrameType.PackCards) {
-        // v2.2: the unicast answer to the mount-time `listPackCards()` request below.
-        setPackCards(frame.cards)
-        return
-      }
-      if (
-        frame.type === FrameType.Narrative ||
-        frame.type === FrameType.Dice ||
-        frame.type === FrameType.System ||
-        frame.type === FrameType.Media ||
-        frame.type === FrameType.AudioControl
-      ) {
-        setFrames((current) => appendFrame(current, frame))
-        if (frame.type === FrameType.Media) setSelectedMedia(frame)
-        // Command replies are system-authored narratives, while other completed
-        // submissions may end in a system/error/dice frame. Treat every terminal
-        // response consistently; streaming narratives clear only on their done chunk.
-        if (completesSubmission(frame)) setKpWorking(false)
-        if (frame.type === FrameType.Dice) {
-          setRevealTicks(0)
-          // One reveal per roll: drop the previous roll's finished animation, queue this
-          // one, and start the timeline — it is created with autoplay off, so nothing
-          // plays until it is told to.
-          diceTimeline.items.length = 0
-          diceTimeline.add(
-            { tick: 0 },
-            {
-              tick: 3,
-              duration: 360,
-              onUpdate: (animation: { targets: Array<{ tick: number }> }) => {
-                setRevealTicks(Math.round(animation.targets[0].tick))
-              },
-            },
-          )
-          diceTimeline.restart()
-          if ((frame as DiceFrame).outcome?.critical) {
-            setCritFlash(true)
-            setTimeout(() => setCritFlash(false), 220)
-          }
-        }
-        return
-      }
-      if (frame.type === FrameType.Error) {
-        setFrames((current) => appendFrame(current, { type: FrameType.System, level: "warn", text: frame.message }))
-        setKpWorking(false)
-        // An unrecognized key is a PERMANENT failure: stop the auto-reconnect loop so it
-        // doesn't re-join and spam the same warning on every retry. Transient errors
-        // (rate_limited, server_error, a malformed mid-session frame) keep the session.
-        if (frame.code === "bad_key") {
-          client.close?.()
-        }
-      }
-    })
-  }, [client, diceTimeline])
-
-  // v2.2: ask once, after mount, which card files installed packs ship — the
-  // `pack_cards` reply lands through the `onMessage` subscription above.
-  useEffect(() => {
-    client.listPackCards?.()
-  }, [client])
+  const resetInput = () => {
+    setHistoryIndex(null)
+    setCommand("")
+    setInputError(undefined)
+    setInputVersion((current) => current + 1)
+  }
 
   const submit = (value?: string) => {
     const raw = String(value ?? command)
@@ -381,182 +162,84 @@ export function GameView({
       return
     }
     const text = raw.trim()
-    if (!text) {
-      if (selectedMedia) {
-        void openSelectedMedia(false)
-      }
-      return
-    }
-    if (text.startsWith("/attach ")) {
-      void attachMedia(text.slice("/attach ".length).trim())
-      return
-    }
-    if (text.startsWith("/audio ")) {
-      void attachAudio(text.slice("/audio ".length).trim())
-      return
-    }
-    if (text.startsWith("/avatar ")) {
-      void attachAvatar(text.slice("/avatar ".length).trim())
-      return
-    }
-    const droppedImage = droppedImagePath(text)
-    if (droppedImage) {
-      void attachMedia(droppedImage)
-      return
-    }
-    client.sendInput(text)
-    setKpWorking(true)
-    // No optimistic local echo here: the TUI server always broadcasts the
-    // player's own action back as a `narrative{speaker:"player"}` event (it
-    // runs `run_turn` with `echo_exclude=None` — see gateway/turn.py — so a
-    // solo terminal still sees its own echo, M4 behavior). Appending a local
-    // frame here too used to double every submitted line; `onMessage` above
-    // already renders the server's echo once it round-trips.
+    if (!text) return
+    // No local echo: the server logs the player's own line as a `narrative` event for everyone,
+    // this player included. A command's answer comes back to this player alone, as a local line.
+    void connection.input(text)
     setHistory((current) => [...current, text].slice(-50))
-    setHistoryIndex(null)
-    setCommand("")
-    setInputError(undefined)
-    setInputVersion((current) => current + 1)
+    resetInput()
   }
 
-  const openSelectedMedia = async (forceSystem: boolean) => {
-    if (!selectedMedia) return
-    try {
-      const lines = forceSystem
-        ? await openMedia(client, selectedMedia).then(() => undefined)
-        : await viewImage({ client, media: selectedMedia, renderer, locale })
-      setViewerLines(lines)
-    } catch (error) {
-      setFrames((current) =>
-        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
-      )
+  const pickChoice = (option: UiChoice) => {
+    setChoicesFocused(false)
+    void connection.runCommand(option.command, option.args ?? {})
+  }
+
+  const claim = (id: string) => {
+    void connection.runCommand("pc", { op: "claim", name: id })
+  }
+
+  // Older history on demand: at the top of the log, PgUp (or the wheel) brings the hidden lines
+  // back after a Ctrl+L, else loads the page before the oldest event held (or the gap a resume
+  // could not replay).
+  const loadOlder = () => {
+    if ((scrollRef.current?.scrollTop ?? 0) > 0) return
+    if (cleared) {
+      setCleared(null)
+      return
     }
+    const current = connection.session.getSnapshot()
+    if (current.gap !== null || !current.complete) void connection.session.loadOlder().catch(() => 0)
   }
 
-  const attachMedia = async (path: string) => {
-    if (!path) return
-    setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "media.uploading") }))
-    try {
-      const upload = await readUpload(path)
-      if (!upload.mime) throw new Error(tt(locale, "media.unsupported"))
-      await client.uploadMedia(upload)
-      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "media.uploaded", { name: upload.name }) }))
-      setHistory((current) => [...current, `/attach ${path}`].slice(-50))
-      setHistoryIndex(null)
-      setCommand("")
-      setInputVersion((current) => current + 1)
-    } catch (error) {
-      setFrames((current) =>
-        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
-      )
-    }
-  }
-
-  const attachAudio = async (path: string) => {
-    if (!path) return
-    setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "audio.uploading") }))
-    try {
-      const upload = await readAudioUpload(path)
-      if (!upload.mime) throw new Error(tt(locale, "audio.unsupported"))
-      await client.uploadMedia(upload)
-      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "audio.uploaded", { name: upload.name }) }))
-      setHistory((current) => [...current, `/audio ${path}`].slice(-50))
-      setHistoryIndex(null)
-      setCommand("")
-      setInputVersion((current) => current + 1)
-    } catch (error) {
-      setFrames((current) =>
-        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
-      )
-    }
-  }
-
-  const attachAvatar = async (path: string) => {
-    if (!path) return
-    setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "avatar.uploading") }))
-    try {
-      const upload = await readUpload(path)
-      if (!upload.mime) throw new Error(tt(locale, "media.unsupported"))
-      await client.uploadMedia(upload)
-      client.setAvatar(upload.sha256)
-      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "avatar.uploaded", { name: upload.name }) }))
-      setHistory((current) => [...current, `/avatar ${path}`].slice(-50))
-      setHistoryIndex(null)
-      setCommand("")
-      setInputVersion((current) => current + 1)
-    } catch (error) {
-      setFrames((current) =>
-        appendFrame(current, { type: FrameType.System, level: "warn", text: error instanceof Error ? error.message : String(error) }),
-      )
-    }
-  }
-
-  // Ctrl+S: dump the whole log to a text file. The counterpart to the Ctrl+C
-  // selection copy — it reaches the lines that have already scrolled out of the
-  // viewport, and it is the fallback on terminals that refuse OSC 52 (and on
-  // macOS, where the in-app copy is not bound at all).
+  // Ctrl+S: the whole log to a text file — the lines that scrolled out of view included, and
+  // the fallback on terminals that refuse a clipboard write.
   const exportTranscript = async () => {
-    if (frames.length === 0) {
-      setFrames((current) => appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "transcript.empty") }))
+    const all = logItems(snapshot.events, [], local.lines)
+    if (all.length === 0) {
+      connection.note({ kind: "result", level: "info", text: tt(locale, "transcript.empty") })
       return
     }
     try {
-      const path = await writeTranscript(frames, {
-        room: welcome.room,
-        at: new Date(),
-        dir: transcriptDir,
-      })
-      setFrames((current) =>
-        appendFrame(current, { type: FrameType.System, level: "info", text: tt(locale, "transcript.saved", { path }) }),
-      )
+      const path = await writeTranscript(all, { room, at: new Date(), dir: transcriptDir, locale })
+      connection.note({ kind: "result", level: "info", text: tt(locale, "transcript.saved", { path }) })
     } catch (error) {
-      setFrames((current) =>
-        appendFrame(current, {
-          type: FrameType.System,
-          level: "warn",
-          text: tt(locale, "transcript.failed", { error: error instanceof Error ? error.message : String(error) }),
-        }),
-      )
+      connection.note({ kind: "result", level: "warn", text: tt(locale, "transcript.failed", { error: error instanceof Error ? error.message : String(error) }) })
     }
   }
 
   const recallHistory = (direction: -1 | 1) => {
     if (history.length === 0) return
     const nextIndex =
-      historyIndex === null
-        ? direction < 0
-          ? history.length - 1
-          : 0
-        : Math.max(0, Math.min(history.length - 1, historyIndex + direction))
+      historyIndex === null ? (direction < 0 ? history.length - 1 : 0) : Math.max(0, Math.min(history.length - 1, historyIndex + direction))
     setHistoryIndex(nextIndex)
-    setCommand(history[nextIndex])
-    if (inputRef.current) inputRef.current.value = history[nextIndex]
+    setCommand(history[nextIndex] as string)
+    if (inputRef.current) inputRef.current.value = history[nextIndex] as string
   }
 
-  // Theme F-keys are owned globally by the App shell so a switch persists across
-  // screens; this handler only covers game-view-local keys. It is installed only
-  // while the game view is mounted, so it can't fight the menu's arrow handling.
+  // Theme F-keys and Esc are the App shell's; these are the game view's own keys, installed only
+  // while it is mounted.
   useKeyboard((event) => {
     const name = keyName(event)
     if (name === "?" || name === "slash") setShowHelp((value) => !value)
-    if (name === "pageup") scrollRef.current?.scrollBy?.(-1, "viewport")
+    if (name === "pageup") {
+      loadOlder()
+      scrollRef.current?.scrollBy?.(-1, "viewport")
+    }
     if (name === "pagedown") scrollRef.current?.scrollBy?.(1, "viewport")
     if (name === "up") recallHistory(-1)
     if (name === "down") recallHistory(1)
-    if (hasCtrl(event) && name === "l") setFrames([])
-    if (hasCtrl(event) && name === "s") void exportTranscript()
-    // Ctrl-Shift-S: ask the server for a full-room checkpoint (M20 D). This is a
-    // TRIGGER, not a new capability — the server's `.save` runs the same keeper-gated,
-    // backups-directory-confined export the admin frame already performs, and the reply
-    // (or the refusal, for a player) comes back through the ordinary chat channel.
-    if (hasCtrl(event) && (name === "S" || (name === "s" && event.shift))) submit(".save")
+    if (event.ctrl && name === "l") {
+      const current = connection.session.getSnapshot()
+      setCleared({ seq: current.head, lineId: connection.getState().lines.at(-1)?.id ?? 0 })
+    }
+    if (event.ctrl && name === "s" && !event.shift) void exportTranscript()
+    // Ctrl+Shift+S: the room checkpoint (`.save`, an admin command — a player gets the refusal).
+    if (event.ctrl && name === "s" && event.shift) submit(".save")
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
-    if (selectedMedia && (name === "o" || name === "O")) void openSelectedMedia(true)
-    if (viewerLines && (name === "escape" || name === "q" || name === "return" || name === "enter")) setViewerLines(undefined)
-    // Tab cycles focus: chat input -> the latest inline choices select (when a
-    // v1.7 ui choices block is live) -> the roster (only when it is actionable —
-    // see `rosterFocusable`) -> back to the input, so focus can never get
-    // stranded off the input if a stop disappears mid-session.
+    if (name === "f7") onCommands?.()
+    // Tab cycles focus: chat input -> the latest choices select (when one is live) -> the roster
+    // (only when it can act) -> back to the input, so focus is never stranded.
     if (name === "tab") {
       if (choicesFocused) {
         setChoicesFocused(false)
@@ -571,80 +254,46 @@ export function GameView({
     }
   })
 
+  const scene = viewData(snapshot, "scene")
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <HeaderBar
-        welcome={welcome}
-        scene={stateFrame.scene}
-        clock={stateFrame.clock}
-        usage={stateFrame.usage}
-        online={onlineCount}
-        theme={theme}
-        locale={locale}
-        connectionStatus={connectionStatus}
-      />
+      <HeaderBar room={room} scene={scene} usage={viewData(snapshot, "usage")} online={online} theme={theme} locale={locale} link={linkStatus(snapshot, local)} />
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>
-        <scrollbox
-          ref={scrollRef}
-          flexGrow={1}
-          border
-          borderColor={theme.border}
-          stickyScroll
-          stickyStart="bottom"
-          viewportCulling={false}
-        >
+        <scrollbox ref={scrollRef} flexGrow={1} border borderColor={theme.border} stickyScroll stickyStart="bottom" viewportCulling={false} onMouseScroll={loadOlder}>
           <NarrativeLog
-            frames={frames}
+            items={items}
             theme={theme}
+            revealSeq={revealSeq}
             revealTicks={revealTicks}
             critFlash={critFlash}
-            kpWorking={kpWorking || roomBusy}
+            working={working}
             workingLabel={workingLabel}
+            topHint={topHint}
+            styledIds={streamed.current}
             locale={locale}
-            client={client}
-            selectedMediaHash={selectedMedia?.hash}
-            onSelectMedia={setSelectedMedia}
             choicesFocused={choicesFocused}
-            onChoicePick={(input) => {
-              setChoicesFocused(false)
-              submit(input)
-            }}
+            onChoicePick={pickChoice}
           />
         </scrollbox>
 
         {showSidebar ? (
-          <scrollbox
-            width={sidebarWidth(terminalWidth)}
-            maxWidth="40%"
-            flexShrink={0}
-            viewportCulling={false}
-          >
+          <scrollbox width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} viewportCulling={false}>
             <box flexDirection="column" width="100%" minWidth={0} flexShrink={0}>
-              {narrow ? <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} /> : null}
+              {narrow ? <ScenePanel scene={scene} theme={theme} locale={locale} /> : null}
               <PartyRoster
-                character={stateFrame.character}
-                party={stateFrame.party}
-                initiative={stateFrame.initiative}
-                pregens={stateFrame.pregens}
-                packCards={packCards}
-                isKeeper={welcome.you.role === "keeper"}
+                character={me?.character}
+                party={party}
+                characters={characters}
                 theme={theme}
                 locale={locale}
-                client={client}
                 focused={rosterFocused}
                 onFocus={() => setRosterFocused(true)}
+                onClaim={claim}
                 initiativeFirst={narrow}
               />
-              {narrow ? null : <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />}
-              <VariablesPanel variables={stateFrame.variables} theme={theme} locale={locale} />
-              <UiPanel regions={Object.values(sidebarUi)} theme={theme} locale={locale} />
-              <PanelsPanel
-                panels={panelManifest}
-                variables={stateFrame.variables}
-                theme={theme}
-                locale={locale}
-              />
+              {narrow ? null : <ScenePanel scene={scene} theme={theme} locale={locale} />}
+              <VariablesPanel variables={viewData(snapshot, "variables")} theme={theme} locale={locale} />
             </box>
           </scrollbox>
         ) : null}
@@ -664,11 +313,7 @@ export function GameView({
           placeholder={tt(locale, "game.placeholder")}
           onInput={(value: string) => {
             setCommand(value)
-            setInputError(
-              inputLimitState(value).atLimit
-                ? tt(locale, "game.inputAtLimit", { limit: CHAT_INPUT_LIMIT })
-                : undefined,
-            )
+            setInputError(inputLimitState(value).atLimit ? tt(locale, "game.inputAtLimit", { limit: CHAT_INPUT_LIMIT }) : undefined)
           }}
           onSubmit={(value?: string) => submit(value)}
         />
@@ -690,57 +335,32 @@ export function GameView({
 
       {inputError ? (
         <box height={1} paddingX={1} backgroundColor={theme.bg}>
-          <text fg={theme.fumble} wrapMode="none" truncate>{inputError}</text>
+          <text fg={theme.fumble} wrapMode="none" truncate>
+            {inputError}
+          </text>
         </box>
       ) : null}
 
       {copyNotice ? (
         <box height={1} paddingX={1} backgroundColor={theme.bg}>
-          <text fg={theme.accent} wrapMode="none" truncate>{copyNotice}</text>
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {copyNotice}
+          </text>
         </box>
       ) : null}
 
       {showHelp ? (
-        // One key group per row: the single-line version overflowed the terminal
-        // edge at ordinary widths, which silently hid whatever came last (the
-        // copy/save hints — exactly the part players need to discover).
-        // `height`/`flexShrink` are explicit (like the input box above): the parent
-        // column hands out no leftover space, so without them the three rows collapse
-        // onto one and overprint each other.
-        <box
-          border
-          borderColor={theme.accent}
-          paddingX={1}
-          backgroundColor={theme.bg}
-          flexDirection="column"
-          width="100%"
-          height={7}
-          flexShrink={0}
-        >
+        // One key group per row; explicit height/flexShrink so the rows never collapse onto one.
+        <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg} flexDirection="column" width="100%" height={7} flexShrink={0}>
           <text fg={theme.fg}>{tt(locale, "game.help")}</text>
           <text fg={theme.fg}>{tt(locale, "game.helpLog")}</text>
           <text fg={theme.fg}>{tt(locale, "game.helpDice")}</text>
-          <text fg={theme.fg}>{tt(locale, "game.helpTiers")}</text>
+          <text fg={theme.fg}>{tt(locale, "game.helpCommands")}</text>
           <text fg={theme.accent}>{tt(locale, usesAppClipboardCopy(platform) ? "game.helpCopy" : "game.helpCopyMac")}</text>
         </box>
       ) : null}
 
-      {viewerLines ? (
-        <box position="absolute" top={1} left={2} right={2} bottom={1} flexDirection="column" border borderColor={theme.accent} backgroundColor={theme.bg} paddingX={1}>
-          <text fg={theme.accent}>{tt(locale, "viewer.close")}</text>
-          {viewerLines.map((line, row) => (
-            <box key={`viewer-${row}`} flexDirection="row">
-              {line.cells.map((cell, col) => (
-                <text key={`viewer-${row}-${col}`} fg={cell.fg} bg={cell.bg}>
-                  {cell.char}
-                </text>
-              ))}
-            </box>
-          ))}
-        </box>
-      ) : null}
-
-      <StatusBar welcome={welcome} online={onlineCount} theme={theme} themeName={themeName} />
+      <StatusBar room={room} online={online} locale={locale} theme={theme} themeName={themeName} />
     </box>
   )
 }

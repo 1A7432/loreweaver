@@ -1,34 +1,18 @@
-import { stripControlChars, type CharacterState } from "loreweaver-protocol"
+import { stripControlChars, type ViewStat } from "loreweaver-protocol/v3"
 
 export interface AttributeLine {
   key: string
-  /** What the line shows for the key: `attribute_labels[key]` (protocol 2.5), else the key. */
+  /** The label the `me` view gave the stat, in this viewer's language; the key when it is empty. */
   label: string
-  value: unknown
+  value: number | string
   line: string
 }
 
-/** The sheet's attributes exactly as the wire sent them, in wire order.
- *
- * Protocol 2.3: `state.character.attributes` is the rule system's own declared
- * characteristics, in the pack's order — the vitals ride `resources` and derived
- * values are never sent. So there is nothing here to hide or reorder, and no per-system
- * table to do it with: this client used to keep a CoC list and a D&D list for exactly
- * that, which is per-system knowledge M16 took out of the engine and which locked a
- * community pack's own system out of the view. */
-export function trueRuleAttributes(character?: CharacterState): Array<[string, unknown]> {
-  if (!character) return []
-  return Object.entries(character.attributes)
-}
-
-/** The name a line shows for `key`: the server's display label when it sent one
- * (protocol 2.5 `attribute_labels`, e.g. APP → 外貌), else the key itself — exactly
- * what an older server's frames always showed. Untrusted server text: control
- * characters are stripped. */
-export function attributeLabel(character: CharacterState | undefined, key: string): string {
-  const label = character?.attribute_labels?.[key]
-  const cleaned = typeof label === "string" ? stripControlChars(label).trim() : ""
-  return cleaned || stripControlChars(key)
+/** The name a line shows: the view's label, else the storage key. Untrusted server text:
+ * control characters are stripped. */
+export function attributeLabel(stat: ViewStat): string {
+  const cleaned = stripControlChars(stat.label).trim()
+  return cleaned || stripControlChars(stat.key)
 }
 
 /** `text` padded with spaces to `width` terminal CELLS. A CJK character is two cells
@@ -37,15 +21,15 @@ function padCells(text: string, width: number): string {
   return text + " ".repeat(Math.max(0, width - Bun.stringWidth(text)))
 }
 
-export function attributeLines(character?: CharacterState): AttributeLine[] {
-  const entries = trueRuleAttributes(character).map(
-    ([key, value]) => [key, attributeLabel(character, key), value] as const,
-  )
+/** The stats exactly as the view sent them, in the pack's order, as aligned lines. The client
+ * knows no rule system: names and order are the server's. */
+export function attributeLines(stats: readonly ViewStat[] | undefined): AttributeLine[] {
+  const entries = (stats ?? []).map((stat) => [stat, attributeLabel(stat)] as const)
   const width = Math.max(3, ...entries.map(([, label]) => Bun.stringWidth(label)))
-  return entries.map(([key, label, value]) => ({
-    key,
+  return entries.map(([stat, label]) => ({
+    key: stat.key,
     label,
-    value,
-    line: `${padCells(label, width)} ${stripControlChars(String(value))}`,
+    value: stat.value,
+    line: `${padCells(label, width)} ${stripControlChars(String(stat.value))}`,
   }))
 }

@@ -33,12 +33,8 @@ describe("local path resolution", () => {
   test("resolveLocalServerPaths lays out all server-side state under the chosen root", () => {
     const paths = resolveLocalServerPaths("~/server-state", ENV)
     expect(paths.home).toBe(join("/home/ada", "server-state"))
-    expect(paths.serverDir).toBe(join(paths.home, "server"))
-    expect(paths.binaryDir).toBe(join(paths.home, "server-bin"))
+    expect(paths.binary).toBe(join(paths.home, "server-bin", process.platform === "win32" ? "loreweaver.exe" : "loreweaver"))
     expect(paths.dataDir).toBe(join(paths.home, "data"))
-    expect(paths.envFile).toBe(join(paths.home, ".env"))
-    expect(paths.keysFile).toBe(join(paths.home, "local-keys.toml"))
-    expect(paths.keeperSidecar).toBe(join(paths.home, "keeper-key.txt"))
   })
 
   test("expandHome handles bare and prefixed tilde paths", () => {

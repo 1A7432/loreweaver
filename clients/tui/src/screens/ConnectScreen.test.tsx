@@ -6,8 +6,8 @@ import type { SavedServer } from "../connectMemory"
 import { themes } from "../themes"
 
 const SERVERS: SavedServer[] = [
-  { host: "ws://a.example:8787", key: "key-a", name: "Home" },
-  { host: "ws://b.example:8787", key: "key-b", name: "Away" },
+  { host: "endpointaaaaaaaaaaaaaaaaaaaaaaaahome", key: "key-a", name: "Home" },
+  { host: "endpointbbbbbbbbbbbbbbbbbbbbbbbbaway", key: "key-b", name: "Away" },
 ]
 
 function renderConnect(overrides: Partial<ConnectScreenProps> = {}, width = 110, height = 34) {
@@ -97,7 +97,7 @@ describe("ConnectScreen saved-server delete", () => {
     await flush()
 
     expect(forgotten).toEqual([])
-    const filled = await waitForFrame((t) => t.includes("saved invite key (masked)"))
+    const filled = await waitForFrame((t) => t.includes("saved access key (masked)"))
     expect(filled).not.toContain("key-a")
     expect(filled).toContain("••••••••••••")
 
@@ -112,14 +112,14 @@ describe("ConnectScreen saved-server delete", () => {
     const secret = "remembered-bearer-secret"
     const submitted: string[] = []
     const { renderer, flush, captureCharFrame, mockInput } = await renderConnect({
-      defaults: { host: "ws://example.test", key: secret },
+      defaults: { host: "endpointcccccccccccccccccccccccc", key: secret },
       savedServers: [],
       onSubmit: (_host, key) => submitted.push(key),
     })
     await flush()
 
     expect(captureCharFrame()).not.toContain(secret)
-    expect(captureCharFrame()).toContain("saved invite key (masked)")
+    expect(captureCharFrame()).toContain("saved access key (masked)")
 
     await act(async () => mockInput.pressEnter())
     await flush()
@@ -193,8 +193,8 @@ describe("ConnectScreen local server folder", () => {
     await flush()
 
     const frame = captureCharFrame()
-    expect(frame).toContain("Ticket / host")
-    expect(frame).toContain("Invite key")
+    expect(frame).toContain("Ticket")
+    expect(frame).toContain("Access key")
     expect(frame).toContain("Nickname")
     expect(frame).toContain("Home")
     expect(frame).toContain("✕")

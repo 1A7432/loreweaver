@@ -1,11 +1,14 @@
-import { stripControlChars, type CharacterState } from "loreweaver-protocol"
+import { stripControlChars, type MeView } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { attributeLines } from "./characterAttributes"
 import { FitText } from "./FitText"
 
+/** The viewer's own character, as the `me` view carries it. */
+export type SheetCharacter = NonNullable<MeView["character"]>
+
 export interface CharacterPanelProps {
-  character?: CharacterState
+  character?: SheetCharacter | null
   theme: Palette
   locale?: string
 }
@@ -35,13 +38,13 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
       // box first rendered empty (menu mount, pre-state) would stay 5 rows tall forever and
       // composite the full panel's 11 rows on top of each other once the state frame lands.
       <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
-        <text fg={theme.accent} wrapMode="none" truncate>CHARACTER</text>
+        <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.panelTitle")}</text>
         <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.noCharacter")}</text>
       </box>
     )
   }
 
-  const resources = character.resources ?? []
+  const resources = character.resources
   // The first resource is the system's primary vital (HP-like); at 0 the
   // character is down. Generic: no rule-system field names anywhere.
   const primary = resources[0]
@@ -51,28 +54,28 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
     // composite its rows on top of each other (HP over SIZ, OK over INT, ...).
     <box flexDirection="column" border borderColor={theme.border} paddingX={1} flexShrink={0}>
       <text fg={theme.accent} wrapMode="none" truncate>
-        CHARACTER {incapacitated ? "☠" : ""}
+        {tt(locale, "character.panelTitle")} {incapacitated ? "☠" : ""}
       </text>
       <text fg={theme.kp} wrapMode="none" truncate>{stripControlChars(character.name)}</text>
       {resources.map((res) => (
         <text
           key={res.id}
-          fg={statColor(res.value, res.max ?? res.value, theme.hpFull, theme.hpLow)}
+          fg={statColor(res.value, res.max, theme.hpFull, theme.hpLow)}
           wrapMode="none"
           truncate
         >
-          {stripControlChars(res.label)} {bar(res.value, res.max ?? res.value)} {res.value}/{res.max ?? res.value}
+          {stripControlChars(res.label || res.id)} {bar(res.value, res.max)} {res.value}/{res.max}
         </text>
       ))}
-      {attributeLines(character).slice(0, 6).map(({ key, line }) => (
+      {attributeLines(character.attributes).slice(0, 6).map(({ key, line }) => (
         <FitText key={key} fg={theme.fg} cut="middle">
           {line}
         </FitText>
       ))}
-      {character.status_effects.length > 0 ? (
-        <text fg={theme.fail} wrapMode="none" truncate>✖ {stripControlChars(character.status_effects.join(", "))}</text>
+      {character.status.length > 0 ? (
+        <text fg={theme.fail} wrapMode="none" truncate>✖ {stripControlChars(character.status.join(", "))}</text>
       ) : (
-        <text fg={theme.dim} wrapMode="none" truncate>OK</text>
+        <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.ok")}</text>
       )}
     </box>
   )

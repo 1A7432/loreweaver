@@ -1,24 +1,43 @@
 import { useState } from "react"
 import type { SelectOption } from "@opentui/core"
-import {
-  stripControlChars,
-  type UiBadgeTone,
-  type UiChoicesBlock,
-  type UiFrame,
-  type UiImageBlock,
-  type UiMapPinBlock,
-  type UiMeterBlock,
-  type UiStatBlock,
-  type UiTitleCardBlock,
-} from "loreweaver-protocol"
-import { clippingLines, letterLines } from "../bridge/render/uiText"
-import type { AppClient } from "../client"
+import { stripControlChars, type Block } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
 import { bar } from "./CharacterPanel"
-import { MediaPreviewRows, useMediaPreview } from "./MediaPreview"
 
-export { clippingLines, letterLines } from "../bridge/render/uiText"
+type BlockOf<K extends Block["kind"]> = Extract<Block, { kind: K }>
+type UiMeterBlock = BlockOf<"meter">
+type UiStatBlock = BlockOf<"stat">
+type UiImageBlock = BlockOf<"image">
+type UiMapPinBlock = BlockOf<"map_pin">
+type UiTitleCardBlock = BlockOf<"title_card">
+type UiChoicesBlock = BlockOf<"choices">
+type UiBadgeTone = BlockOf<"badge">["tone"]
+export type UiChoice = UiChoicesBlock["options"][number]
+
+/** The performance templates as terminal text. A rich client draws stationery and full-bleed
+ * act cards; here each template becomes the same information in lines, which is the honest
+ * degradation — never a blank where a letter should be. */
+export function letterLines(block: BlockOf<"letter">): string[] {
+  const attribution = [
+    block.to ? `→ ${stripControlChars(block.to)}` : "",
+    block.from ? `— ${stripControlChars(block.from)}` : "",
+    block.date ? stripControlChars(block.date) : "",
+  ].filter(Boolean)
+  return [
+    ...stripControlChars(block.body).split("\n").map((line) => `│ ${line}`),
+    ...(attribution.length ? [`│ ${attribution.join(" · ")}`] : []),
+  ]
+}
+
+export function clippingLines(block: BlockOf<"clipping">): string[] {
+  const credit = [block.source, block.date].filter(Boolean).map((part) => stripControlChars(String(part)))
+  return [
+    `▬ ${stripControlChars(block.headline)}`,
+    ...stripControlChars(block.body).split("\n"),
+    ...(credit.length ? [`— ${credit.join(" · ")}`] : []),
+  ]
+}
 
 // Sidebar meters match VariablesPanel's compact tracker width; the inline log has
 // room for CharacterPanel's full-width bars (NarrativeLog passes 10).
@@ -47,9 +66,9 @@ export function badgeLine(block: { label: string }): string {
   return `[${stripControlChars(block.label)}]`
 }
 
-/** One image block's text line — the whole block on a text-first client without a
- * fetch channel, and the caption above the preview when there is one. Falls back
- * through caption -> alt -> the short hash so the line is never empty. */
+/** One image block's text line — the whole block: there is no byte channel to fetch the
+ * picture over yet. Falls back through caption -> alt -> the short hash so the line is never
+ * empty. */
 export function imageLine(block: UiImageBlock, locale?: string): string {
   const text = stripControlChars(block.caption || block.alt || "").trim()
   return tt(locale, "ui.image", { text: text || block.hash.slice(0, 12) })
@@ -74,42 +93,36 @@ export function badgeColor(tone: UiBadgeTone | undefined, theme: Palette): strin
 
 export interface UiChoicesInteraction {
   focused: boolean
-  onPick: (input: string) => void
+  onPick: (option: UiChoice) => void
 }
 
 export interface UiBlocksViewProps {
-  frame: UiFrame
+  blocks: readonly Block[]
   theme: Palette
   locale?: string
-  // When set, the LAST choices block of this frame renders as a live <select>
-  // (Enter sends the picked option's `input` as a normal player input). Without
-  // it, choices render as a static option list — the sidebar baseline.
+  // When set, the LAST choices block renders as a live <select> (Enter runs the picked
+  // option's command with `command.run`). Without it, choices render as a static option list.
   interactive?: UiChoicesInteraction
   meterWidth?: number
-  // When set, `image` blocks fetch their bytes and draw a terminal preview. The
-  // inline narrative log passes it; the narrow sidebars deliberately do not — a
-  // half-block picture in a 24-column column is worse than its caption line.
-  client?: AppClient
 }
 
-/** Renders one `ui` frame's block list. Blocks arrive server-validated
- * (kind whitelist, caps — core.hooks), so rendering trusts the shapes but still
- * strips control bytes off every string like the other panels do. */
+/** Renders one `blocks` event's list. The protocol library validated every block's shape
+ * (and dropped kinds it does not know), so rendering trusts the shapes but still strips
+ * control bytes off every string like the other panels do. */
 export function UiBlocksView({
-  frame,
+  blocks,
   theme,
   locale,
   interactive,
   meterWidth = METER_BAR_WIDTH,
-  client,
 }: UiBlocksViewProps) {
-  const lastChoicesIndex = frame.blocks.reduce(
+  const lastChoicesIndex = blocks.reduce(
     (last, block, index) => (block.kind === "choices" ? index : last),
     -1,
   )
   return (
     <box flexDirection="column" width="100%" flexShrink={0}>
-      {frame.blocks.map((block, index) => {
+      {blocks.map((block, index) => {
         const key = `${block.kind}-${index}`
         if (block.kind === "divider") {
           return (
@@ -140,7 +153,11 @@ export function UiBlocksView({
           )
         }
         if (block.kind === "image") {
-          return <UiImage key={key} block={block} theme={theme} locale={locale} client={client} />
+          return (
+            <text key={key} fg={theme.system}>
+              {imageLine(block, locale)}
+            </text>
+          )
         }
         if (block.kind === "letter" || block.kind === "clipping" || block.kind === "title_card") {
           const lines = block.kind === "letter" ? letterLines(block)
@@ -189,29 +206,6 @@ export function UiBlocksView({
   )
 }
 
-/** An `image` block: the caption line always, plus the same half-block preview the
- * media log draws when this view was given a fetch channel. A failed fetch keeps the
- * caption — the picture is an enhancement, never the only content. */
-function UiImage({
-  block,
-  theme,
-  locale,
-  client,
-}: {
-  block: UiImageBlock
-  theme: Palette
-  locale?: string
-  client?: AppClient
-}) {
-  const { lines } = useMediaPreview(block.mime ? { hash: block.hash, mime: block.mime } : undefined, client)
-  return (
-    <box flexDirection="column" width="100%" flexShrink={0}>
-      <text fg={theme.system}>{imageLine(block, locale)}</text>
-      {lines ? <MediaPreviewRows lines={lines} keyPrefix={block.hash} /> : null}
-    </box>
-  )
-}
-
 function UiChoices({
   block,
   theme,
@@ -240,7 +234,7 @@ function UiChoices({
   const options: SelectOption[] = block.options.map((option) => ({
     name: stripControlChars(option.label),
     description: "",
-    value: option.input,
+    value: option.id,
   }))
   return (
     <box flexDirection="column" width="100%" flexShrink={0}>
@@ -266,7 +260,7 @@ function UiChoices({
         onChange={(index: number) => setSelectedIndex(index)}
         onSelect={() => {
           const option = block.options[Math.max(0, Math.min(selectedIndex, block.options.length - 1))]
-          if (option) interactive.onPick(option.input)
+          if (option) interactive.onPick(option)
         }}
       />
       <text fg={theme.dim} wrapMode="none" truncate>

@@ -1,328 +1,164 @@
 import { describe, expect, test } from "bun:test"
-import { FrameType, type ServerFrame } from "loreweaver-protocol"
-import { IrohLink, MAX_IROH_MEDIA_BYTES, bindIrohEndpoint, ticketAddr, type LoadIroh } from "./irohLink"
+import { ALPN, ControlStream, dialIroh, looksLikeTicket, MAX_LINE_BYTES, type IrohModuleLike, type IrohRecvStreamLike } from "./irohLink"
+import { waitFor } from "./testkit"
 
-const TICKET = "endpointaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
+const encoder = new TextEncoder()
+const decoder = new TextDecoder()
 
-const NARRATIVE = {
-  type: FrameType.Narrative,
-  id: "n1",
-  speaker: "kp" as const,
-  text: "The hinge shrieks.",
-  format: "markdown" as const,
+/** A receive stream the test feeds chunk by chunk; `end()` is EOF. */
+class FeedStream implements IrohRecvStreamLike {
+  #chunks: (number[] | null)[] = []
+  #waiting: ((chunk: number[] | null) => void) | null = null
+  push(text: string | Uint8Array): void {
+    this.#give(Array.from(typeof text === "string" ? encoder.encode(text) : text))
+  }
+  end(): void {
+    this.#give(null)
+  }
+  #give(chunk: number[] | null): void {
+    if (this.#waiting) {
+      const resolve = this.#waiting
+      this.#waiting = null
+      resolve(chunk)
+    } else this.#chunks.push(chunk)
+  }
+  read(): Promise<number[] | null> {
+    if (this.#chunks.length > 0) return Promise.resolve(this.#chunks.shift() ?? null)
+    return new Promise((resolve) => (this.#waiting = resolve))
+  }
 }
 
-function createMockIroh(options: { failConnectTimes?: number; hangFirstWrite?: boolean } = {}) {
-  const enc = new TextEncoder()
-  const dec = new TextDecoder()
-  const sent: string[] = []
-  let bindCount = 0
-  let connectCount = 0
-  let connectFailuresLeft = options.failConnectTimes ?? 0
-  let openBiCount = 0
-  let writeAllEntries = 0
+/** A send stream that records lines and lets the test hold a write. */
+class RecordSend {
+  readonly written: string[] = []
+  finished = false
+  hold: Promise<void> | null = null
+  async writeAll(buf: number[]): Promise<void> {
+    if (this.hold) await this.hold
+    this.written.push(decoder.decode(Uint8Array.from(buf)))
+  }
+  async finish(): Promise<void> {
+    this.finished = true
+  }
+}
 
-  function makeRecvStream() {
-    const queue: Array<number[] | null> = []
-    let waiter: ((value: number[] | null) => void) | undefined
+function stream() {
+  const recv = new FeedStream()
+  const send = new RecordSend()
+  const closes: string[] = []
+  const connection = { openBi: async () => ({ send, recv }), close: (_code: bigint, reason: number[]) => closes.push(decoder.decode(Uint8Array.from(reason))) }
+  const control = new ControlStream(undefined, connection, send, recv)
+  return { recv, send, closes, control }
+}
+
+describe("ControlStream", () => {
+  test("parses newline-delimited JSON across arbitrary chunk boundaries, skipping blank and unreadable lines", async () => {
+    const { recv, control } = stream()
+    const values: unknown[] = []
+    control.start((value) => values.push(value), () => {})
+    const text = `{"type":"pong","t":1}\n\n{"type":"signal","kind":"draft","data":{"id":"x","text":"雨"}}\nnot json\n{"type":"pong","t":2}\n`
+    const bytes = encoder.encode(text)
+    // Split inside a multi-byte character too.
+    for (let at = 0; at < bytes.length; at += 7) recv.push(bytes.subarray(at, at + 7))
+    await waitFor("three frames", () => values.length === 3)
+    expect(values).toEqual([{ type: "pong", t: 1 }, { type: "signal", kind: "draft", data: { id: "x", text: "雨" } }, { type: "pong", t: 2 }])
+  })
+
+  test("writes one line per frame, in order, even when a write is slow", async () => {
+    const { send, control } = stream()
+    let release: () => void = () => {}
+    send.hold = new Promise((resolve) => (release = resolve))
+    control.send({ type: "ping", t: 1 })
+    control.send({ type: "input", rid: "r1", text: "hi" })
+    send.hold = null
+    release()
+    await waitFor("two lines", () => send.written.length === 2)
+    expect(send.written).toEqual([`{"type":"ping","t":1}\n`, `{"type":"input","rid":"r1","text":"hi"}\n`])
+  })
+
+  test("the end of the stream is reported once; a close asked for is not", async () => {
+    const first = stream()
+    const ends: string[] = []
+    first.control.start(() => {}, (reason) => ends.push(reason))
+    first.recv.end()
+    await waitFor("the end", () => ends.length === 1)
+    expect(ends).toEqual(["stream ended"])
+
+    const second = stream()
+    const none: string[] = []
+    second.control.start(() => {}, (reason) => none.push(reason))
+    second.control.send({ type: "ping", t: 1 })
+    second.control.close()
+    second.recv.end()
+    await waitFor("the hang-up", () => second.closes.length === 1)
+    expect(second.send.written).toEqual([`{"type":"ping","t":1}\n`])
+    expect(second.send.finished).toBe(true)
+    expect(none).toEqual([])
+    second.control.send({ type: "ping", t: 2 })
+    expect(second.send.written).toHaveLength(1)
+  })
+
+  test("a line past the cap drops the connection instead of buffering it", async () => {
+    const { recv, control } = stream()
+    const ends: string[] = []
+    control.start(() => {}, (reason) => ends.push(reason))
+    recv.push(new Uint8Array(MAX_LINE_BYTES + 1).fill(120))
+    await waitFor("the drop", () => ends.length === 1)
+    expect(ends).toEqual(["line too long"])
+  })
+})
+
+describe("dialIroh", () => {
+  function fakeIroh(calls: string[]): IrohModuleLike {
+    const recv = new FeedStream()
+    const send = new RecordSend()
+    const endpoint = {
+      online: async () => void calls.push("online"),
+      connect: async (addr: unknown, alpn: number[]) => {
+        calls.push(`connect ${String(addr)} ${decoder.decode(Uint8Array.from(alpn))}`)
+        return { openBi: async () => ({ send, recv }) }
+      },
+      close: async () => void calls.push("endpoint closed"),
+    }
+    const builder = {
+      bind: async () => endpoint,
+      bindAddr: (addr: string) => void calls.push(`bind ${addr}`),
+      relayMode: () => void calls.push("relay off"),
+    }
     return {
-      dead: false,
-      end(): void {
-        if (waiter) {
-          const resolve = waiter
-          waiter = undefined
-          resolve(null)
-        } else {
-          queue.push(null)
-        }
-      },
-      push(text: string): void {
-        this.pushBytes(enc.encode(text))
-      },
-      pushBytes(data: Uint8Array | number[]): void {
-        const bytes = Array.from(data)
-        if (waiter) {
-          const resolve = waiter
-          waiter = undefined
-          resolve(bytes)
-        } else {
-          queue.push(bytes)
-        }
-      },
-      async read(): Promise<number[] | null> {
-        if (queue.length > 0) return queue.shift()!
-        return new Promise((resolve) => {
-          waiter = resolve
-        })
-      },
+      Endpoint: { builder: () => builder },
+      presetN0: () => void calls.push("preset n0"),
+      presetMinimal: () => void calls.push("preset minimal"),
+      RelayMode: { disabled: () => "disabled" },
+      EndpointTicket: { fromString: (ticket: string) => ({ endpointAddr: () => `addr(${ticket})` }) },
     }
   }
 
-  const streams: Array<ReturnType<typeof makeRecvStream>> = []
-
-  const loadIroh: LoadIroh = async () => ({
-    Endpoint: {
-      builder: () => ({
-        bind: async () => {
-          bindCount += 1
-          return {
-            online: async () => {},
-            connect: async () => {
-              connectCount += 1
-              if (connectFailuresLeft > 0) {
-                connectFailuresLeft -= 1
-                throw new Error("relay warmup")
-              }
-              return {
-                openBi: async () => {
-                  const recv = makeRecvStream()
-                  streams.push(recv)
-                  const isDeadStream = options.hangFirstWrite && openBiCount++ === 0
-                  return {
-                    send: {
-                      writeAll: async (buf: number[]) => {
-                        writeAllEntries += 1
-                        if (isDeadStream && streams[0]?.dead) {
-                          await new Promise(() => {}) // never settles
-                        }
-                        sent.push(dec.decode(Uint8Array.from(buf)))
-                      },
-                    },
-                    recv,
-                  }
-                },
-                close: () => {},
-              }
-            },
-            close: () => {},
-          }
-        },
-      }),
-    },
-    presetN0: () => {},
-    EndpointTicket: { fromString: () => ({ endpointAddr: () => ({}) }) },
+  test("speaks the 3.0 ALPN; the public preset waits to be online, the local one binds loopback with no relay", async () => {
+    expect(ALPN).toBe("loreweaver/3")
+    const remote: string[] = []
+    await dialIroh(" endpointremote ", { loadIroh: async () => fakeIroh(remote) })
+    expect(remote).toEqual(["preset n0", "online", "connect addr(endpointremote) loreweaver/3"])
+    const local: string[] = []
+    await dialIroh("endpointlocal", { mode: "local", loadIroh: async () => fakeIroh(local) })
+    expect(local).toEqual(["preset minimal", "relay off", "bind 127.0.0.1:0", "connect addr(endpointlocal) loreweaver/3"])
   })
 
-  return { loadIroh, sent, streams, counts: () => ({ bindCount, connectCount, writeAllEntries }) }
-}
-
-async function openLink(loadIroh: LoadIroh): Promise<IrohLink> {
-  const { iroh, endpoint } = await bindIrohEndpoint(loadIroh)
-  return await IrohLink.open(endpoint, ticketAddr(iroh, TICKET))
-}
-
-describe("IrohLink framing", () => {
-  test("newline JSON frames dispatch; a split line is reassembled; non-JSON is ignored", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    const frames: ServerFrame[] = []
-    link.onMessage((frame) => frames.push(frame))
-    link.start()
-
-    const line = JSON.stringify(NARRATIVE)
-    streams[0]!.push(line.slice(0, 20))
-    await settle(0)
-    expect(frames).toEqual([])
-    streams[0]!.push(`${line.slice(20)}\nnot json\n${JSON.stringify({ ...NARRATIVE, id: "n2" })}\n`)
-    await settle(0)
-
-    expect(frames.map((frame) => frame.type === FrameType.Narrative ? frame.id : frame.type)).toEqual(["n1", "n2"])
+  test("a failed connect closes the endpoint it bound", async () => {
+    const calls: string[] = []
+    const iroh = fakeIroh(calls)
+    const builder = iroh.Endpoint.builder()
+    const endpoint = await builder.bind()
+    endpoint.connect = async () => {
+      throw new Error("unreachable")
+    }
+    await expect(dialIroh("endpointx", { loadIroh: async () => iroh })).rejects.toThrow("unreachable")
+    expect(calls).toContain("endpoint closed")
   })
 
-  test("a ping on the control stream is answered with a pong and is not dispatched", async () => {
-    const { loadIroh, sent, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    const frames: ServerFrame[] = []
-    link.onMessage((frame) => frames.push(frame))
-    link.start()
-
-    streams[0]!.push(`${JSON.stringify({ type: FrameType.Ping, t: 42 })}\n`)
-    await settle(0)
-
-    expect(frames).toEqual([])
-    expect(JSON.parse(sent[0]!)).toEqual({ type: FrameType.Pong, t: 42 })
-  })
-
-  test("connect retries once on a first-connect flake", async () => {
-    const { loadIroh, counts } = createMockIroh({ failConnectTimes: 1 })
-    const link = await openLink(loadIroh)
-    expect(link.isClosed).toBe(false)
-    expect(counts().connectCount).toBe(2)
-  })
-})
-
-describe("IrohLink write chain (F13)", () => {
-  test("a write hung on one link never blocks a later link on the same endpoint", async () => {
-    const { loadIroh, sent, streams, counts } = createMockIroh({ hangFirstWrite: true })
-    const { iroh, endpoint } = await bindIrohEndpoint(loadIroh)
-    const addr = ticketAddr(iroh, TICKET)
-
-    const dead = await IrohLink.open(endpoint, addr)
-    dead.sendInput("swallowed by the dying stream")
-    await settle(0)
-    streams[0]!.dead = true
-    dead.sendInput("still on the dead chain")
-    await settle(0)
-    expect(counts().writeAllEntries).toBe(2)
-    dead.close()
-
-    const live = await IrohLink.open(endpoint, addr)
-    live.sendInput("I open the door")
-    await settle(10)
-
-    expect(sent.some((line) => line.includes("I open the door"))).toBe(true)
-    expect(sent.some((line) => line.includes("swallowed by the dying stream"))).toBe(true)
-    expect(sent.some((line) => line.includes("still on the dead chain"))).toBe(false)
-  })
-
-  test("close() is manual — a late stream end does not fire onUnexpectedEnd", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    let unexpected = 0
-    link.onUnexpectedEnd(() => {
-      unexpected += 1
-    })
-    link.start()
-    link.close()
-    streams[0]!.end()
-    await settle()
-    expect(unexpected).toBe(0)
-    expect(link.isClosed).toBe(true)
-  })
-
-  test("an unexpected stream end fires onUnexpectedEnd once", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    let unexpected = 0
-    link.onUnexpectedEnd(() => {
-      unexpected += 1
-    })
-    link.start()
-    streams[0]!.end()
-    await settle()
-    expect(unexpected).toBe(1)
-    expect(link.isClosed).toBe(false)
-    expect(link.isAlive).toBe(false)
-  })
-
-  test("a throwing onUnexpectedEnd subscriber does not block the others", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    let second = 0
-    link.onUnexpectedEnd(() => {
-      throw new Error("subscriber boom")
-    })
-    link.onUnexpectedEnd(() => {
-      second += 1
-    })
-    link.start()
-    streams[0]!.end()
-    await settle()
-    expect(second).toBe(1)
-    expect(link.isAlive).toBe(false)
-  })
-})
-
-describe("IrohLink media channel", () => {
-  const UPLOAD = { name: "a.png", mime: "image/png", bytes: new Uint8Array([1, 2, 3]), sha256: "ab".repeat(32) }
-
-  async function startUpload(link: IrohLink, streams: Array<{ push(text: string): void }>) {
-    const promise = link.uploadMedia(UPLOAD)
-    promise.catch(() => {})
-    await settle(0)
-    streams[0]!.push(`${JSON.stringify({ type: FrameType.MediaAccept, upload_id: "u1" })}\n`)
-    await settle(0)
-    return { promise }
-  }
-
-  test("uploadMedia resolves once the server acknowledges with put_ok", async () => {
-    const { loadIroh, sent, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    link.start()
-
-    const { promise } = await startUpload(link, streams)
-    expect(streams.length).toBe(2)
-    streams[1]!.push(`${JSON.stringify({ op: "put_ok", hash: UPLOAD.sha256 })}\n`)
-    await expect(promise).resolves.toBeUndefined()
-    expect(sent.some((line) => line.includes('"op":"put"') && line.includes('"upload_id":"u1"'))).toBe(true)
-  })
-
-  test("uploadMedia surfaces a server error line instead of pretending success", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    link.start()
-
-    const { promise } = await startUpload(link, streams)
-    streams[1]!.push(`${JSON.stringify({ type: "error", code: "media_hash_mismatch", message: "hash mismatch" })}\n`)
-    await expect(promise).rejects.toThrow("hash mismatch")
-  })
-
-  test("getMedia refuses a header size above the media cap before reading the body", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    link.start()
-    const promise = link.getMedia(UPLOAD.sha256)
-    promise.catch(() => {})
-    await settle(0)
-    streams[1]!.push(
-      `${JSON.stringify({ op: "get", hash: UPLOAD.sha256, size: MAX_IROH_MEDIA_BYTES + 1, mime: "image/png", name: "a.png" })}\n`,
-    )
-    await expect(promise).rejects.toThrow(/size cap/)
-  })
-
-  test("getMedia returns the header fields plus the exact body bytes", async () => {
-    const { loadIroh, sent, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    link.start()
-
-    const promise = link.getMedia(UPLOAD.sha256)
-    promise.catch(() => {})
-    await settle(0)
-    expect(streams.length).toBe(2)
-    expect(sent.some((line) => line.includes('"op":"get"') && line.includes(UPLOAD.sha256))).toBe(true)
-    const headerLine = `${JSON.stringify({ op: "get", hash: UPLOAD.sha256, size: 3, mime: "image/png", name: "a.png" })}\n`
-    const headerBytes = new TextEncoder().encode(headerLine)
-    const combined = new Uint8Array(headerBytes.length + UPLOAD.bytes.length)
-    combined.set(headerBytes, 0)
-    combined.set(UPLOAD.bytes, headerBytes.length)
-    streams[1]!.pushBytes(combined)
-    await expect(promise).resolves.toEqual({
-      hash: UPLOAD.sha256,
-      mime: "image/png",
-      name: "a.png",
-      bytes: UPLOAD.bytes,
-    })
-  })
-
-  test("getMedia reads a body that arrives after the header chunk", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    link.start()
-
-    const promise = link.getMedia(UPLOAD.sha256)
-    promise.catch(() => {})
-    await settle(0)
-    streams[1]!.push(`${JSON.stringify({ op: "get", hash: UPLOAD.sha256, size: 3, mime: "image/png", name: "a.png" })}\n`)
-    await settle(0)
-    streams[1]!.pushBytes(UPLOAD.bytes)
-    await expect(promise).resolves.toEqual({
-      hash: UPLOAD.sha256,
-      mime: "image/png",
-      name: "a.png",
-      bytes: UPLOAD.bytes,
-    })
-  })
-
-  test("getMedia throws on an error reply header instead of returning empty bytes", async () => {
-    const { loadIroh, streams } = createMockIroh()
-    const link = await openLink(loadIroh)
-    link.start()
-
-    const promise = link.getMedia(UPLOAD.sha256)
-    promise.catch(() => {})
-    await settle(0)
-    streams[1]!.push(`${JSON.stringify({ type: "error", code: "media_not_found", message: "not found" })}\n`)
-    await expect(promise).rejects.toThrow("not found")
+  test("a ticket is recognised by its shape", () => {
+    expect(looksLikeTicket(" endpointabcdefghijklmnopqrstuvwxyz234567 ")).toBe(true)
+    expect(looksLikeTicket("ws://127.0.0.1:8787")).toBe(false)
+    expect(looksLikeTicket("endpointshort")).toBe(false)
   })
 })

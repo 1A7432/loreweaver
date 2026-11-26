@@ -7,9 +7,32 @@ import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { PNG } from "pngjs"
 import jpeg from "jpeg-js"
-import { stripControlChars, type MediaPayload, type MediaRef } from "loreweaver-protocol"
-import type { AppClient } from "./client"
-import { tt } from "./i18n"
+import { stripControlChars } from "loreweaver-protocol/v3"
+
+// Media helpers kept for the byte channel (protocol 3.0 §8.6), which the server does not offer
+// yet: decoding, the content-addressed cache, terminal previews. Nothing in the UI uses them
+// today; they carry no protocol coupling beyond these three shapes.
+
+/** A piece of media by content hash. */
+export interface MediaRef {
+  hash: string
+  mime: string
+  name?: string
+  size?: number
+}
+
+/** Its bytes, as a byte channel would hand them over. */
+export interface MediaPayload {
+  hash: string
+  mime: string
+  name: string
+  bytes: Uint8Array
+}
+
+/** Whatever can fetch bytes by hash. */
+export interface MediaSource {
+  getMedia(hash: string): Promise<MediaPayload>
+}
 
 export interface HalfBlockLine {
   text: string
@@ -94,7 +117,7 @@ export function droppedImagePath(value: string): string | undefined {
   return detectImageMime(path) ? path : undefined
 }
 
-export async function getCachedMedia(client: AppClient, media: MediaRef): Promise<MediaPayload> {
+export async function getCachedMedia(client: MediaSource, media: MediaRef): Promise<MediaPayload> {
   const path = cachePath(media.hash)
   if (existsSync(path)) {
     const bytes = new Uint8Array(await readFile(path))
@@ -113,7 +136,7 @@ export async function getCachedMedia(client: AppClient, media: MediaRef): Promis
   return payload
 }
 
-export async function openMedia(client: AppClient, media: MediaRef): Promise<void> {
+export async function openMedia(client: MediaSource, media: MediaRef): Promise<void> {
   const payload = await getCachedMedia(client, media)
   const dir = join(tmpdir(), "loreweaver-media")
   await mkdir(dir, { recursive: true })
@@ -151,14 +174,6 @@ export async function renderHalfBlockPreview(
     rows.push({ text, cells })
   }
   return rows
-}
-
-export function mediaPlaceholder(media: MediaRef, locale?: string): string {
-  const name = stripControlChars(media.name ?? media.hash.slice(0, 12))
-  if (media.mime === "image/gif" || media.mime === "image/webp") {
-    return tt(locale, "media.placeholderNoPreview", { name })
-  }
-  return tt(locale, "media.placeholder", { name })
 }
 
 export function decodeImage(bytes: Uint8Array, mime: string): RgbaImage {

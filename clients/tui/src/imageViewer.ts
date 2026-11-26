@@ -1,9 +1,6 @@
 import { PNG } from "pngjs"
-import type { MediaRef } from "loreweaver-protocol"
-import { decodeImage, getCachedMedia, openMedia, renderHalfBlockPreview, type HalfBlockLine } from "./media"
+import { decodeImage, getCachedMedia, openMedia, renderHalfBlockPreview, type HalfBlockLine, type MediaRef, type MediaSource } from "./media"
 import { encodeSixel, resizeRgbaArea } from "./sixel"
-import type { AppClient } from "./client"
-import { tt } from "./i18n"
 
 export interface RendererLike {
   capabilities?: { kitty_graphics?: boolean; sixel?: boolean } | null
@@ -19,10 +16,11 @@ export interface TerminalPixelSize {
 }
 
 export interface ViewImageOptions {
-  client: AppClient
+  client: MediaSource
   media: MediaRef
   renderer?: RendererLike
-  locale?: string
+  /** The line under a full-screen picture telling the person how to close it (already in their language). */
+  closeHint?: string
   forceSystem?: boolean
   columns?: number
   rows?: number
@@ -169,7 +167,7 @@ export async function viewImage(options: ViewImageOptions): Promise<HalfBlockLin
       const scaled = resizeRgbaArea(decoded, target.width, target.height)
       write(encodeSixel(scaled))
     }
-    write(`\n${tt(options.locale, "viewer.close")}`)
+    if (options.closeHint) write(`\n${options.closeHint}`)
     await readKey()
     write(mode === "kitty" ? kittyDeleteSequence() : "\x1b[2J\x1b[H")
   } finally {

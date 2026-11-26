@@ -1,26 +1,26 @@
-import { stripControlChars, type WelcomeFrame } from "loreweaver-protocol"
+import { stripControlChars } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette, ThemeName } from "../themes"
 
 export interface StatusBarProps {
-  welcome?: WelcomeFrame
-  // The caller's single merged online count — the status bar must never derive
-  // its own from a different frame source than the header (they'd disagree
-  // after a disconnect).
+  /** The room id from the welcome; absent before one. */
+  room?: string
+  // The caller's online count, from the `party` view — the same source the header reads, so the
+  // two can never disagree.
   online: number
+  /** This client's language. */
+  locale: string
   theme: Palette
   themeName: ThemeName
 }
 
-export function StatusBar({ welcome, online, theme, themeName }: StatusBarProps) {
-  const room = stripControlChars(welcome?.room ?? tt(welcome?.locale, "status.notJoined"))
-  const locale = stripControlChars(welcome?.locale ?? "--")
-  const count = online
+export function StatusBar({ room, online, locale, theme, themeName }: StatusBarProps) {
+  const label = room ? stripControlChars(room) : tt(locale, "status.notJoined")
   return (
     <box height={1} backgroundColor={theme.border}>
       <text fg={theme.bg} bg={theme.border} wrapMode="none" truncate>
-        {room} · {count} {tt(welcome?.locale, "status.online")} · {locale} · {themeName} · F1-F5{" "}
-        {tt(welcome?.locale, "status.theme")} · {tt(welcome?.locale, "status.help")}
+        {label} · {online} {tt(locale, "status.online")} · {locale} · {themeName} · F1-F5 {tt(locale, "status.theme")} ·{" "}
+        {tt(locale, "status.help")}
       </text>
     </box>
   )

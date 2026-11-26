@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { forgetServer, loadConnectMemory, rememberServer, saveConnectMemory } from "./connectMemory"
+import { stat } from "node:fs/promises"
+import { forgetServer, loadConnectMemory, rememberLocalKey, rememberServer, saveConnectMemory } from "./connectMemory"
 
 describe("connectMemory", () => {
   test("missing or malformed memory returns empty defaults", async () => {
@@ -16,8 +17,8 @@ describe("connectMemory", () => {
 
     await saveConnectMemory(
       {
-        host: " ws://127.0.0.1:8787 ",
-        key: " keeper-key ",
+        host: " endpointabcdefabcdefabcdefabcdef ",
+        key: " admin-key ",
         name: " 漱雪 ",
         localServerHome: " /srv/loreweaver-local ",
       },
@@ -25,12 +26,30 @@ describe("connectMemory", () => {
     )
 
     expect(await loadConnectMemory(path)).toEqual({
-      host: "ws://127.0.0.1:8787",
-      key: "keeper-key",
+      host: "endpointabcdefabcdefabcdefabcdef",
+      key: "admin-key",
       name: "漱雪",
+      locale: undefined,
       localServerHome: "/srv/loreweaver-local",
       servers: [],
+      localKeys: [],
     })
+    // The keys are bearer secrets: the file is the owner's alone.
+    if (process.platform !== "win32") expect((await stat(path)).mode & 0o077).toBe(0)
+  })
+
+  test("a local server's admin key is kept per folder and survives a save", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "loreweaver-tui-"))
+    const path = join(dir, "connect.json")
+    let keys = rememberLocalKey(undefined, { home: "/a", key: "k1" })
+    keys = rememberLocalKey(keys, { home: "/b", key: "k2" })
+    keys = rememberLocalKey(keys, { home: "/a", key: "k3" })
+    expect(keys).toEqual([
+      { home: "/a", key: "k3" },
+      { home: "/b", key: "k2" },
+    ])
+    await saveConnectMemory({ localKeys: [...keys, { home: "", key: "x" }] }, path)
+    expect((await loadConnectMemory(path)).localKeys).toEqual(keys)
   })
 
   test("saves and loads the servers list, dropping entries missing host or key", async () => {

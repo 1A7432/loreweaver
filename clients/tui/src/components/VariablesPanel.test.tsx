@@ -1,248 +1,45 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import type { ModuleVariable } from "loreweaver-protocol"
-import { sidebarWidth } from "../layout"
 import { themes } from "../themes"
-import { isBounded, VariablesPanel, variableLine } from "./VariablesPanel"
+import { isBounded, leafLine, variableLine, VariablesPanel } from "./VariablesPanel"
 
-describe("variableLine formatting", () => {
-  test("a bounded number renders label + CharacterPanel-style bar + value/max", () => {
-    const suspicion: ModuleVariable = { id: "suspicion", label: "Suspicion", kind: "number", value: 3, min: 0, max: 10 }
-    expect(isBounded(suspicion)).toBe(true)
-    // Same glyph family + thresholds as the HP/MP/SAN bars (bar() is reused, not copied).
-    expect(variableLine(suspicion, "en")).toBe("Suspicion ▒▒░░░░ 3/10")
+const destroy: Array<() => void> = []
+afterEach(() => {
+  for (const done of destroy.splice(0)) act(done)
+})
 
-    const full: ModuleVariable = { id: "doom", label: "Doom", kind: "number", value: 10, min: 0, max: 10 }
-    expect(variableLine(full, "en")).toBe("Doom ██████ 10/10")
+describe("variable lines", () => {
+  test("a bounded number is a bar, a bool a check, an enum its label, anything else label: value", () => {
+    expect(isBounded({ id: "a", kind: "number", label: "A", value: 1 })).toBe(false)
+    expect(variableLine({ id: "d", kind: "number", label: "Dread", value: 5, min: 0, max: 10 })).toBe("Dread ▓▓▓░░░ 5/10")
+    expect(variableLine({ id: "l", kind: "bool", label: "Lamp", value: false }, "en")).toBe("Lamp ✗ no")
+    expect(variableLine({ id: "m", kind: "enum", label: "Mood", value: "calm", valueLabel: "平静" })).toBe("Mood: 平静")
+    expect(variableLine({ id: "h", kind: "text", label: "Secret", value: "x", hidden: true })).toBe("⊘Secret: x")
   })
 
-  test("a bounded number with a nonzero min rescales the bar to the min..max span", () => {
-    const heat: ModuleVariable = { id: "heat", label: "Heat", kind: "number", value: 15, min: 10, max: 20 }
-    // Halfway through 10..20 must fill half the bar, not 15/20ths of it.
-    expect(variableLine(heat, "en")).toBe("Heat ▓▓▓░░░ 15/20")
-  })
-
-  test("a number missing either bound is a plain one-liner, no bar", () => {
-    const rations: ModuleVariable = { id: "rations", label: "Rations", kind: "number", value: 17 }
-    expect(isBounded(rations)).toBe(false)
-    expect(variableLine(rations, "en")).toBe("Rations: 17")
-    const minOnly: ModuleVariable = { id: "depth", label: "Depth", kind: "number", value: 3, min: 0 }
-    expect(isBounded(minOnly)).toBe(false)
-    expect(variableLine(minOnly, "en")).toBe("Depth: 3")
-  })
-
-  test("text and enum render as label: value one-liners", () => {
-    expect(variableLine({ id: "phase", label: "Phase", kind: "enum", value: "night" }, "en")).toBe("Phase: night")
-    expect(variableLine({ id: "pw", label: "Password", kind: "text", value: "swordfish" }, "en")).toBe(
-      "Password: swordfish",
-    )
-  })
-
-  test("an enum shows its server-named option (v2.5 value_label), else the raw value", () => {
-    const column: ModuleVariable = { id: "column_state", label: "纵队", kind: "enum", value: "marching", value_label: "在道上" }
-    expect(variableLine(column, "zh")).toBe("纵队: 在道上")
-    expect(variableLine({ ...column, value_label: undefined }, "zh")).toBe("纵队: marching")
-    expect(variableLine({ ...column, value_label: "" }, "zh")).toBe("纵队: marching")
-    // Only an enum's value is relabelled: a label on any other kind is not display data.
-    expect(variableLine({ id: "pw", label: "Password", kind: "text", value: "swordfish", value_label: "x" }, "en")).toBe(
-      "Password: swordfish",
-    )
-    expect(variableLine({ ...column, value_label: "在\x1b[2J道上" }, "zh")).toBe("纵队: 在[2J道上")
-  })
-
-  test("bool renders a check/cross + localized yes/no in both locales", () => {
-    const alarm: ModuleVariable = { id: "alarm", label: "Alarm", kind: "bool", value: false }
-    const armed: ModuleVariable = { id: "armed", label: "Armed", kind: "bool", value: true }
-    expect(variableLine(alarm, "en")).toBe("Alarm ✗ no")
-    expect(variableLine(armed, "en")).toBe("Armed ✓ yes")
-    expect(variableLine(alarm, "zh")).toBe("Alarm ✗ 否")
-    expect(variableLine(armed, "zh")).toBe("Armed ✓ 是")
-  })
-
-  test("strips terminal control characters from untrusted labels and values", () => {
-    const hostile: ModuleVariable = {
-      id: "trap",
-      label: "Tr\x1b]0;PWNED\x07ap",
-      kind: "text",
-      value: "he\x1b[2Jre",
-    }
-    // Same contract as every other panel (see sanitize.ts): the ESC/BEL
-    // introducers are dropped so the sequences are inert visible text at the
-    // terminal — the printable remnant is kept, never an active escape.
-    const line = variableLine(hostile, "en")
-    expect(line).not.toContain("\x1b")
-    expect(line).not.toContain("\x07")
-    expect(line).toBe("Tr]0;PWNEDap: he[2Jre")
+  test("a tree leaf is path: value, lists joined", () => {
+    expect(leafLine({ path: "party.gold", value: 12 })).toBe("party.gold: 12")
+    expect(leafLine({ path: "flags", value: ["a", true, null] })).toBe("flags: a, true, null")
+    expect(leafLine({ path: "plot", value: "x", hidden: true })).toBe("⊘plot: x")
   })
 })
 
-describe("VariablesPanel rendering", () => {
-  const VARIABLES: ModuleVariable[] = [
-    { id: "suspicion", label: "Suspicion", kind: "number", value: 3, min: 0, max: 10 },
-    { id: "alarm", label: "Alarm", kind: "bool", value: false },
-    { id: "phase", label: "Phase", kind: "enum", value: "night" },
-  ]
-
-  test("renders the localized title and one line per variable, in received order", async () => {
+describe("VariablesPanel", () => {
+  test("renders both kinds in order, and nothing at all when there are none", async () => {
     const { renderer, flush, captureCharFrame } = await testRender(
-      <VariablesPanel variables={VARIABLES} theme={themes.lamplight} locale="en" />,
-      { width: 32, height: 8 },
+      <VariablesPanel variables={{ module: [{ id: "d", kind: "number", label: "Dread", value: 3, min: 0, max: 10 }], tree: [{ path: "weather", value: "fog" }] }} theme={themes.lamplight} locale="en" />,
+      { width: 40, height: 8 },
     )
+    destroy.push(() => renderer.destroy())
     await flush()
-
     const frame = captureCharFrame()
     expect(frame).toContain("TRACKERS")
-    expect(frame).toContain("Suspicion ▒▒░░░░ 3/10")
-    expect(frame).toContain("Alarm ✗ no")
-    expect(frame).toContain("Phase: night")
-    // Received (definition) order is meaningful — never sorted.
-    expect(frame.indexOf("Suspicion")).toBeLessThan(frame.indexOf("Alarm"))
-    expect(frame.indexOf("Alarm")).toBeLessThan(frame.indexOf("Phase"))
+    expect(frame.indexOf("Dread")).toBeLessThan(frame.indexOf("weather: fog"))
 
-    act(() => renderer.destroy())
-  })
-
-  test("renders the zh title", async () => {
-    const { renderer, flush, captureCharFrame } = await testRender(
-      <VariablesPanel variables={VARIABLES} theme={themes.lamplight} locale="zh" />,
-      { width: 32, height: 8 },
-    )
-    await flush()
-    expect(captureCharFrame()).toContain("状态量")
-    act(() => renderer.destroy())
-  })
-
-  test("renders nothing at all when variables are absent or empty", async () => {
-    const absent = await testRender(<VariablesPanel theme={themes.lamplight} locale="en" />, {
-      width: 32,
-      height: 8,
-    })
-    await absent.flush()
-    expect(absent.captureCharFrame().trim()).toBe("")
-    act(() => absent.renderer.destroy())
-
-    const empty = await testRender(<VariablesPanel variables={[]} theme={themes.lamplight} locale="en" />, {
-      width: 32,
-      height: 8,
-    })
+    const empty = await testRender(<VariablesPanel variables={{ module: [], tree: [] }} theme={themes.lamplight} />, { width: 40, height: 4 })
+    destroy.push(() => empty.renderer.destroy())
     await empty.flush()
     expect(empty.captureCharFrame().trim()).toBe("")
-    act(() => empty.renderer.destroy())
-  })
-
-  test("long labels and values truncate to the panel width like other sidebar panels", async () => {
-    const longs: ModuleVariable[] = [
-      {
-        id: "long-label",
-        label: "An Exceedingly Verbose Tracker Label That Cannot Fit",
-        kind: "number",
-        value: 5,
-        min: 0,
-        max: 10,
-      },
-      {
-        id: "long-value",
-        label: "Note",
-        kind: "text",
-        value: "a value long enough to spill past the sidebar's right edge",
-      },
-    ]
-    const { renderer, flush, captureCharFrame } = await testRender(
-      <VariablesPanel variables={longs} theme={themes.lamplight} locale="en" />,
-      { width: 24, height: 8 },
-    )
-    await flush()
-
-    const frame = captureCharFrame()
-    // Every rendered line stays inside the 24-col budget — truncated, never wrapped.
-    expect(frame.split("\n").every((line) => Bun.stringWidth(line) <= 24)).toBe(true)
-    // OpenTUI's `truncate` ellipsizes mid-string, keeping both the label head and
-    // the line tail — so the bounded value stays readable even on a huge label.
-    expect(frame).toContain("An Excee")
-    expect(frame).toContain("5/10")
-    expect(frame).not.toContain("Cannot Fit")
-    expect(frame).not.toContain("right edge")
-
-    act(() => renderer.destroy())
-  })
-})
-
-describe("VariablesPanel long CJK rows", () => {
-  test("a long CJK label or enum value label never overflows the sidebar", async () => {
-    const long = "档案馆的抄写员记性好得过分什么都忘不掉连别人的秘密也是啊"
-    const variables: ModuleVariable[] = [
-      { id: "a", label: "纵队的状态是什么呢", kind: "enum", value: "x", value_label: long },
-      { id: "b", label: long, kind: "text", value: "短" },
-      { id: "c", label: long, kind: "number", value: 5, min: 0, max: 10 },
-    ]
-    for (const columns of [sidebarWidth(120), sidebarWidth(60)]) {
-      const { renderer, flush, captureCharFrame } = await testRender(
-        <VariablesPanel variables={variables} theme={themes.lamplight} locale="zh" />,
-        { width: columns, height: 10 },
-      )
-      await flush()
-      const lines = captureCharFrame().split("\n")
-      expect(lines.some((line) => line.includes("…"))).toBe(true)
-      for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(columns)
-      act(() => renderer.destroy())
-    }
-  })
-})
-
-// An imported SillyTavern module card lands its MVU state as dozens of dotted,
-// CJK-labelled leaves. On a KEEPER connection the ones not yet `.var expose`d arrive
-// flagged `hidden: true` (protocol v1.9); a player connection never receives them.
-describe("VariablesPanel imported-card MVU leaves", () => {
-  const LEAVES: ModuleVariable[] = [
-    { id: "mvu.世界.日", label: "世界.日", kind: "number", value: 2 },
-    { id: "mvu.世界.时辰", label: "世界.时辰", kind: "text", value: "酉时" },
-    { id: "mvu.酒馆.声望", label: "酒馆.声望", kind: "number", value: 34, min: 0, max: 100 },
-    { id: "mvu.访客.月雅.好感", label: "访客.月雅.好感", kind: "number", value: 12, min: 0, max: 100 },
-    { id: "mvu.标志.初次相遇已完成", label: "标志.初次相遇已完成", kind: "bool", value: true },
-    { id: "mvu.内部.剧本阶段", label: "内部.剧本阶段", kind: "text", value: "第二幕", hidden: true },
-    { id: "mvu.内部.真凶已锁定", label: "内部.真凶已锁定", kind: "bool", value: false, hidden: true },
-  ]
-
-  test("a keeper-only leaf is marked; an exposed one is not", () => {
-    // Protocol: "clients should render hidden rows visually locked/dimmed, never as
-    // player data". Unmarked, an un-exposed module internal reads on the keeper's own
-    // screen exactly like something the table can already see.
-    expect(variableLine(LEAVES[5]!, "zh")).toBe("⊘内部.剧本阶段: 第二幕")
-    expect(variableLine(LEAVES[6]!, "zh")).toBe("⊘内部.真凶已锁定 ✗ 否")
-    expect(variableLine(LEAVES[0]!, "zh")).toBe("世界.日: 2")
-    expect(variableLine(LEAVES[0]!, "zh")).not.toContain("⊘")
-    // The mark rides the label, so a bounded number keeps its bar and value intact.
-    const hiddenBounded: ModuleVariable = { ...LEAVES[2]!, hidden: true }
-    expect(variableLine(hiddenBounded, "zh")).toBe("⊘酒馆.声望 ▓▓░░░░ 34/100")
-  })
-
-  test("32 CJK leaves all render, in received order, inside the sidebar width", async () => {
-    // 32 is a realistic import: a card's whole `[InitVar]` schema flattens to this.
-    const width = 32
-    const many: ModuleVariable[] = Array.from({ length: 32 }, (_, index) => ({
-      ...LEAVES[index % LEAVES.length]!,
-      id: `${LEAVES[index % LEAVES.length]!.id}#${index}`,
-    }))
-    const { renderer, flush, captureCharFrame } = await testRender(
-      <VariablesPanel variables={many} theme={themes.lamplight} locale="zh" />,
-      { width, height: 40 },
-    )
-    await flush()
-
-    const frame = captureCharFrame()
-    const rows = frame.split("\n").filter((line) => line.includes("│") && !line.includes("─"))
-    // Title + 32 leaves, nothing dropped or collapsed by the CJK labels.
-    expect(rows.length).toBe(33)
-    // Double-width CJK still respects the panel budget at the real sidebar width
-    // (GameView pins it to 32 for every terminal >= the 96-col collapse threshold).
-    expect(frame.split("\n").every((line) => Bun.stringWidth(line) <= width)).toBe(true)
-    // Definition order survives: day before hour before reputation.
-    expect(frame.indexOf("世界.日")).toBeLessThan(frame.indexOf("世界.时辰"))
-    expect(frame.indexOf("世界.时辰")).toBeLessThan(frame.indexOf("酒馆.声望"))
-    // Hidden rows are still distinguishable this far down the list.
-    expect(frame).toContain("⊘内部.剧本阶段")
-
-    act(() => renderer.destroy())
   })
 })

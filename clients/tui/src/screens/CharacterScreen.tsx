@@ -1,38 +1,26 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import type { KeyEvent, SelectOption } from "@opentui/core"
-import { stripControlChars, type CharacterState, type RuleSystemEntry, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { stripControlChars, type Result } from "loreweaver-protocol/v3"
 import { CharacterPanel } from "../components/CharacterPanel"
 import { attributeLines } from "../components/characterAttributes"
+import { freeClaimables } from "../components/PartyRoster"
 import { StatusBar } from "../components/StatusBar"
+import type { Connection } from "../connection"
+import { useSnapshot, viewData } from "../hooks"
 import { tt } from "../i18n"
 import { sidebarCollapsed, sidebarWidth } from "../layout"
 import type { Palette, ThemeName } from "../themes"
 
-// Only `sendInput` is needed here: the screen's data arrives via the `stateFrame`
-// prop (App owns the socket and funnels every `state` frame to every screen), so
-// this mirrors GameView's narrow `GameClient` interface rather than the full
-// `AppClient` surface.
-export interface CharacterClient {
-  sendInput(text: string): void
-}
-
 export interface CharacterScreenProps {
-  client: CharacterClient
+  connection: Connection
   theme: Palette
   themeName: ThemeName
-  welcome: WelcomeFrame
-  stateFrame: StateFrame
+  locale: string
   onBack: () => void
 }
 
-type Mode = "view" | "create" | "tweak"
-// Protocol 2.3 removed the fourth ("manual") lane on purpose: a point-buy/budget
-// editor can only be drawn from a pack's `creation_constraints`, and no frame
-// carries those — offering one meant hard-coding one system's cost curve in a
-// client. Every remaining lane is expressible with what the wire actually sends.
-type CreateMode = "roll" | "persona" | "import"
-type CreateField = "method" | "system" | "name" | "description" | "importPath"
+type Mode = "view" | "create" | "claim" | "edit" | "rename"
 
 interface ViewAction {
   label: string
@@ -41,288 +29,218 @@ interface ViewAction {
 
 const CURSOR = "⚄"
 const DICE_GLYPHS = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-
-// The roll flicker ticks at a fixed cadence and is capped at ROLL_MAX_TICKS so a
-// slow/never-arriving reply can't spin forever-looking (still "rolling", just
-// frozen on its last die face) — bounded per the design brief. Landing itself is
-// never gated by this: it fires as soon as the awaited character actually changes.
+// The roll flicker ticks at a fixed cadence, capped so a slow reply cannot spin forever; landing
+// is never gated by it — it fires the moment the command answers.
 const ROLL_TICK_MS = 110
 const ROLL_MAX_TICKS = 48
 const LAND_FLOURISH_MS = 420
 
-const CREATE_MODE_VALUES: CreateMode[] = ["roll", "persona", "import"]
+const SELECT_COLORS = (theme: Palette) => ({
+  backgroundColor: theme.bg,
+  textColor: theme.fg,
+  focusedBackgroundColor: theme.bg,
+  focusedTextColor: theme.accent,
+  selectedBackgroundColor: theme.accent,
+  selectedTextColor: theme.bg,
+  descriptionColor: theme.dim,
+  selectedDescriptionColor: theme.bg,
+})
 
-function createModeOptions(locale: string): SelectOption[] {
-  return [
-    { name: tt(locale, "character.method.roll"), description: tt(locale, "character.method.roll.desc"), value: "roll" },
-    { name: tt(locale, "character.method.persona"), description: tt(locale, "character.method.persona.desc"), value: "persona" },
-    { name: tt(locale, "character.method.import"), description: tt(locale, "character.method.import.desc"), value: "import" },
-  ]
+/** The text a person reads for a command's answer: its text, a refusal's message, or nothing. */
+function answerText(result: Result | null): string | undefined {
+  if (result === null) return undefined
+  if (!result.ok) return result.error.message
+  return result.text
 }
 
-/** The systems this mode can actually offer.
- *
- * `roll` needs the pack's own make-character word (`make_char`) — a system that
- * declares none can still be imported into or described into, it simply carries no
- * command to create with. Everything here comes from `StateFrame.systems`; the
- * client knows no rule system by name. */
-function offeredSystems(systems: RuleSystemEntry[], mode: CreateMode): RuleSystemEntry[] {
-  return mode === "roll" ? systems.filter((entry) => Boolean(entry.make_char)) : systems
-}
-
-// The wire carries an id and nothing else — no display name, no description — so
-// the picker shows the id verbatim rather than inventing prose for it.
-function systemOptions(systems: RuleSystemEntry[]): SelectOption[] {
-  return systems.map((entry) => ({ name: entry.id, description: "", value: entry.id }))
-}
-
-function createFieldOrderFor(mode: CreateMode): CreateField[] {
-  if (mode === "persona") return ["method", "system", "name", "description"]
-  if (mode === "import") return ["method", "system", "importPath"]
-  return ["method", "system", "name"]
-}
-
-function createModeAt(index: number): CreateMode {
-  return CREATE_MODE_VALUES[index] ?? "roll"
-}
-
-function pendingLabel(kind: CreateMode, locale: string): string {
-  if (kind === "persona") return tt(locale, "character.pending.persona")
-  if (kind === "import") return tt(locale, "character.pending.import")
-  return tt(locale, "character.pending.roll")
-}
-
-// Identity, not reference: `net/state.py` rebuilds a brand-new `character` dict on
-// *every* state frame (any room event), so a reference check alone would treat an
-// unrelated broadcast as "the roll landed". Comparing content catches the case a
-// reroll happens to keep the same name (isolated flicker, not a real bug).
-function characterSignature(character?: CharacterState): string {
-  return character ? JSON.stringify(character) : ""
-}
-
-export function CharacterScreen({ client, theme, themeName, welcome, stateFrame, onBack }: CharacterScreenProps) {
+// Your character, on commands and views: everything here is `command.run` with the command's
+// typed arguments (`new_character`, `pc`, `sheet`, `rename`), and what shows comes from the `me`
+// and `characters` views. The client knows no rule system: systems, stats and labels are the
+// server's.
+export function CharacterScreen({ connection, theme, themeName, locale, onBack }: CharacterScreenProps) {
+  const snapshot = useSnapshot(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const showSheet = !sidebarCollapsed(terminalWidth)
-  const locale = welcome.locale
-  const CREATE_MODE_OPTIONS = createModeOptions(locale)
-  const hasCharacter = Boolean(stateFrame.character)
-  const [mode, setMode] = useState<Mode>(hasCharacter ? "view" : "create")
+  const me = viewData(snapshot, "me")
+  const characters = viewData(snapshot, "characters")
+  const character = me?.character ?? null
+  const systems = characters?.systems ?? []
+  const free = freeClaimables(characters)
+  const stats = character ? [...character.attributes, ...character.skills] : []
+  const online = (viewData(snapshot, "party")?.members ?? []).filter((member) => member.online).length
+  const room = snapshot.welcome?.room.id ?? ""
+
+  const [mode, setMode] = useState<Mode>(character ? "view" : "create")
   const [selected, setSelected] = useState(0)
   const [deleteArmed, setDeleteArmed] = useState(false)
-  const [viewNote, setViewNote] = useState<string>()
+  const [note, setNote] = useState<string>()
+  const [busy, setBusy] = useState(false)
 
-  // Create-flow fields (Tab-focus + ref-mirrored inputs, copied from ConnectScreen
-  // so submit always reads the latest typed value regardless of render timing).
-  const [createModeIndex, setCreateModeIndex] = useState(0)
-  // The chosen system is held as an ID, not an index: the offered list narrows in
-  // `roll` mode (make_char only), so an index would silently point at a different
-  // system when the method changes.
+  // Create.
   const [systemId, setSystemId] = useState("")
   const [name, setName] = useState("")
-  const [description, setDescription] = useState("")
-  const [importPath, setImportPath] = useState("")
-  const [createFocus, setCreateFocus] = useState<CreateField>("method")
-  const nameRef = useRef(name)
-  const descriptionRef = useRef(description)
-  const importPathRef = useRef(importPath)
-  const [pendingName, setPendingName] = useState("")
-  const [createNote, setCreateNote] = useState<string>()
-
-  // Signature stat-roll reveal: the roll itself happens server-side (dice-first),
-  // so this is purely a client-side "tumbling dice" flicker that plays while
-  // awaiting the refreshed `state` frame, then settles once the character the
-  // frame carries actually changes (see `characterSignature`).
+  const nameRef = useRef("")
+  const [createFocus, setCreateFocus] = useState<"system" | "name">("system")
   const [rolling, setRolling] = useState(false)
   const [landed, setLanded] = useState(false)
   const [rollTick, setRollTick] = useState(0)
-  const [pendingKind, setPendingKind] = useState<CreateMode>("roll")
-  const rollStartSignatureRef = useRef("")
-  const rollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const landTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [pendingName, setPendingName] = useState("")
+  const rollInterval = useRef<ReturnType<typeof setInterval> | null>(null)
+  const landTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Tweak-flow field.
-  const [tweakText, setTweakText] = useState("")
-  const tweakRef = useRef(tweakText)
-  const [tweakNote, setTweakNote] = useState<string>()
+  // Claim / edit / rename.
+  const [claimIndex, setClaimIndex] = useState(0)
+  const [statIndex, setStatIndex] = useState(0)
+  const [editFocus, setEditFocus] = useState<"stat" | "value">("stat")
+  const [value, setValue] = useState("")
+  const valueRef = useRef("")
+  const [renameText, setRenameText] = useState("")
+  const renameRef = useRef("")
 
-  const createMode = createModeAt(createModeIndex)
-  // v2.3: every rule system the server discovered. Absent means a server older than
-  // the frame that carries it — the screen says so instead of guessing a system.
-  const systems = stateFrame.systems ?? []
-  const offered = offeredSystems(systems, createMode)
-  const systemIndex = Math.max(0, offered.findIndex((entry) => entry.id === systemId))
-  const activeSystem = offered[systemIndex]
-  const SYSTEM_OPTIONS = systemOptions(offered)
+  const activeSystems = [...systems].sort((a, b) => Number(b.active) - Number(a.active))
+  const systemIndex = Math.max(0, activeSystems.findIndex((entry) => entry.id === systemId))
+  const chosenSystem = activeSystems[systemIndex]
 
-  const stopRollInterval = () => {
-    if (rollIntervalRef.current !== null) {
-      clearInterval(rollIntervalRef.current)
-      rollIntervalRef.current = null
+  const stopRoll = () => {
+    if (rollInterval.current !== null) clearInterval(rollInterval.current)
+    rollInterval.current = null
+  }
+  useEffect(
+    () => () => {
+      stopRoll()
+      if (landTimeout.current !== null) clearTimeout(landTimeout.current)
+    },
+    [],
+  )
+
+  const toView = (message?: string) => {
+    setNote(message)
+    setDeleteArmed(false)
+    setSelected(0)
+    setMode("view")
+  }
+
+  /** Run one command; its answer shows on this screen. */
+  const run = async (id: string, args: Record<string, unknown>): Promise<Result | null> => {
+    setBusy(true)
+    try {
+      const result = await connection.runCommand(id, args)
+      setNote(answerText(result) ?? (result === null ? tt(locale, "log.notConnected") : undefined))
+      return result
+    } finally {
+      setBusy(false)
     }
   }
-  const clearLandTimeout = () => {
-    if (landTimeoutRef.current !== null) {
-      clearTimeout(landTimeoutRef.current)
-      landTimeoutRef.current = null
+
+  const submitCreate = async () => {
+    if (rolling || busy) return
+    if (!chosenSystem) {
+      setNote(tt(locale, "character.noSystems"))
+      return
     }
-  }
-
-  // Timers are cleared on unmount so leaving the screen mid-roll can't leak them.
-  useEffect(() => {
-    return () => {
-      stopRollInterval()
-      clearLandTimeout()
-    }
-  }, [])
-
-  // The landing signal: once the awaited roll's `state` frame actually differs
-  // from the one captured at submit time, stop the flicker, flash the settled
-  // values in `theme.success`, then drop back into view mode.
-  useEffect(() => {
-    if (!rolling) return
-    const signature = characterSignature(stateFrame.character)
-    if (signature === rollStartSignatureRef.current) return
-    stopRollInterval()
-    setLanded(true)
-    landTimeoutRef.current = setTimeout(() => {
-      landTimeoutRef.current = null
-      setRolling(false)
-      setLanded(false)
-      setPendingKind("roll")
-      setMode("view")
-      setSelected(0)
-    }, LAND_FLOURISH_MS)
-  }, [rolling, stateFrame.character])
-
-  const beginRoll = (kind: CreateMode) => {
-    rollStartSignatureRef.current = characterSignature(stateFrame.character)
+    const trimmed = nameRef.current.trim()
+    setPendingName(trimmed)
     setLanded(false)
     setRollTick(0)
     setRolling(true)
-    setPendingKind(kind)
-    stopRollInterval()
-    if (kind === "roll") {
-      rollIntervalRef.current = setInterval(() => {
-        setRollTick((tick) => (tick + 1 >= ROLL_MAX_TICKS ? tick : tick + 1))
-      }, ROLL_TICK_MS)
+    stopRoll()
+    rollInterval.current = setInterval(() => setRollTick((tick) => (tick + 1 >= ROLL_MAX_TICKS ? tick : tick + 1)), ROLL_TICK_MS)
+    const result = await run("new_character", { system: chosenSystem.id, ...(trimmed ? { name: trimmed } : {}) })
+    stopRoll()
+    if (result?.ok) {
+      setLanded(true)
+      landTimeout.current = setTimeout(() => {
+        landTimeout.current = null
+        setRolling(false)
+        setLanded(false)
+        toView(answerText(result))
+      }, LAND_FLOURISH_MS)
+    } else {
+      setRolling(false)
     }
   }
 
-  const submitCreate = () => {
-    if (rolling) return
-    // The dot-command word is the pack's own (`RuleSystemEntry.make_char`), never a
-    // word this client knows: `.<make_char> [name]` is what `cmd_make_char` parses.
-    const word = activeSystem?.make_char
-    if (!word) {
-      setCreateNote(tt(locale, "character.note.noRollSystem"))
-      return
+  const submitClaim = async () => {
+    const entry = free[Math.min(claimIndex, free.length - 1)]
+    if (!entry || busy) return
+    const result = await run("pc", { op: "claim", name: entry.id })
+    if (result?.ok) toView(answerText(result) ?? tt(locale, "character.note.claimed", { name: stripControlChars(entry.name) }))
+  }
+
+  const submitEdit = async () => {
+    const stat = stats[Math.min(statIndex, stats.length - 1)]
+    const text = valueRef.current.trim()
+    if (!stat || !text || busy) return
+    const result = await run("sheet", { op: "set", writes: [{ name: stat.key, op: "=", value: text }] })
+    if (result?.ok) {
+      valueRef.current = ""
+      setValue("")
+      setEditFocus("stat")
     }
-    const trimmed = nameRef.current.trim()
-    client.sendInput(trimmed ? `.${word} ${trimmed}` : `.${word}`)
-    setPendingName(trimmed)
-    beginRoll("roll")
   }
 
-  const submitPersona = () => {
-    if (rolling) return
-    const descriptionValue = descriptionRef.current.trim()
-    if (!descriptionValue) {
-      setCreateNote(tt(locale, "character.note.descriptionRequired"))
-      return
-    }
-    const system = activeSystem?.id
-    if (!system) {
-      setCreateNote(tt(locale, "character.note.noSystemSelected"))
-      return
-    }
-    const trimmed = nameRef.current.trim()
-    const command = trimmed ? `.genchar ${system} ${trimmed} | ${descriptionValue}` : `.genchar ${system} | ${descriptionValue}`
-    client.sendInput(command)
-    setPendingName(trimmed)
-    setCreateNote(tt(locale, "character.note.genSent", { system }))
-    beginRoll("persona")
+  const submitRename = async () => {
+    const text = renameRef.current.trim()
+    if (!text || busy) return
+    const result = await run("rename", { name: text })
+    if (result?.ok) toView(answerText(result) ?? tt(locale, "character.note.renamed", { name: text }))
   }
 
-  const submitImport = () => {
-    if (rolling) return
-    const path = importPathRef.current.trim()
-    if (!path) return
-    const system = activeSystem?.id
-    if (!system) {
-      setCreateNote(tt(locale, "character.note.noSystemSelected"))
-      return
-    }
-    const command = `.import ${path} ${system} pc`
-    client.sendInput(command)
-    setCreateNote(tt(locale, "character.note.sent", { command }))
-    setPendingName(path.split("/").filter(Boolean).pop() ?? "")
-    beginRoll("import")
+  const release = async () => {
+    const result = await run("pc", { op: "release" })
+    if (result?.ok) toView(answerText(result) ?? tt(locale, "character.note.released"))
   }
 
-  const submitTweak = () => {
-    const text = tweakRef.current.trim()
-    if (!text) return
-    client.sendInput(`.st ${text}`)
-    setTweakNote(tt(locale, "character.note.tweakSent", { text }))
-    tweakRef.current = ""
-    setTweakText("")
+  const finalize = async () => {
+    await run("sheet", { op: "finalize" })
   }
 
-  // `.st finalize` re-derives the current vitals from the sheet's characteristics.
-  // The CANONICAL word, not a locale dialect one: `_SHEET_FINALIZE_WORDS` accepts
-  // `finalize` / `定稿` / `初始化` because a HUMAN may type any of them, but a client
-  // issuing the command programmatically has no locale to speak.
-  const finalizeCurrent = () => {
-    if (!stateFrame.character) return
-    client.sendInput(".st finalize")
-    setViewNote(tt(locale, "character.note.finalizeSent"))
-    setDeleteArmed(false)
-  }
-
-  const enterCreate = () => {
-    setDeleteArmed(false)
-    setViewNote(undefined)
-    setCreateModeIndex(0)
-    setSystemId("")
-    setName("")
-    setDescription("")
-    setImportPath("")
-    nameRef.current = ""
-    descriptionRef.current = ""
-    importPathRef.current = ""
-    setCreateNote(undefined)
-    setCreateFocus("method")
-    setMode("create")
-  }
-
-  const enterTweak = () => {
-    setDeleteArmed(false)
-    setViewNote(undefined)
-    setTweakText("")
-    tweakRef.current = ""
-    setTweakNote(undefined)
-    setMode("tweak")
-  }
-
-  const deleteCurrent = () => {
-    if (!stateFrame.character) return
+  const remove = async () => {
     if (!deleteArmed) {
       setDeleteArmed(true)
-      setViewNote(tt(locale, "character.note.confirmDelete"))
+      setNote(tt(locale, "character.note.confirmDelete"))
       return
     }
-    client.sendInput(".st delete")
-    setViewNote(tt(locale, "character.note.deleteSent", { name: stateFrame.character.name }))
     setDeleteArmed(false)
+    await run("sheet", { op: "clear" })
   }
 
-  const viewActions: ViewAction[] = [
-    { label: tt(locale, "character.view.new"), run: enterCreate },
-    { label: tt(locale, "character.view.tweak"), run: enterTweak },
-    { label: tt(locale, "character.view.finalize"), run: finalizeCurrent },
-    { label: deleteArmed ? tt(locale, "character.view.confirmDelete") : tt(locale, "character.view.delete"), run: deleteCurrent },
-    { label: tt(locale, "character.view.back"), run: onBack },
-  ]
+  const enter = (next: Mode) => {
+    setDeleteArmed(false)
+    setNote(undefined)
+    if (next === "create") {
+      setSystemId("")
+      setName("")
+      nameRef.current = ""
+      setCreateFocus("system")
+    }
+    if (next === "edit") {
+      setStatIndex(0)
+      setValue("")
+      valueRef.current = ""
+      setEditFocus("stat")
+    }
+    if (next === "rename") {
+      const current = character ? stripControlChars(character.name) : ""
+      setRenameText(current)
+      renameRef.current = current
+    }
+    if (next === "claim") setClaimIndex(0)
+    setMode(next)
+  }
+
+  const viewActions: ViewAction[] = [{ label: tt(locale, "character.view.new"), run: () => enter("create") }]
+  if (free.length > 0) viewActions.push({ label: tt(locale, "character.view.claim"), run: () => enter("claim") })
+  if (character) {
+    viewActions.push(
+      { label: tt(locale, "character.view.edit"), run: () => enter("edit") },
+      { label: tt(locale, "character.view.rename"), run: () => enter("rename") },
+      { label: tt(locale, "character.view.finalize"), run: () => void finalize() },
+      { label: tt(locale, "character.view.release"), run: () => void release() },
+      { label: deleteArmed ? tt(locale, "character.view.confirmDelete") : tt(locale, "character.view.delete"), run: () => void remove() },
+    )
+  }
+  viewActions.push({ label: tt(locale, "character.view.back"), run: onBack })
   const clampView = (index: number) => Math.max(0, Math.min(viewActions.length - 1, index))
   const activateView = (index: number) => {
     const target = clampView(index)
@@ -330,19 +248,8 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
     viewActions[target]?.run()
   }
 
-  const bailRoll = () => {
-    stopRollInterval()
-    clearLandTimeout()
-    setRolling(false)
-    setLanded(false)
-    setPendingKind("roll")
-  }
-
-  // Scoped to this screen and further scoped by `mode`, so it can't fight the
-  // menu's own arrow handling or a focused create/tweak-flow input/select.
   useKeyboard((event: KeyEvent) => {
     const key = typeof event.name === "string" ? event.name.toLowerCase() : ""
-
     if (mode === "view") {
       if (key === "up") setSelected((prev) => clampView(prev - 1))
       if (key === "down") setSelected((prev) => clampView(prev + 1))
@@ -350,49 +257,45 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
       if (key === "escape") {
         if (deleteArmed) {
           setDeleteArmed(false)
-          setViewNote(undefined)
-        } else {
-          onBack()
-        }
+          setNote(undefined)
+        } else onBack()
       }
       return
     }
-
-    if (mode === "create") {
-      if (key === "tab") {
-        setCreateFocus((prev) => {
-          const order = createFieldOrderFor(createMode)
-          const index = Math.max(0, order.indexOf(prev))
-          const delta = event.shift ? order.length - 1 : 1
-          return order[(index + delta) % order.length]
-        })
-      }
-      if (key === "escape") {
-        // Esc always provides an exit, even mid-roll: a stuck/slow reply can't
-        // trap the player on this screen.
-        bailRoll()
-        if (hasCharacter) setMode("view")
-        else onBack()
-      }
+    if (key === "escape") {
+      // Esc always leaves, even mid-roll: a slow reply cannot trap the player here.
+      stopRoll()
+      setRolling(false)
+      setLanded(false)
+      if (character || mode !== "create") toView()
+      else onBack()
       return
     }
-
-    if (mode === "tweak") {
-      if (key === "escape") setMode("view")
+    if (key === "tab") {
+      if (mode === "create") setCreateFocus((prev) => (prev === "system" ? "name" : "system"))
+      if (mode === "edit") setEditFocus((prev) => (prev === "stat" ? "value" : "stat"))
     }
   })
+
+  const systemOptions: SelectOption[] = activeSystems.map((entry) => ({
+    name: `${stripControlChars(entry.label)}${entry.active ? ` · ${tt(locale, "character.systemActive")}` : ""}`,
+    description: "",
+    value: entry.id,
+  }))
+  const claimOptions: SelectOption[] = free.map((entry) => ({ name: stripControlChars(entry.name), description: stripControlChars(entry.blurb.replace(/\s+/g, " ")), value: entry.id }))
+  const statOptions: SelectOption[] = attributeLines(stats).map((line) => ({ name: line.line, description: "", value: line.key }))
 
   const sheetContent = rolling ? (
     <box flexDirection="column" border borderColor={theme.accent} paddingX={1}>
       <text fg={theme.accent} wrapMode="none" truncate>
-        CHARACTER {landed ? `· ${tt(locale, "character.landed")}` : `· ${pendingLabel(pendingKind, locale)}`}
+        {tt(locale, "character.panelTitle")} · {landed ? tt(locale, "character.landed") : tt(locale, "character.pending.roll")}
       </text>
-      {landed ? (
+      {landed && character ? (
         <>
           <text fg={theme.success} wrapMode="none" truncate>
-            {CURSOR} {stripControlChars(stateFrame.character?.name ?? pendingName)}
+            {CURSOR} {stripControlChars(character.name)}
           </text>
-          {attributeLines(stateFrame.character).map(({ key, line }) => (
+          {attributeLines(character.attributes).map(({ key, line }) => (
             <text key={key} fg={theme.success} wrapMode="none" truncate>
               {line}
             </text>
@@ -401,41 +304,36 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
       ) : (
         <>
           <text fg={theme.accent} wrapMode="none" truncate>
-            {DICE_GLYPHS[rollTick % DICE_GLYPHS.length]}{" "}
-            {stripControlChars(pendingName || tt(locale, "character.newCharacter"))}…
+            {DICE_GLYPHS[rollTick % DICE_GLYPHS.length]} {stripControlChars(pendingName || tt(locale, "character.newCharacter"))}…
           </text>
-          {/* Dice glyphs only. Which characteristics a roll produces is the pack's
-              business, and the landed sheet below names them itself the moment the
-              state frame arrives — so nothing here needs a per-system label table. */}
-          {pendingKind === "roll" ? (
-            <text fg={theme.accent} wrapMode="none" truncate>
-              {DICE_GLYPHS.map((_, index) => DICE_GLYPHS[(rollTick + index * 2) % DICE_GLYPHS.length]).join(" ")}
-            </text>
-          ) : null}
-          {pendingKind === "persona" ? <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.personaPending")}</text> : null}
-          {pendingKind === "import" ? <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.importPending")}</text> : null}
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {DICE_GLYPHS.map((_, index) => DICE_GLYPHS[(rollTick + index * 2) % DICE_GLYPHS.length]).join(" ")}
+          </text>
         </>
       )}
     </box>
   ) : (
     <>
-      <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
-      {stateFrame.character ? (
+      <CharacterPanel character={character} theme={theme} locale={locale} />
+      {character && character.skills.length > 0 ? (
         <box flexDirection="column" border borderColor={theme.border} paddingX={1} marginTop={1}>
-          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.attributesTitle")}</text>
-          {attributeLines(stateFrame.character).map(({ key, line }) => (
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {tt(locale, "character.skillsTitle")}
+          </text>
+          {attributeLines(character.skills).map(({ key, line }) => (
             <text key={key} fg={theme.fg} wrapMode="none" truncate>
               {line}
             </text>
           ))}
         </box>
       ) : null}
-      {viewNote ? (
-        <box marginTop={1} minWidth={0}>
-          <text fg={deleteArmed ? theme.fumble : theme.dim} wrapMode="none" truncate>{stripControlChars(viewNote)}</text>
-        </box>
-      ) : null}
     </>
+  )
+
+  const panel = (children: ReactNode) => (
+    <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width="100%" maxWidth={72} minWidth={0} flexShrink={0}>
+      {children}
+    </box>
   )
 
   return (
@@ -443,238 +341,214 @@ export function CharacterScreen({ client, theme, themeName, welcome, stateFrame,
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
-          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.title")}</text>
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {tt(locale, "character.title")}
+          </text>
           <text fg={theme.dim} wrapMode="none" truncate>
             {" · "}
-            {stripControlChars(welcome.room)}
+            {stripControlChars(room)}
           </text>
         </box>
       </box>
 
       <box key={mode} flexDirection="row" flexGrow={1} minHeight={8}>
         <scrollbox flexGrow={1} flexShrink={1} minWidth={0} viewportCulling={false}>
-        <box flexDirection="column" width="100%" minWidth={0} paddingX={2} paddingY={1} flexShrink={0}>
-          {mode === "view" ? (
-            <>
-              <box marginBottom={1}>
-                <text fg={stateFrame.character?.avatar ? theme.success : theme.dim} wrapMode="none" truncate>
-                  {tt(locale, stateFrame.character?.avatar ? "character.avatar.set" : "character.avatar.unset")}
-                </text>
-              </box>
-              {viewActions.map((action, index) => (
-                <box
-                  key={action.label}
-                  height={1}
-                  backgroundColor={selected === index ? theme.accent : theme.bg}
-                  onMouseOver={() => setSelected(index)}
-                  onMouseDown={() => activateView(index)}
-                >
-                  <text fg={selected === index ? theme.bg : theme.fg} wrapMode="none" truncate>
-                    {selected === index ? `${CURSOR} ` : "  "}
-                    {action.label}
+          <box flexDirection="column" width="100%" minWidth={0} paddingX={2} paddingY={1} flexShrink={0}>
+            {mode === "view" ? (
+              <>
+                {viewActions.map((action, index) => (
+                  <box
+                    key={action.label}
+                    height={1}
+                    backgroundColor={selected === index ? theme.accent : theme.bg}
+                    onMouseOver={() => setSelected(index)}
+                    onMouseDown={() => activateView(index)}
+                  >
+                    <text fg={selected === index ? theme.bg : theme.fg} wrapMode="none" truncate>
+                      {selected === index ? `${CURSOR} ` : "  "}
+                      {action.label}
+                    </text>
+                  </box>
+                ))}
+                <box marginTop={1}>
+                  <text fg={theme.dim} wrapMode="none" truncate>
+                    {tt(locale, "character.view.help")}
                   </text>
                 </box>
-              ))}
-              <box marginTop={1}>
-                <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.view.help")}</text>
+              </>
+            ) : null}
+
+            {mode === "create"
+              ? panel(
+                  systems.length === 0 ? (
+                    <text fg={theme.fumble}>{characters === null ? tt(locale, "commands.loading") : tt(locale, "character.noSystems")}</text>
+                  ) : (
+                    <>
+                      <text fg={theme.dim} wrapMode="none" truncate>
+                        {tt(locale, "character.createIntro")}
+                      </text>
+                      <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("system")}>
+                        <text fg={createFocus === "system" ? theme.accent : theme.dim} wrapMode="none" truncate>
+                          {tt(locale, "character.system")}
+                        </text>
+                        <select
+                          flexGrow={1}
+                          height={Math.min(4, systemOptions.length)}
+                          focused={createFocus === "system"}
+                          options={systemOptions}
+                          selectedIndex={systemIndex}
+                          showDescription={false}
+                          {...SELECT_COLORS(theme)}
+                          onChange={(index: number) => setSystemId(activeSystems[index]?.id ?? "")}
+                          onSelect={() => setCreateFocus("name")}
+                        />
+                      </box>
+                      <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("name")}>
+                        <text fg={createFocus === "name" ? theme.accent : theme.dim} wrapMode="none" truncate>
+                          {tt(locale, "character.name")}
+                        </text>
+                        <input
+                          flexGrow={1}
+                          value={name}
+                          focused={createFocus === "name"}
+                          placeholder={tt(locale, "character.namePlaceholder")}
+                          onInput={(text: string) => {
+                            nameRef.current = text
+                            setName(text)
+                          }}
+                          onSubmit={() => void submitCreate()}
+                        />
+                      </box>
+                      <box marginTop={1} onMouseDown={() => void submitCreate()} backgroundColor={theme.accent} paddingX={1}>
+                        <text fg={theme.bg}>{rolling ? tt(locale, "character.rolling") : tt(locale, "character.roll")}</text>
+                      </box>
+                      <box marginTop={1}>
+                        <text fg={theme.dim}>{tt(locale, "character.createHelp", { target: character ? tt(locale, "character.backToView") : tt(locale, "character.backToMenu") })}</text>
+                      </box>
+                    </>
+                  ),
+                )
+              : null}
+
+            {mode === "claim"
+              ? panel(
+                  free.length === 0 ? (
+                    <text fg={theme.dim}>{tt(locale, "character.noClaimable")}</text>
+                  ) : (
+                    <>
+                      <text fg={theme.dim} wrapMode="none" truncate>
+                        {tt(locale, "character.claimIntro")}
+                      </text>
+                      <select
+                        flexGrow={1}
+                        height={Math.min(10, claimOptions.length * 2)}
+                        focused
+                        options={claimOptions}
+                        selectedIndex={Math.min(claimIndex, claimOptions.length - 1)}
+                        {...SELECT_COLORS(theme)}
+                        onChange={(index: number) => setClaimIndex(index)}
+                        onSelect={() => void submitClaim()}
+                      />
+                      <box marginTop={1}>
+                        <text fg={theme.dim}>{tt(locale, "character.claimHelp")}</text>
+                      </box>
+                    </>
+                  ),
+                )
+              : null}
+
+            {mode === "edit"
+              ? panel(
+                  stats.length === 0 ? (
+                    <text fg={theme.dim}>{tt(locale, "character.noStats")}</text>
+                  ) : (
+                    <>
+                      <text fg={theme.dim} wrapMode="none" truncate>
+                        {tt(locale, "character.editIntro")}
+                      </text>
+                      <box flexDirection="column" marginTop={1} onMouseDown={() => setEditFocus("stat")}>
+                        <select
+                          flexGrow={1}
+                          height={Math.min(10, statOptions.length)}
+                          focused={editFocus === "stat"}
+                          options={statOptions}
+                          selectedIndex={Math.min(statIndex, statOptions.length - 1)}
+                          showDescription={false}
+                          {...SELECT_COLORS(theme)}
+                          onChange={(index: number) => setStatIndex(index)}
+                          onSelect={() => setEditFocus("value")}
+                        />
+                      </box>
+                      <box flexDirection="column" marginTop={1} onMouseDown={() => setEditFocus("value")}>
+                        <text fg={editFocus === "value" ? theme.accent : theme.dim} wrapMode="none" truncate>
+                          {tt(locale, "character.newValue", { name: stats[Math.min(statIndex, stats.length - 1)]?.label ?? "" })}
+                        </text>
+                        <input
+                          flexGrow={1}
+                          value={value}
+                          focused={editFocus === "value"}
+                          placeholder={tt(locale, "character.valuePlaceholder")}
+                          onInput={(text: string) => {
+                            valueRef.current = text
+                            setValue(text)
+                          }}
+                          onSubmit={() => void submitEdit()}
+                        />
+                      </box>
+                      <box marginTop={1}>
+                        <text fg={theme.dim}>{tt(locale, "character.editHelp")}</text>
+                      </box>
+                    </>
+                  ),
+                )
+              : null}
+
+            {mode === "rename"
+              ? panel(
+                  <>
+                    <text fg={theme.accent} wrapMode="none" truncate>
+                      {tt(locale, "character.name")}
+                    </text>
+                    <input
+                      flexGrow={1}
+                      value={renameText}
+                      focused
+                      placeholder={tt(locale, "character.namePlaceholder")}
+                      onInput={(text: string) => {
+                        renameRef.current = text
+                        setRenameText(text)
+                      }}
+                      onSubmit={() => void submitRename()}
+                    />
+                    <box marginTop={1}>
+                      <text fg={theme.dim}>{tt(locale, "character.renameHelp")}</text>
+                    </box>
+                  </>,
+                )
+              : null}
+
+            {note ? (
+              <box marginTop={1} minWidth={0}>
+                <text fg={deleteArmed ? theme.fumble : theme.dim}>{stripControlChars(note)}</text>
               </box>
-            </>
-          ) : null}
+            ) : null}
 
-          {mode === "create" && systems.length === 0 ? (
-            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width="100%" maxWidth={72} minWidth={0} flexShrink={0}>
-              <text fg={theme.fumble}>{tt(locale, "character.noSystems")}</text>
-              <box marginTop={1}>
-                <text fg={theme.dim}>
-                  {tt(locale, "character.createHelp", {
-                    target: hasCharacter ? tt(locale, "character.backToView") : tt(locale, "character.backToMenu"),
-                  })}
-                </text>
+            {!showSheet ? (
+              <box key={rolling ? (landed ? "landed-narrow" : "rolling-narrow") : "sheet-narrow"} flexDirection="column" width="100%" minWidth={0} flexShrink={0} marginTop={1}>
+                {sheetContent}
               </box>
-            </box>
-          ) : null}
-
-          {mode === "create" && systems.length > 0 ? (
-            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width="100%" maxWidth={72} minWidth={0} flexShrink={0}>
-              <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.createIntro")}</text>
-
-              <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("method")}>
-                <text fg={createFocus === "method" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.method")}</text>
-                <select
-                  flexGrow={1}
-                  height={6}
-                  focused={createFocus === "method"}
-                  options={CREATE_MODE_OPTIONS}
-                  selectedIndex={createModeIndex}
-                  backgroundColor={theme.bg}
-                  textColor={theme.fg}
-                  focusedBackgroundColor={theme.bg}
-                  focusedTextColor={theme.accent}
-                  selectedBackgroundColor={theme.accent}
-                  selectedTextColor={theme.bg}
-                  descriptionColor={theme.dim}
-                  selectedDescriptionColor={theme.bg}
-                  onChange={(index: number) => {
-                    setCreateModeIndex(index)
-                    setCreateNote(undefined)
-                  }}
-                  onSelect={() => setCreateFocus("system")}
-                />
-              </box>
-
-              <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("system")}>
-                <text fg={createFocus === "system" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.system")}</text>
-                {offered.length > 0 ? (
-                  <select
-                    flexGrow={1}
-                    height={Math.min(4, offered.length)}
-                    focused={createFocus === "system"}
-                    options={SYSTEM_OPTIONS}
-                    selectedIndex={systemIndex}
-                    showDescription={false}
-                    backgroundColor={theme.bg}
-                    textColor={theme.fg}
-                    focusedBackgroundColor={theme.bg}
-                    focusedTextColor={theme.accent}
-                    selectedBackgroundColor={theme.accent}
-                    selectedTextColor={theme.bg}
-                    descriptionColor={theme.dim}
-                    selectedDescriptionColor={theme.bg}
-                    onChange={(index: number) => {
-                      setSystemId(offered[index]?.id ?? "")
-                      setCreateNote(undefined)
-                    }}
-                    onSelect={() => setCreateFocus(createMode === "import" ? "importPath" : "name")}
-                  />
-                ) : (
-                  <text fg={theme.fumble} wrapMode="none" truncate>{tt(locale, "character.note.noRollSystem")}</text>
-                )}
-              </box>
-
-              {createMode !== "import" ? (
-                <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("name")}>
-                  <text fg={createFocus === "name" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.name")}</text>
-                  <input
-                    flexGrow={1}
-                    value={name}
-                    focused={createFocus === "name"}
-                    placeholder={tt(locale, "character.namePlaceholder")}
-                    onInput={(value: string) => {
-                      nameRef.current = value
-                      setName(value)
-                    }}
-                    onSubmit={createMode === "persona" ? submitPersona : submitCreate}
-                  />
-                </box>
-              ) : null}
-
-              {createMode === "roll" ? (
-                <box marginTop={1} onMouseDown={submitCreate} backgroundColor={theme.accent} paddingX={1}>
-                  <text fg={theme.bg}>{rolling ? tt(locale, "character.rolling") : tt(locale, "character.roll")}</text>
-                </box>
-              ) : null}
-
-              {createMode === "persona" ? (
-                <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("description")}>
-                  <text fg={createFocus === "description" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.description")}</text>
-                  <input
-                    flexGrow={1}
-                    value={description}
-                    focused={createFocus === "description"}
-                    placeholder={tt(locale, "character.descriptionPlaceholder")}
-                    onInput={(value: string) => {
-                      descriptionRef.current = value
-                      setDescription(value)
-                    }}
-                    onSubmit={submitPersona}
-                  />
-                  <box marginTop={1} onMouseDown={submitPersona} backgroundColor={theme.accent} paddingX={1}>
-                    <text fg={theme.bg}>{tt(locale, "character.persona")}</text>
-                  </box>
-                </box>
-              ) : null}
-
-              {createMode === "import" ? (
-                <box flexDirection="column" marginTop={1} onMouseDown={() => setCreateFocus("importPath")}>
-                  <text fg={createFocus === "importPath" ? theme.accent : theme.dim} wrapMode="none" truncate>{tt(locale, "character.import")}</text>
-                  <input
-                    flexGrow={1}
-                    value={importPath}
-                    focused={createFocus === "importPath"}
-                    placeholder={tt(locale, "character.importPlaceholder")}
-                    onInput={(value: string) => {
-                      importPathRef.current = value
-                      setImportPath(value)
-                    }}
-                    onSubmit={submitImport}
-                  />
-
-                  <box marginTop={1} onMouseDown={submitImport} backgroundColor={theme.accent} paddingX={1}>
-                    <text fg={theme.bg}>{tt(locale, "character.importButton")}</text>
-                  </box>
-                </box>
-              ) : null}
-
-              {createNote ? (
-                <box marginTop={1}>
-                  <text fg={theme.dim} wrapMode="none" truncate>{stripControlChars(createNote)}</text>
-                </box>
-              ) : null}
-
-              <box marginTop={1}>
-                <text fg={theme.dim}>
-                  {tt(locale, "character.createHelp", {
-                    target: hasCharacter ? tt(locale, "character.backToView") : tt(locale, "character.backToMenu"),
-                  })}
-                </text>
-              </box>
-            </box>
-          ) : null}
-
-          {mode === "tweak" ? (
-            <box flexDirection="column" border borderColor={theme.border} paddingX={2} paddingY={1} width="100%" maxWidth={60} minWidth={0} flexShrink={0}>
-              <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.tweakIntro")}</text>
-              <box flexDirection="column" marginTop={1}>
-                <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "character.tweakCommand")}</text>
-                <input
-                  flexGrow={1}
-                  value={tweakText}
-                  focused
-                  placeholder={tt(locale, "character.tweakPlaceholder")}
-                  onInput={(value: string) => {
-                    tweakRef.current = value
-                    setTweakText(value)
-                  }}
-                  onSubmit={submitTweak}
-                />
-              </box>
-              <box marginTop={1} onMouseDown={submitTweak} backgroundColor={theme.accent} paddingX={1}>
-                <text fg={theme.bg}>{tt(locale, "character.apply")}</text>
-              </box>
-              {tweakNote ? (
-                <box marginTop={1}>
-                  <text fg={theme.dim} wrapMode="none" truncate>{stripControlChars(tweakNote)}</text>
-                </box>
-              ) : null}
-              <box marginTop={1}>
-                <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.tweakHelp")}</text>
-              </box>
-            </box>
-          ) : null}
-          {!showSheet ? (
-            <box key={rolling ? (landed ? "landed-narrow" : "rolling-narrow") : "sheet-narrow"} flexDirection="column" width="100%" minWidth={0} flexShrink={0} marginTop={1}>
-              {sheetContent}
-            </box>
-          ) : null}
-        </box>
+            ) : null}
+          </box>
         </scrollbox>
 
-        {showSheet ? <box key={rolling ? (landed ? "landed" : "rolling") : "sheet"} width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
-          {sheetContent}
-        </box> : null}
+        {showSheet ? (
+          <box key={rolling ? (landed ? "landed" : "rolling") : "sheet"} width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
+            {sheetContent}
+          </box>
+        ) : null}
       </box>
 
-      <StatusBar welcome={welcome} online={stateFrame.online} theme={theme} themeName={themeName} />
+      <StatusBar room={room} online={online} locale={locale} theme={theme} themeName={themeName} />
     </box>
   )
 }

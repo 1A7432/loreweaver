@@ -9,15 +9,12 @@ export interface EnvLike {
 }
 
 export interface LocalServerPaths {
+  /** The local server's folder. */
   home: string
-  serverDir: string
-  binaryDir: string
+  /** Where a prebuilt server binary is looked for. */
+  binary: string
+  /** The server's data directory (`TRPG_DATA_DIR`): database, keys, transport identity. */
   dataDir: string
-  envFile: string
-  keysFile: string
-  keeperSidecar: string
-  sourceArchive: string
-  uvInstallScript: string
 }
 
 function clean(value: string | undefined): string | undefined {
@@ -52,13 +49,7 @@ export function resolveLocalServerPaths(home?: string, env: EnvLike = process.en
   const root = expandHome(clean(home) ?? defaultLocalServerHome(env), env)
   return {
     home: root,
-    serverDir: join(root, "server"),
-    binaryDir: join(root, "server-bin"),
+    binary: join(root, "server-bin", process.platform === "win32" ? "loreweaver.exe" : "loreweaver"),
     dataDir: join(root, "data"),
-    envFile: join(root, ".env"),
-    keysFile: join(root, "local-keys.toml"),
-    keeperSidecar: join(root, "keeper-key.txt"),
-    sourceArchive: join(root, "server-src.tar.gz"),
-    uvInstallScript: join(root, "uv-install.sh"),
   }
 }

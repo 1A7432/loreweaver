@@ -21,7 +21,7 @@ function Harness({ initial, submitted }: { initial: string; submitted: string[] 
 
 describe("MaskedInput", () => {
   test("never paints the credential but submits the native input value", async () => {
-    const secret = "keeper-bearer-secret"
+    const secret = "admin-bearer-secret"
     const submitted: string[] = []
     const { renderer, flush, captureCharFrame, mockInput } = await testRender(
       <Harness initial={secret} submitted={submitted} />,

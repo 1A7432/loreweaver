@@ -1,19 +1,21 @@
 import { useState } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { stripControlChars } from "loreweaver-protocol/v3"
 import { StatusBar } from "../components/StatusBar"
+import type { Connection } from "../connection"
+import { useSnapshot, viewData } from "../hooks"
 import { tt, type TuiLocale } from "../i18n"
 import { themeOrder, type Palette, type ThemeName } from "../themes"
+import { roleLabel } from "./MainMenu"
 
 // A real settings screen (the menu item used to just flash a note). Language and theme
 // apply live; both are shell-owned so the choice persists across screens. Keyboard: ↑↓
 // pick a theme + Enter applies, ←/→ switch language, Esc goes back — mouse works too.
 export interface SettingsScreenProps {
+  connection: Connection
   theme: Palette
   themeName: ThemeName
-  welcome: WelcomeFrame
-  stateFrame: StateFrame
   locale: string
   onLocaleChange: (locale: TuiLocale) => void
   onThemeChange: (name: ThemeName) => void
@@ -23,10 +25,9 @@ export interface SettingsScreenProps {
 const CURSOR = "⚄"
 
 export function SettingsScreen({
+  connection,
   theme,
   themeName,
-  welcome,
-  stateFrame,
   locale,
   onLocaleChange,
   onThemeChange,
@@ -48,7 +49,10 @@ export function SettingsScreen({
     if (keyName === "right") onLocaleChange("zh")
   })
 
-  const roleLabel = welcome.you.role === "keeper" ? tt(locale, "menu.role.keeper") : tt(locale, "menu.role.player")
+  const snapshot = useSnapshot(connection)
+  const welcome = snapshot.welcome
+  const room = viewData(snapshot, "room")
+  const online = (viewData(snapshot, "party")?.members ?? []).filter((member) => member.online).length
 
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
@@ -94,19 +98,29 @@ export function SettingsScreen({
         <box marginTop={1}>
           <text fg={theme.dim}>
             {tt(locale, "settings.you", {
-              name: stripControlChars(welcome.you.name),
-              room: stripControlChars(welcome.room),
-              role: roleLabel,
+              name: stripControlChars(welcome?.you.name ?? ""),
+              room: stripControlChars(welcome?.room.id ?? ""),
+              role: roleLabel(snapshot, locale),
             })}
           </text>
         </box>
+        {room ? (
+          <box>
+            <text fg={theme.dim}>
+              {tt(locale, "settings.room", {
+                language: stripControlChars(room.localeLabel),
+                system: room.system ? stripControlChars(room.system.label) : tt(locale, "settings.noSystem"),
+              })}
+            </text>
+          </box>
+        ) : null}
 
         <box marginTop={1}>
           <text fg={theme.dim}>{tt(locale, "settings.help")}</text>
         </box>
       </box>
 
-      <StatusBar welcome={welcome} online={stateFrame.online} theme={theme} themeName={themeName} />
+      <StatusBar room={welcome?.room.id} online={online} locale={locale} theme={theme} themeName={themeName} />
     </box>
   )
 }

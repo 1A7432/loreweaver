@@ -1,12 +1,19 @@
-import { chmod, mkdir } from "node:fs/promises"
+import { chmod, mkdir, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { resolveConnectMemoryPath } from "./localPaths"
 
-// One remembered connection: a server address (ws:// URL or Iroh ticket) + its invite key.
+// One remembered connection: an iroh ticket + its access key.
 export interface SavedServer {
   host: string
   key: string
   name?: string
+}
+
+/** The admin key of a local server, by the folder it keeps its data in. A fresh server shows
+ * its first admin key ONCE, so the client keeps it here (the file is owner-only). */
+export interface LocalKey {
+  home: string
+  key: string
 }
 
 export interface ConnectMemory {
@@ -17,9 +24,11 @@ export interface ConnectMemory {
   localServerHome?: string
   // Past successful connections, most-recent first — the connect screen offers them to pick.
   servers?: SavedServer[]
+  localKeys?: LocalKey[]
 }
 
 const MAX_SERVERS = 8
+const MAX_LOCAL_KEYS = 8
 
 function cleanLocale(value: unknown): "en" | "zh" | undefined {
   return value === "en" || value === "zh" ? value : undefined
@@ -43,6 +52,23 @@ function cleanServers(value: unknown): SavedServer[] {
     if (out.length >= MAX_SERVERS) break
   }
   return out
+}
+
+function cleanLocalKeys(value: unknown): LocalKey[] {
+  if (!Array.isArray(value)) return []
+  const out: LocalKey[] = []
+  for (const entry of value) {
+    const home = clean((entry as LocalKey)?.home)
+    const key = clean((entry as LocalKey)?.key)
+    if (home && key) out.push({ home, key })
+    if (out.length >= MAX_LOCAL_KEYS) break
+  }
+  return out
+}
+
+/** Keep `entry` as the key for its folder (one per folder, newest first). Pure. */
+export function rememberLocalKey(keys: LocalKey[] | undefined, entry: LocalKey): LocalKey[] {
+  return [entry, ...(keys ?? []).filter((item) => item.home !== entry.home)].slice(0, MAX_LOCAL_KEYS)
 }
 
 // Float `entry` to the top of the saved list, de-duplicated by host+key (a repeat connection
@@ -71,6 +97,7 @@ export async function loadConnectMemory(path = MEMORY_PATH): Promise<ConnectMemo
       locale: cleanLocale((parsed as ConnectMemory).locale),
       localServerHome: clean((parsed as ConnectMemory).localServerHome),
       servers: cleanServers((parsed as ConnectMemory).servers),
+      localKeys: cleanLocalKeys((parsed as ConnectMemory).localKeys),
     }
   } catch {
     return {}
@@ -85,10 +112,12 @@ export async function saveConnectMemory(memory: ConnectMemory, path = MEMORY_PAT
     locale: cleanLocale(memory.locale),
     localServerHome: clean(memory.localServerHome),
     servers: cleanServers(memory.servers),
+    localKeys: cleanLocalKeys(memory.localKeys),
   }
   await mkdir(dirname(path), { recursive: true })
-  await Bun.write(path, `${JSON.stringify(data, null, 2)}\n`)
-  // The invite key is a bearer secret; keep the file owner-only so it isn't world/group
+  // Created owner-only, so the keys are never readable by others even for a moment.
+  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 })
+  // The keys are bearer secrets; keep the file owner-only so it isn't world/group
   // readable on a shared machine. Best-effort — a no-op on platforms without POSIX modes.
   try {
     await chmod(path, 0o600)

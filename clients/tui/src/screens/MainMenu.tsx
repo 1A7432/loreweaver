@@ -1,99 +1,69 @@
-import { Fragment, useState } from "react"
+import { useState } from "react"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import { stripControlChars, type PresenceFrame, type StateFrame, type WelcomeFrame } from "loreweaver-protocol"
+import { stripControlChars, type Role, type SessionSnapshot } from "loreweaver-protocol/v3"
 import { CharacterPanel } from "../components/CharacterPanel"
 import { PartyPanel } from "../components/PartyPanel"
 import { ScenePanel } from "../components/ScenePanel"
 import { StatusBar } from "../components/StatusBar"
+import type { Connection } from "../connection"
+import { useSnapshot, viewData } from "../hooks"
 import { tt } from "../i18n"
 import { sidebarCollapsed, sidebarWidth } from "../layout"
 import type { Palette, ThemeName } from "../themes"
 
 export interface MainMenuProps {
-  welcome: WelcomeFrame
+  connection: Connection
   theme: Palette
   themeName: ThemeName
-  stateFrame: StateFrame
-  presence?: PresenceFrame
-  // Offered only when the server advertises its offline demo fallback. Keeping
-  // the callback optional preserves compatibility with embedders/older tests.
-  onStartDemo?: () => void
+  locale: string
   onEnterGame: () => void
   onCharacter: () => void
+  onCommands: () => void
   onSettings: () => void
-  onKeeperKeys: () => void
-  onKeeperModule: () => void
-  onKeeperModel: () => void
-  onKeeperRules: () => void
-  onKeeperSkills: () => void
-  // Optional so a caller that doesn't wire teardown yet just gets no Quit row (rather than a
-  // dead button); App.tsx always supplies it via `handleQuit`.
+  // Optional so a caller that does not wire teardown gets no Quit row rather than a dead one.
   onQuit?: () => void
 }
 
 interface MenuItem {
   label: string
-  keeper: boolean
   run: () => void
 }
 
-// The selection cursor is the die glyph (a signature nod to the dice-first rule),
-// not a generic ▶.
+// The selection cursor is the die glyph (a nod to the dice-first rule), not a generic ▶.
 const CURSOR = "⚄"
 
-export function MainMenu({
-  welcome,
-  theme,
-  themeName,
-  stateFrame,
-  presence,
-  onStartDemo,
-  onEnterGame,
-  onCharacter,
-  onSettings,
-  onKeeperKeys,
-  onKeeperModule,
-  onKeeperModel,
-  onKeeperRules,
-  onKeeperSkills,
-  onQuit,
-}: MainMenuProps) {
+/** The person's role in words: the `me` view's own label (in this member's language) when it
+ * has arrived, else ours. The human with the admin key is the room's admin — never "the Keeper",
+ * which is the AI. */
+export function roleLabel(snapshot: SessionSnapshot, locale: string): string {
+  const fromView = viewData(snapshot, "me")?.member.roleLabel
+  if (fromView) return stripControlChars(fromView)
+  const role: Role = snapshot.welcome?.you.role ?? "player"
+  return tt(locale, role === "admin" ? "menu.role.admin" : role === "observer" ? "menu.role.observer" : "menu.role.player")
+}
+
+export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onQuit }: MainMenuProps) {
+  const snapshot = useSnapshot(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const showSidebar = !sidebarCollapsed(terminalWidth)
   const [selected, setSelected] = useState(0)
-  const isKeeper = welcome.you.role === "keeper"
-  const locale = welcome.locale
+  const welcome = snapshot.welcome
+  const party = viewData(snapshot, "party")
+  const online = (party?.members ?? []).filter((member) => member.online).length
+  const isAdmin = welcome?.you.role === "admin"
 
-  const items: MenuItem[] = []
-  if (isKeeper && welcome.features?.includes("demo") && onStartDemo) {
-    // First row + initial cursor: a brand-new local user can press Enter once
-    // instead of learning magic words such as "upload", "start", or "search".
-    items.push({ label: tt(locale, "menu.demo"), keeper: false, run: () => onStartDemo() })
-  }
-  items.push(
-    { label: tt(locale, "menu.enterGame"), keeper: false, run: () => onEnterGame() },
-    { label: tt(locale, "menu.character"), keeper: false, run: () => onCharacter() },
-    { label: tt(locale, "menu.settings"), keeper: false, run: () => onSettings() },
-  )
-  if (isKeeper) {
-    items.push(
-      { label: tt(locale, "menu.keys"), keeper: true, run: () => onKeeperKeys() },
-      { label: tt(locale, "menu.module"), keeper: true, run: () => onKeeperModule() },
-      { label: tt(locale, "menu.rules"), keeper: true, run: () => onKeeperRules() },
-      { label: tt(locale, "menu.skills"), keeper: true, run: () => onKeeperSkills() },
-      { label: tt(locale, "menu.model"), keeper: true, run: () => onKeeperModel() },
-    )
-  }
-  // Placed last and visually separated (a blank spacer row, below) — not for someone new to
-  // the app to hit by accident while arrowing through the game actions.
+  const items: MenuItem[] = [
+    { label: tt(locale, "menu.enterGame"), run: onEnterGame },
+    { label: tt(locale, "menu.character"), run: onCharacter },
+    { label: tt(locale, "menu.commands"), run: onCommands },
+    { label: tt(locale, "menu.settings"), run: onSettings },
+  ]
+  // Last and set apart by a blank row: not for a newcomer to hit while arrowing through.
   const quitIndex = onQuit ? items.length : -1
-  if (onQuit) items.push({ label: tt(locale, "menu.quit"), keeper: false, run: () => onQuit() })
+  if (onQuit) items.push({ label: tt(locale, "menu.quit"), run: onQuit })
 
   const clamp = (index: number) => Math.max(0, Math.min(items.length - 1, index))
-  // Capabilities/roles may change while the menu is mounted (for example a hot switch removes
-  // the one-shot demo row). Render and activate a clamped cursor immediately; no follow-up state
-  // effect is needed, so the capability update cannot briefly target an item that no longer exists.
   const visibleSelected = clamp(selected)
   const activate = (index: number) => {
     const target = clamp(index)
@@ -101,8 +71,6 @@ export function MainMenu({
     items[target]?.run()
   }
 
-  // Scoped to the menu (mounted only here) so it can't fight the connect screen's
-  // Tab handling or a focused input. Arrows move the shared cursor, Enter activates.
   useKeyboard((event: KeyEvent) => {
     const keyName = typeof event.name === "string" ? event.name.toLowerCase() : ""
     if (keyName === "up") setSelected((prev) => clamp(prev - 1))
@@ -110,21 +78,18 @@ export function MainMenu({
     if (keyName === "return" || keyName === "enter") activate(visibleSelected)
   })
 
-  const firstKeeperIndex = items.findIndex((item) => item.keeper)
-
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      {/* height=4 → 2 inner rows: the height the `tiny` ascii-font wordmark needs so
-          its second row doesn't bleed into the border (matches the GameView header);
-          the room + role still sit side by side on the first content row. */}
+      {/* height=4 → 2 inner rows: what the `tiny` ascii-font wordmark needs. */}
       <box height={4} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <ascii-font text="LOREWEAVER" font="tiny" color={theme.accent} />
         <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
-          <text fg={theme.accent} wrapMode="none" truncate>{tt(locale, "menu.table", { room: stripControlChars(welcome.room) })}</text>
+          <text fg={theme.accent} wrapMode="none" truncate>
+            {tt(locale, "menu.table", { room: stripControlChars(welcome?.room.id ?? "") })}
+          </text>
           <text fg={theme.dim} wrapMode="none" truncate>
             {" · "}
-            {stripControlChars(welcome.you.name)} ·{" "}
-            {welcome.you.role === "keeper" ? tt(locale, "menu.role.keeper") : tt(locale, "menu.role.player")}
+            {stripControlChars(welcome?.you.name ?? "")} · {roleLabel(snapshot, locale)}
           </text>
         </box>
       </box>
@@ -132,12 +97,7 @@ export function MainMenu({
       <box flexDirection="row" flexGrow={1} minHeight={8}>
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
           {items.map((item, index) => (
-            <Fragment key={item.label}>
-              {index === firstKeeperIndex ? (
-                <box marginTop={1}>
-                  <text fg={theme.fumble}>{tt(locale, "menu.keeperSection")}</text>
-                </box>
-              ) : null}
+            <box key={item.label} flexDirection="column">
               {index === quitIndex ? <box height={1} /> : null}
               <box
                 height={1}
@@ -150,18 +110,25 @@ export function MainMenu({
                   {item.label}
                 </text>
               </box>
-            </Fragment>
+            </box>
           ))}
+          {isAdmin ? (
+            <box marginTop={1}>
+              <text fg={theme.dim}>{tt(locale, "menu.adminHint")}</text>
+            </box>
+          ) : null}
         </box>
 
-        {showSidebar ? <box width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
-          <CharacterPanel character={stateFrame.character} theme={theme} locale={locale} />
-          <PartyPanel party={stateFrame.party} initiative={stateFrame.initiative} theme={theme} locale={locale} />
-          <ScenePanel scene={stateFrame.scene} clock={stateFrame.clock} theme={theme} locale={locale} />
-        </box> : null}
+        {showSidebar ? (
+          <box width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
+            <CharacterPanel character={viewData(snapshot, "me")?.character} theme={theme} locale={locale} />
+            <PartyPanel party={party} theme={theme} locale={locale} />
+            <ScenePanel scene={viewData(snapshot, "scene")} theme={theme} locale={locale} />
+          </box>
+        ) : null}
       </box>
 
-      <StatusBar welcome={welcome} online={presence?.online ?? stateFrame.online} theme={theme} themeName={themeName} />
+      <StatusBar room={welcome?.room.id} online={online} locale={locale} theme={theme} themeName={themeName} />
     </box>
   )
 }

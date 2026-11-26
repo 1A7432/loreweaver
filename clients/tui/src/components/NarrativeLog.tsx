@@ -1,44 +1,16 @@
 import { SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/react"
 import { useEffect, useMemo } from "react"
-import {
-  stripControlChars,
-  type AudioControlFrame,
-  type AudioLibraryItemFrame,
-  type DiceFrame,
-  type MediaFrame,
-  type NarrativeFrame,
-  type SystemFrame,
-  type UiFrame,
-} from "loreweaver-protocol"
-import type { AppClient } from "../client"
+import { stripControlChars, type DiceData } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
-import { mediaPlaceholder } from "../media"
+import { itemBlocks, lastChoicesIndex, type LogItem } from "../log"
+import { diceText, localText, markerText, speakerLabel } from "../logText"
 import type { Palette } from "../themes"
-import { MediaPreviewRows, useMediaPreview } from "./MediaPreview"
 import { Spinner } from "./Spinner"
-import { UiBlocksView } from "./UiBlocks"
+import { UiBlocksView, type UiChoice } from "./UiBlocks"
 
-// `draft` is CLIENT-LOCAL three-state streaming bookkeeping: `true` while
-// `narrative_delta` frames are still accumulating into this bubble, `false`
-// once the closing `narrative` (full final text, same id) replaced the draft,
-// and absent on a plain one-shot line that never streamed.
-export type LogNarrative = NarrativeFrame & { draft?: boolean }
-export type LogFrame = LogNarrative | DiceFrame | SystemFrame | MediaFrame | AudioLibraryItemFrame | AudioControlFrame | UiFrame
-
-/** Index of the LAST inline `ui` frame carrying a choices block — the one whose
- * select is keyboard-interactive. Exported so GameView's Tab focus cycle and
- * this renderer agree on exactly one live select. */
-export function lastChoicesFrameIndex(frames: LogFrame[]): number {
-  return frames.reduce(
-    (last, frame, index) =>
-      frame.type === "ui" && frame.blocks.some((block) => block.kind === "choices") ? index : last,
-    -1,
-  )
-}
-
-// KP narrative markdown only needs basic emphasis styling. The SyntaxStyle itself is a
-// native resource owned by a renderer, so the log builds one per renderer (see below).
+// Narrative markdown only needs basic emphasis styling. The SyntaxStyle itself is a native
+// resource owned by a renderer, so the log builds one per renderer (see below).
 const NARRATIVE_STYLES = {
   "markup.strong": { bold: true },
   "markup.italic": { italic: true },
@@ -46,40 +18,36 @@ const NARRATIVE_STYLES = {
 }
 
 export interface NarrativeLogProps {
-  frames: LogFrame[]
+  items: readonly LogItem[]
   theme: Palette
+  /** The dice event being revealed (the newest live roll) and how far its reveal has got (0..3). */
+  revealSeq?: number
   revealTicks?: number
   critFlash?: boolean
-  // While the Keeper's reply to the latest player turn is in flight, a trailing
-  // "构思中" spinner rides the bottom of the log (like a chat typing indicator).
-  kpWorking?: boolean
+  // While a turn is in flight a trailing animated spinner rides the bottom of the log.
+  working?: boolean
   workingLabel?: string
+  /** A line at the top: older history can be loaded, or earlier lines were hidden. */
+  topHint?: string
+  /** Ids of narratives that replaced a draft streamed in front of this player: those take the
+   * styled (asynchronous) markdown path. Every other line keeps the synchronous fallback, which
+   * draws in the same render pass — history replayed on join included. */
+  styledIds?: ReadonlySet<string>
   locale?: string
-  client?: AppClient
-  selectedMediaHash?: string
-  onSelectMedia?: (frame: MediaFrame) => void
-  // v1.7 inline hook UI: whether the latest choices select owns the keyboard
-  // (GameView's Tab cycle), and what a picked option's `input` is sent through.
+  // Whether the latest choices select owns the keyboard (GameView's Tab cycle), and what a
+  // picked option is acted on with.
   choicesFocused?: boolean
-  onChoicePick?: (input: string) => void
+  onChoicePick?: (option: UiChoice) => void
 }
 
-function diceColor(frame: DiceFrame, theme: Palette): string {
-  // Color by the outcome's SEMANTIC flags (protocol 2.0) — never by a rank id.
-  const outcome = frame.outcome
+function diceColor(dice: DiceData, theme: Palette): string {
+  // Colour by the outcome's semantic flags — never by a rank id.
+  const outcome = dice.outcome
   if (!outcome) return theme.system
   if (outcome.critical) return theme.crit
   if (outcome.fumble) return theme.fumble
   if (outcome.success) return theme.success
   return theme.fail
-}
-
-function diceLine(frame: DiceFrame, revealTicks: number): string {
-  const target = typeof frame.target === "number" ? ` vs ${frame.target}` : ""
-  const outcome = frame.outcome?.label ? ` -> ${frame.outcome.label}` : ""
-  const prefix = revealTicks < 2 ? "⚄ ..." : "⚄"
-  // actor / expr / label are server-supplied; scrub control bytes off the line.
-  return stripControlChars(`${prefix} ${frame.actor} ${frame.expr} ${frame.total}${target}${outcome}`)
 }
 
 // Markdown image syntax, e.g. `![alt](https://host/path.png)`. Alt text stops at the
@@ -90,11 +58,8 @@ const FENCE = /^\s*(?:```|~~~)/
 
 /** Rewrite markdown images to a labelled text placeholder before the renderer sees
  * them. A terminal cannot fetch a remote CG, and OpenTUI's markdown renderer drops
- * the URL and prints the BARE alt text (or the hardcoded English word "image" when
- * the alt is empty) — so a card's illustration line reads as a stray sentence of
- * narration. `[图] alt` keeps it honest and stays literal through the parser (an
- * undefined shortcut reference renders as-is). Fenced code is left untouched.
- * Exported so tests can pin the formatting without a renderer. */
+ * the URL and prints the BARE alt text — so a card's illustration line reads as a stray
+ * sentence of narration. `[image] alt` keeps it honest. Fenced code is left untouched. */
 export function imagePlaceholders(text: string, locale?: string): string {
   if (!text.includes("![")) return text
   const tag = tt(locale, "log.image")
@@ -115,187 +80,114 @@ export function imagePlaceholders(text: string, locale?: string): string {
     .join("\n")
 }
 
-function speakerLabel(frame: NarrativeFrame): string {
-  if (frame.speaker === "kp") return "KP"
-  if (frame.speaker === "npc") return frame.name ? `[${stripControlChars(frame.name)}]` : "[NPC]"
-  if (frame.name) return stripControlChars(frame.name)
-  return stripControlChars(frame.speaker.toUpperCase())
-}
-
 export function NarrativeLog({
-  frames,
+  items,
   theme,
+  revealSeq,
   revealTicks = 3,
   critFlash = false,
-  kpWorking = false,
+  working = false,
   workingLabel,
+  topHint,
+  styledIds,
   locale,
-  client,
-  selectedMediaHash,
-  onSelectMedia,
   choicesFocused = false,
   onChoicePick,
 }: NarrativeLogProps) {
   const renderer = useRenderer()
-  const narrativeSyntaxStyle = useMemo(
-    () => SyntaxStyle.fromStyles(NARRATIVE_STYLES, renderer.nativeScene),
-    [renderer],
-  )
+  const narrativeSyntaxStyle = useMemo(() => SyntaxStyle.fromStyles(NARRATIVE_STYLES, renderer.nativeScene), [renderer])
   useEffect(() => () => narrativeSyntaxStyle.destroy(), [narrativeSyntaxStyle])
-  const activeChoicesIndex = lastChoicesFrameIndex(frames)
+  const activeChoices = lastChoicesIndex(items)
+  const label = workingLabel ?? tt(locale, "log.working")
   return (
     <box flexDirection="column" width="100%" paddingX={1}>
-      {frames.length === 0 ? (
-        kpWorking ? (
-          // A turn is genuinely in flight (submitted, reply not landed yet): animate
-          // so this obviously reads as "alive, awaiting the Keeper" rather than a
-          // hung/dropped connection. The client no longer echoes the player's own
-          // submitted line optimistically (the server's own `narrative{speaker:"player"}`
-          // broadcast is the only echo, so it never renders twice) — so right after a
-          // submit, `frames` can still be empty for the round trip.
-          <Spinner active label={workingLabel ?? tt(locale, "log.working")} color={theme.accent} />
+      {topHint ? <text fg={theme.dim}>{topHint}</text> : null}
+      {items.length === 0 ? (
+        working ? (
+          // A turn is in flight: animate, so this reads as "alive, awaiting the Keeper" rather
+          // than a hung connection.
+          <Spinner active label={label} color={theme.accent} />
         ) : (
-          // Idle (no turn in flight): a STATIC hint, no motion — an animated spinner
-          // here with nothing actually happening reads as frozen/deceptive (a player
-          // waiting on a fresh, empty join saw it spin for 10 minutes with nothing
-          // going on). The server also replays room history as narrative frames on
-          // join, so this mostly only shows on a genuinely fresh, empty room.
+          // Idle: a STATIC hint — an animated spinner with nothing happening reads as frozen.
           <text fg={theme.dim}>{tt(locale, "log.ready")}</text>
         )
       ) : (
-        frames.map((frame, index) => {
-          if (frame.type === "dice") {
-            const color = critFlash && frame.outcome?.critical ? theme.bg : diceColor(frame, theme)
-            const backgroundColor = critFlash && frame.outcome?.critical ? theme.crit : theme.bg
+        items.map((item, index) => {
+          if (item.kind === "draft") {
+            // A bubble being streamed: drawn as the Keeper's, replaced by its `narrative` event.
+            // `streaming` makes the markdown renderer draw its synchronous fallback.
             return (
-              <text key={`${frame.type}-${index}`} fg={color} bg={backgroundColor}>
-                {diceLine(frame, revealTicks)}
-              </text>
-            )
-          }
-
-          if (frame.type === "system") {
-            if (frame.spinner) {
-              return <Spinner key={`${frame.type}-${index}`} active label={stripControlChars(frame.text)} color={theme.accent} />
-            }
-            return (
-              <text key={`${frame.type}-${index}`} fg={frame.level === "warn" ? theme.fail : theme.system}>
-                {stripControlChars(`[${frame.level.toUpperCase()}] ${frame.text}`)}
-              </text>
-            )
-          }
-
-          if (frame.type === "media") {
-            return (
-              <MediaLogEntry
-                key={`${frame.type}-${frame.id}-${index}`}
-                frame={frame}
-                client={client}
-                theme={theme}
-                locale={locale}
-                selected={selectedMediaHash === frame.hash}
-                onSelect={() => onSelectMedia?.(frame)}
-              />
-            )
-          }
-
-          if (frame.type === "audio_library_item") {
-            const label = frame.title || frame.name
-            return (
-              <text key={`${frame.type}-${frame.hash}-${index}`} fg={theme.system}>
-                {stripControlChars(`[AUDIO] ${frame.from}: ${label}`)}
-              </text>
-            )
-          }
-
-          if (frame.type === "audio_control") {
-            const label = frame.title || frame.name || frame.hash || frame.layer
-            return (
-              <text key={`${frame.type}-${frame.id}-${index}`} fg={theme.accent}>
-                {stripControlChars(`[${frame.layer.toUpperCase()}] ${frame.action}${label ? ` · ${label}` : ""}`)}
-              </text>
-            )
-          }
-
-          if (frame.type === "ui") {
-            return (
-              <UiBlocksView
-                key={`${frame.type}-${index}`}
-                frame={frame}
-                theme={theme}
-                locale={locale}
-                meterWidth={10}
-                client={client}
-                interactive={
-                  onChoicePick && index === activeChoicesIndex
-                    ? { focused: choicesFocused, onPick: onChoicePick }
-                    : undefined
-                }
-              />
-            )
-          }
-
-          if (frame.speaker === "kp" && frame.format === "markdown") {
-            // `streaming` stays true for accumulating drafts AND plain one-shot lines:
-            // besides matching "chunks still being appended", it makes MarkdownRenderable
-            // draw its synchronous unstyled fallback instead of waiting on async
-            // tree-sitter highlighting (which never resolves inside a single render
-            // pass/test flush). Only a REPLACED draft (draft === false — the finished
-            // stream) takes the styled async path.
-            return (
-              <box key={`${frame.type}-${frame.id}-${index}`} flexDirection="column" width="100%">
-                <text fg={theme.dim}>{speakerLabel(frame)}</text>
-                <markdown
-                  content={imagePlaceholders(stripControlChars(frame.text), locale)}
-                  fg={theme.kp}
-                  syntaxStyle={narrativeSyntaxStyle}
-                  streaming={frame.draft !== false}
-                />
+              <box key={item.key} flexDirection="column" width="100%">
+                <text fg={theme.dim}>{tt(locale, "log.speaker.kp")}</text>
+                <markdown content={imagePlaceholders(stripControlChars(item.draft.text), locale)} fg={theme.kp} syntaxStyle={narrativeSyntaxStyle} streaming />
               </box>
             )
           }
-
-          const color = frame.speaker === "player" ? theme.player : frame.speaker === "npc" ? theme.npc : theme.system
-          return (
-            <text key={`${frame.type}-${frame.id}-${index}`} fg={color}>
-              {speakerLabel(frame)}: {stripControlChars(frame.text)}
+          if (item.kind === "local") {
+            const line = item.line
+            if (line.spinner) return <Spinner key={item.key} active label={localText(line, locale)} color={theme.accent} />
+            const color = line.kind === "result" ? theme.system : line.level === "warn" ? theme.fail : theme.system
+            return (
+              <text key={item.key} fg={color}>
+                {localText(line, locale)}
+              </text>
+            )
+          }
+          const event = item.event
+          if (event.kind === "dice") {
+            const flash = critFlash && event.seq === revealSeq && event.data.outcome?.critical === true
+            const rolling = event.seq === revealSeq && revealTicks < 2
+            return (
+              <text key={item.key} fg={flash ? theme.bg : diceColor(event.data, theme)} bg={flash ? theme.crit : theme.bg}>
+                {diceText(event.data, rolling)}
+              </text>
+            )
+          }
+          if (event.kind === "blocks") {
+            const blocks = itemBlocks(item)
+            if (!blocks) return null
+            return (
+              <UiBlocksView
+                key={item.key}
+                blocks={blocks.blocks}
+                theme={theme}
+                locale={locale}
+                meterWidth={10}
+                interactive={onChoicePick && index === activeChoices ? { focused: choicesFocused, onPick: onChoicePick } : undefined}
+              />
+            )
+          }
+          if (event.kind === "narrative") {
+            const data = event.data
+            if (data.speaker === "kp" && data.format === "markdown") {
+              return (
+                <box key={item.key} flexDirection="column" width="100%">
+                  <text fg={theme.dim}>{speakerLabel(data, locale)}</text>
+                  <markdown
+                    content={imagePlaceholders(stripControlChars(data.text), locale)}
+                    fg={theme.kp}
+                    syntaxStyle={narrativeSyntaxStyle}
+                    streaming={!(styledIds?.has(event.id) ?? false)}
+                  />
+                </box>
+              )
+            }
+            const color = data.speaker === "player" ? theme.player : data.speaker === "npc" ? theme.npc : theme.system
+            return (
+              <text key={item.key} fg={color}>
+                {speakerLabel(data, locale)}: {stripControlChars(data.text)}
+              </text>
+            )
+          }
+          const marker = markerText(event, locale)
+          return marker ? (
+            <text key={item.key} fg={theme.dim}>
+              {marker}
             </text>
-          )
+          ) : null
         })
       )}
-      {frames.length > 0 && kpWorking ? (
-        <Spinner active label={workingLabel ?? tt(locale, "log.working")} trailing color={theme.accent} />
-      ) : null}
-    </box>
-  )
-}
-
-function MediaLogEntry({
-  frame,
-  client,
-  theme,
-  locale,
-  selected,
-  onSelect,
-}: {
-  frame: MediaFrame
-  client?: AppClient
-  theme: Palette
-  locale?: string
-  selected: boolean
-  onSelect: () => void
-}) {
-  const { lines, failed } = useMediaPreview(frame, client)
-
-  const label = `${selected ? "▶ " : ""}${stripControlChars(frame.from)}: ${mediaPlaceholder(frame, locale)}`
-  return (
-    <box flexDirection="column" width="100%" onMouseDown={onSelect}>
-      <text fg={selected ? theme.accent : theme.system}>{label}</text>
-      {lines ? (
-        <MediaPreviewRows lines={lines} keyPrefix={frame.hash} />
-      ) : (
-        <text fg={failed ? theme.fail : theme.dim}>{failed ? mediaPlaceholder(frame, locale) : stripControlChars(frame.name)}</text>
-      )}
+      {items.length > 0 && working ? <Spinner active label={label} trailing color={theme.accent} /> : null}
     </box>
   )
 }

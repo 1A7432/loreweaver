@@ -1,30 +1,24 @@
 import { useEffect, useState } from "react"
 import { useTerminalDimensions } from "@opentui/react"
-import {
-  stripControlChars,
-  type ClockState,
-  type ConnectionStatus,
-  type SceneState,
-  type UsageState,
-  type WelcomeFrame,
-} from "loreweaver-protocol"
+import { stripControlChars, type SceneView, type UsageView } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import { headerVisibility } from "../layout"
 import type { Palette } from "../themes"
+import { sceneName } from "./ScenePanel"
+
+/** The link as a person sees it: up, being redialled, or gone for good. */
+export type LinkStatus = "online" | "reconnecting" | "offline"
 
 export interface HeaderBarProps {
-  welcome: WelcomeFrame
-  scene?: SceneState
-  clock?: ClockState
-  usage?: UsageState
+  /** The room id from the welcome. */
+  room: string
+  scene?: SceneView | null
+  usage?: UsageView | null
   online: number
   theme: Palette
   locale?: string
-  // The transport's liveness (App subscribes to `client.onStatus?.(...)`). Undefined when the
-  // client doesn't implement `onStatus` (an older mock) — renders nothing, not a false state.
-  connectionStatus?: ConnectionStatus
+  link?: LinkStatus
 }
-
 // A plain geometric clock face -- single-width in every terminal font (unlike an
 // emoji clock, which typically renders double-width and would throw off column math).
 const CLOCK_GLYPH = "◷"
@@ -45,12 +39,6 @@ function wallClock(now: Date): string {
   return `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`
 }
 
-function ctxColor(theme: Palette, pct: number): string {
-  if (pct < 50) return theme.dim
-  if (pct <= 80) return theme.fg
-  return theme.hard
-}
-
 function cacheColor(theme: Palette, rate: number | null): string {
   return rate !== null && rate >= 50 ? theme.success : theme.dim
 }
@@ -60,23 +48,29 @@ function cacheColor(theme: Palette, rate: number | null): string {
 // math; the STATE is carried by the dot's color (+ the label when no online count shows).
 const CONN_GLYPH = "●"
 
-function connKey(status: ConnectionStatus): "hud.connOnline" | "hud.connReconnecting" | "hud.connOffline" {
+function connKey(status: LinkStatus): "hud.connOnline" | "hud.connReconnecting" | "hud.connOffline" {
   if (status === "online") return "hud.connOnline"
   if (status === "offline") return "hud.connOffline"
   return "hud.connReconnecting"
 }
 
-function connColor(theme: Palette, status: ConnectionStatus): string {
+function connColor(theme: Palette, status: LinkStatus): string {
   if (status === "online") return theme.success
   if (status === "offline") return theme.fumble
   return theme.dim
 }
 
-// Replaces GameView's old plain `height={4}` header box: same overall footprint (a
-// height=4 bordered row -- exactly the two inner rows the `tiny` ascii-font needs),
-// now carrying room identity, scene + in-game clock and a ticking wall clock on the top
-// row, and liveness + the optional token/cache statusline on the bottom row.
-export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale, connectionStatus }: HeaderBarProps) {
+/** The share of the last turn's prompt read from the provider's cache, in percent; null when
+ * the prompt was empty. `cachedInputTokens` is a part of `inputTokens`. */
+export function cacheRate(usage: NonNullable<UsageView["last"]>): number | null {
+  if (usage.inputTokens <= 0) return null
+  return Math.min(100, Math.round((usage.cachedInputTokens / usage.inputTokens) * 100))
+}
+
+// A height=4 bordered row -- exactly the two inner rows the `tiny` ascii-font needs --
+// carrying room identity, scene + in-game clock and a ticking wall clock on the top row,
+// and liveness + the last turn's token figures (the `usage` view) on the bottom row.
+export function HeaderBar({ room, scene, usage, online, theme, locale, link }: HeaderBarProps) {
   const { width } = useTerminalDimensions()
   const visible = headerVisibility(width)
   const [now, setNow] = useState(() => new Date())
@@ -85,9 +79,8 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
     return () => clearInterval(id)
   }, [])
 
-  const pct = usage && usage.context_window > 0 ? Math.round((usage.context_tokens / usage.context_window) * 100) : null
-  const cacheDenom = usage ? usage.cache_hit_tokens + usage.cache_miss_tokens : 0
-  const cacheRate = usage && cacheDenom > 0 ? Math.round((usage.cache_hit_tokens / cacheDenom) * 100) : null
+  const last = usage?.last ?? null
+  const rate = last ? cacheRate(last) : null
 
   const sceneLine =
     visible.scene || visible.clock ? (
@@ -96,11 +89,11 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
       // wrap into a phantom row (the collision class the reshoot caught).
       <box flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
         <text wrapMode="none" truncate>
-          {visible.scene ? <span fg={theme.kp}>{stripControlChars(scene?.name ?? tt(locale, "scene.unframed"))}</span> : null}
+          {visible.scene ? <span fg={theme.kp}>{sceneName(scene, locale)}</span> : null}
           {visible.clock ? (
             <span fg={theme.fg}>
-              {visible.scene ? " " : ""}{CLOCK_GLYPH}{stripControlChars(clock?.time ?? "--:--")}
-              {clock?.round ? ` ·${tt(locale, "scene.round")}${clock.round}` : ""}
+              {visible.scene ? " " : ""}{CLOCK_GLYPH}{stripControlChars(scene?.time ?? "--:--")}
+              {scene?.round ? ` ·${tt(locale, "scene.round")}${scene.round}` : ""}
             </span>
           ) : null}
         </text>
@@ -108,7 +101,7 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
     ) : (
       <box flexGrow={1} minWidth={0} />
     )
-  const showStatus = Boolean(usage && (visible.usage || visible.cache))
+  const showStatus = Boolean(last && (visible.usage || visible.cache))
 
   // Two ROWS, not three columns. As columns, the scene line could only be as wide as what
   // the statusline (bottom row, far wider than the wall clock above it) left over, so it was
@@ -121,7 +114,7 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
       <box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} marginLeft={2}>
         <box flexDirection="row">
           <text fg={theme.accent} wrapMode="none" truncate>
-            {tt(locale, "game.joined", { room: stripControlChars(welcome.room) })}
+            {tt(locale, "game.joined", { room: stripControlChars(room) })}
           </text>
           {sceneLine}
           {showStatus && visible.usage ? (
@@ -135,32 +128,33 @@ export function HeaderBar({ welcome, scene, clock, usage, online, theme, locale,
             with the row below (caught by the screenshot harness at 118 cols). With no count the
             status label rides alone; with no status the count renders as before. */}
         <box flexDirection="row">
-          {connectionStatus ? <text fg={connColor(theme, connectionStatus)}>{CONN_GLYPH} </text> : null}
-          {online > 0 ? (
+          {link ? <text fg={connColor(theme, link)}>{CONN_GLYPH} </text> : null}
+          {link && link !== "online" ? (
+            <text fg={connColor(theme, link)} wrapMode="none" truncate>
+              {tt(locale, connKey(link))}
+            </text>
+          ) : online > 0 ? (
             <text fg={theme.dim} wrapMode="none" truncate>
               {online} {tt(locale, "status.online")}
             </text>
-          ) : connectionStatus ? (
-            <text fg={connColor(theme, connectionStatus)} wrapMode="none" truncate>
-              {tt(locale, connKey(connectionStatus))}
+          ) : link ? (
+            <text fg={connColor(theme, link)} wrapMode="none" truncate>
+              {tt(locale, connKey(link))}
             </text>
           ) : null}
           <box flexGrow={1} minWidth={0} />
-          {usage && showStatus ? (
+          {last && showStatus ? (
             <box flexShrink={0} flexDirection="row">
-              {visible.usage && pct !== null ? (
-                <>
-                  <text fg={theme.dim}>{tt(locale, "hud.ctx")} </text>
-                  <text fg={ctxColor(theme, pct)}>{pct}%</text>
-                  {visible.cache ? <text fg={theme.dim}> · </text> : null}
-                </>
+              {visible.usage ? (
+                <text fg={theme.dim}>
+                  {tt(locale, "hud.lastTurn")} ↑{fmtTokens(last.inputTokens)} ↓{fmtTokens(last.outputTokens)}
+                </text>
               ) : null}
-              {visible.usage ? <text fg={theme.dim}>↑{fmtTokens(usage.input_tokens)} ↓{fmtTokens(usage.output_tokens)}</text> : null}
               {visible.usage && visible.cache ? <text fg={theme.dim}> · </text> : null}
               {visible.cache ? (
                 <>
                   <text fg={theme.dim}>{tt(locale, "hud.cache")}{" "}</text>
-                  <text fg={cacheColor(theme, cacheRate)}>{cacheRate !== null ? `${cacheRate}%` : "—"}</text>
+                  <text fg={cacheColor(theme, rate)}>{rate !== null ? `${rate}%` : "—"}</text>
                 </>
               ) : null}
             </box>

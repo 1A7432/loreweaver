@@ -1,42 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
-import {
-  FrameType,
-  protocolMismatch,
-  type ConnectionStatus,
-  type PresenceFrame,
-  type ServerFrame,
-  type StateFrame,
-  type TurnStatusFrame,
-  type WelcomeFrame,
-} from "loreweaver-protocol"
-import { AudioController } from "./audio"
-import { createClient, type AppClient } from "./client"
-import { forgetServer, type SavedServer } from "./connectMemory"
+import { Connection } from "./connection"
+import { forgetServer, rememberLocalKey, type LocalKey, type SavedServer } from "./connectMemory"
 import { copySelection, usesAppClipboardCopy, type ClipboardRenderer, type CopyOutcome } from "./copy"
-import type { HostHandle } from "./hostLocal"
-import { GameView, appendFrame } from "./GameView"
-import type { LogFrame } from "./components/NarrativeLog"
-import type { RendererLike } from "./imageViewer"
+import { GameView } from "./GameView"
+import { useConnectionState, useSnapshot } from "./hooks"
+import type { BringUp, HostHandle } from "./hostLocal"
+import { irohDialer, looksLikeTicket, type Dialer, type IrohMode } from "./irohLink"
 import { CharacterScreen } from "./screens/CharacterScreen"
+import { CommandsScreen } from "./screens/CommandsScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
-import { KeeperKeys } from "./screens/KeeperKeys"
-import { KeeperModel } from "./screens/KeeperModel"
-import { KeeperModule } from "./screens/KeeperModule"
-import { KeeperRules } from "./screens/KeeperRules"
-import { KeeperSkills } from "./screens/KeeperSkills"
-import { MainMenu } from "./screens/MainMenu"
 import { HostLocalScreen } from "./screens/HostLocalScreen"
+import { MainMenu } from "./screens/MainMenu"
 import { SettingsScreen } from "./screens/SettingsScreen"
-import { defaultTuiLocale, normalizeLocale, tt, type TuiLocale } from "./i18n"
+import { defaultTuiLocale, tt, type TuiLocale } from "./i18n"
 import { defaultLocalServerHome } from "./localPaths"
-import { DEFAULT_THEME, themeOrder, themes, type ThemeName } from "./themes"
+import { DEFAULT_THEME, themeOrder, themes, type Palette, type ThemeName } from "./themes"
+import { clientInfo } from "./version"
 
-export type { AppClient } from "./client"
-
-// CLI args become prefilled connect-form defaults (index.tsx no longer forces a
-// --host/--key: a bare `loreweaver` lands on the connect screen).
+// CLI args and the remembered connect file become prefilled connect-form defaults.
 export interface AppPrefill {
   host?: string
   key?: string
@@ -44,110 +27,88 @@ export interface AppPrefill {
   locale?: TuiLocale
   localServerHome?: string
   servers?: SavedServer[]
+  localKeys?: LocalKey[]
 }
 
 export interface AppProps {
-  // Injected in tests; defaults to a real WsClient (Bun's global WebSocket).
-  client?: AppClient
   prefill?: AppPrefill
-  onRememberConnect?: (memory: AppPrefill) => void
-  // Persist a language choice made on the connect screen (before any welcome).
+  /** How a ticket is dialled; tests hand in a scripted server's dialler. Defaults to iroh. */
+  dial?: (mode: IrohMode) => Dialer
+  /** Brings a local server up; tests hand in a stand-in. Defaults to `hostLocal.ts`. */
+  bringUp?: BringUp
+  /** A connection that reached a welcome: remember the server (not called for a local one). */
+  onRememberConnect?: (memory: { host: string; key: string; name?: string }) => void
+  // Persist a language choice.
   onLocaleChange?: (locale: TuiLocale) => void
-  // Persist the one-click local server install/state directory.
+  // Persist the local server directory.
   onLocalServerHomeChange?: (path: string) => void
-  // Persist a saved-server deletion (index.tsx loads memory, applies forgetServer, re-saves).
+  /** Persist the admin key a fresh local server handed out (shown once, so it must be kept). */
+  onLocalKey?: (entry: LocalKey) => void
+  // Persist a saved-server deletion.
   onForgetConnect?: (entry: SavedServer) => void
-  // Restore the terminal (renderer.destroy) and exit the process. Falls back to a no-op so
-  // tests (and any caller that doesn't pass it) don't need to stub process teardown.
+  // Restore the terminal and exit. A no-op when absent (tests).
   onQuit?: () => void
-  // Also the clipboard/selection owner for Ctrl+C (see `copy.ts`); the real
-  // `CliRenderer` satisfies both shapes structurally.
-  renderer?: RendererLike & ClipboardRenderer
-  // Decides whether Ctrl+C copies (non-macOS) or only ever quits (macOS, where
-  // copy is the terminal's own Cmd+C). Injectable so tests cover both platforms.
+  // The clipboard/selection owner for Ctrl+C (see `copy.ts`); the real `CliRenderer` fits.
+  renderer?: ClipboardRenderer
+  // Decides whether Ctrl+C copies (non-macOS) or only ever quits (macOS). Injectable for tests.
   platform?: string
 }
 
-// Stage 2 adds "character"; Stage 3 adds the keeper-only "keeper_keys" / "keeper_model";
-// Stage 4 adds the keeper-only "keeper_module"; Layer B.4b adds the keeper-only
-// "keeper_rules" / "keeper_skills" (plugin management, docs/plugins.md "Layer B").
-type Screen =
-  | "connect"
-  | "host_local"
-  | "menu"
-  | "settings"
-  | "game"
-  | "character"
-  | "keeper_keys"
-  | "keeper_module"
-  | "keeper_model"
-  | "keeper_rules"
-  | "keeper_skills"
+type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands"
 
-const EMPTY_STATE: StateFrame = { type: FrameType.State, party: [], initiative: [], online: 0 }
-
-// F1..F5 select a theme by its position in themeOrder (five themes now).
+// F1..F5 select a theme by its position in themeOrder.
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
 
+interface Attempt {
+  id: number
+  connection: Connection
+  remember: { host: string; key: string; name?: string } | null
+}
+
 export function App({
-  client: injected,
   prefill,
+  dial = (mode) => irohDialer({ mode }),
+  bringUp,
   onRememberConnect,
   onLocaleChange,
   onLocalServerHomeChange,
+  onLocalKey,
   onForgetConnect,
   onQuit,
   renderer,
   platform = process.platform,
 }: AppProps) {
-  const client = useMemo(() => injected ?? createClient(), [injected])
-  const audioController = useMemo(() => new AudioController(), [])
-  const pendingConnect = useRef<AppPrefill | undefined>(undefined)
-  const welcomeIdentity = useRef<{ room: string; memberId: string; role: string } | undefined>(undefined)
-  // index.tsx always supplies the remembered/environment-resolved local locale,
-  // pinning it against a remote room's language. Embedders that omit it retain
-  // the historical server-locale fallback.
-  const localePinned = useRef(Boolean(prefill?.locale))
-  // A server spawned by the "host locally" screen; killed when the app exits.
-  const localServer = useRef<HostHandle | undefined>(undefined)
-
   const [themeName, setThemeName] = useState<ThemeName>(DEFAULT_THEME)
   const theme = themes[themeName]
   const [locale, setLocale] = useState<TuiLocale>(() => prefill?.locale ?? defaultTuiLocale())
   const [localServerHome, setLocalServerHome] = useState(() => prefill?.localServerHome ?? defaultLocalServerHome())
+  const [localKeys, setLocalKeys] = useState<LocalKey[]>(() => prefill?.localKeys ?? [])
   const [screen, setScreen] = useState<Screen>("connect")
-  const [welcome, setWelcome] = useState<WelcomeFrame>()
-  // Held in local state (not read straight from `prefill`) so a delete updates the connect
-  // screen immediately; `handleForgetServer` below keeps this and the persisted file in sync.
   const [savedServers, setSavedServers] = useState<SavedServer[]>(() => prefill?.servers ?? [])
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>()
+  const [attempt, setAttempt] = useState<Attempt | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string>()
-  const [stateFrame, setStateFrame] = useState<StateFrame>(EMPTY_STATE)
-  const [presence, setPresence] = useState<PresenceFrame>()
-  const [turnStatus, setTurnStatus] = useState<TurnStatusFrame>()
-  // The room log, accumulated at the shell level from the moment we join — so the
-  // join-time history replay (narrative frames the server delivers right after
-  // `welcome`, while we're still on the menu, before GameView exists) isn't lost.
-  // GameView seeds its own log from this on mount; see GameViewProps.initialFrames.
-  const [frames, setFrames] = useState<LogFrame[]>([])
+  // A server the "host locally" screen started; stopped when the app exits.
+  const localServer = useRef<HostHandle | undefined>(undefined)
+  const localStopping = useRef<Promise<unknown> | undefined>(undefined)
+  const stopLocal = (): Promise<unknown> | undefined => {
+    const handle = localServer.current
+    localServer.current = undefined
+    if (handle) localStopping.current = handle.stop()
+    return localStopping.current
+  }
+  const current = useRef<Connection | null>(null)
+  const attempts = useRef(0)
+  current.current = attempt?.connection ?? null
 
-  // Confirmation for a Ctrl+C copy, surfaced as a transient one-line strip in the
-  // game view. It lives here rather than in GameView because this shell owns the
-  // key (it has to, since the same keypress may instead mean quit).
+  // A transient confirmation for a Ctrl+C copy, shown in the game view.
   const [copyNotice, setCopyNotice] = useState<string>()
   const copyNoticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-
   const showCopyNotice = (outcome: Exclude<CopyOutcome, { kind: "empty" }>) => {
-    setCopyNotice(
-      outcome.kind === "copied"
-        ? tt(locale, "copy.copied", { chars: String(outcome.chars) })
-        : tt(locale, "copy.unsupported"),
-    )
+    setCopyNotice(outcome.kind === "copied" ? tt(locale, "copy.copied", { chars: String(outcome.chars) }) : tt(locale, "copy.unsupported"))
     if (copyNoticeTimer.current) clearTimeout(copyNoticeTimer.current)
     copyNoticeTimer.current = setTimeout(() => setCopyNotice(undefined), 4000)
   }
-
   useEffect(
     () => () => {
       if (copyNoticeTimer.current) clearTimeout(copyNoticeTimer.current)
@@ -155,218 +116,18 @@ export function App({
     [],
   )
 
-  // Theme cycling + Esc are safe to handle globally: F-keys / Escape never
-  // collide with typing, arrow navigation, or a focused input, so the theme
-  // persists across every screen. Screen-specific keys live in each screen.
-  useKeyboard((event: KeyEvent) => {
-    const name = typeof event.name === "string" ? event.name.toLowerCase() : ""
-    const index = themeKeyIndex[name]
-    if (index !== undefined && themeOrder[index]) setThemeName(themeOrder[index])
-    // Esc returns from the game view to the menu; the menu is the top level.
-    if (name === "escape") setScreen((prev) => (prev === "game" ? "menu" : prev))
-    // Ctrl+C. Inside the game room (and only there — the menus have nothing worth
-    // copying) it takes the meaning it has everywhere else: copy the selection,
-    // and still quit when nothing is selected, so the terminal habit survives.
-    // On macOS it is never taken: copy there is Cmd+C, which the terminal itself
-    // consumes (see `usesAppClipboardCopy`). OpenTUI's own exit-on-Ctrl+C is
-    // disabled in index.tsx precisely so this decision can be made here;
-    // `handleQuit` also releases what that handler used to leak (local server,
-    // client, audio).
-    if (event.ctrl && name === "c") {
-      const copyable = screen === "game" && usesAppClipboardCopy(platform)
-      const outcome = copyable ? copySelection(renderer) : { kind: "empty" as const }
-      if (outcome.kind === "empty") handleQuit()
-      else showCopyNotice(outcome)
-    }
-  })
-
-  useEffect(() => {
-    // Drop the connection and every room-scoped piece of state, then say why on the
-    // connect screen. Used for the two refusals the shell makes on its own: a
-    // credential the server will not accept, and a server we cannot safely talk to.
-    const refuse = (message: string): void => {
-      setConnecting(false)
-      pendingConnect.current = undefined
-      welcomeIdentity.current = undefined
-      setError(message)
-      setWelcome(undefined)
-      setStateFrame(EMPTY_STATE)
-      setPresence(undefined)
-      setTurnStatus(undefined)
-      setFrames([])
-      setConnectionStatus(undefined)
-      audioController.stopAll()
-      client.close?.()
-      setScreen("connect")
-    }
-
-    return client.onMessage((frame: ServerFrame) => {
-      if (frame.type === FrameType.Welcome) {
-        // The MAJOR version is the compatibility contract (docs/protocol.md): a client
-        // that keeps talking to a different-major server misreads frames rather than
-        // failing, which is far harder to diagnose than a refusal — and with no
-        // backward compatibility promised before adoption, a stale client WILL meet a
-        // moved server. The library only warns; refusing is the app's call, and it is
-        // made HERE, above the transports, so the Iroh carrier and the WS one are
-        // covered by one decision instead of two.
-        const mismatch = protocolMismatch(frame.protocol)
-        if (mismatch) {
-          refuse(
-            tt(locale, "app.error.protocolMismatch", {
-              server: mismatch.server,
-              client: mismatch.client,
-            }),
-          )
-          return
-        }
-        if (pendingConnect.current) {
-          onRememberConnect?.(pendingConnect.current)
-          pendingConnect.current = undefined
-        }
-        const previousIdentity = welcomeIdentity.current
-        const nextIdentity = {
-          room: frame.room,
-          memberId: frame.you.id,
-          role: frame.you.role,
-        }
-        const identityChanged = Boolean(
-          previousIdentity &&
-            (previousIdentity.room !== nextIdentity.room ||
-              previousIdentity.memberId !== nextIdentity.memberId ||
-              previousIdentity.role !== nextIdentity.role),
-        )
-        welcomeIdentity.current = nextIdentity
-        if (identityChanged) {
-          // An automatic reconnect normally returns the same identity and keeps the current
-          // screen/log. A different key, room, or role is a new security context: never retain
-          // the previous room's panels, presence, or replay in it.
-          setStateFrame(EMPTY_STATE)
-          setPresence(undefined)
-          setTurnStatus(undefined)
-          setFrames([])
-          audioController.stopAll()
-        }
-        setWelcome(frame)
-        if (!localePinned.current) setLocale(normalizeLocale(frame.locale))
-        setConnecting(false)
-        setError(undefined)
-        setScreen((prev) =>
-          prev === "connect" || prev === "host_local" || identityChanged ? "menu" : prev,
-        )
-        return
-      }
-      if (frame.type === FrameType.State) {
-        // A reset-flagged state frame follows a campaign wipe: drop the shell-level
-        // scrollback too, so a later GameView remount seeds from an empty log.
-        if (frame.reset) setFrames([])
-        setStateFrame(frame)
-        return
-      }
-      if (frame.type === FrameType.Presence) {
-        setPresence(frame)
-        return
-      }
-      if (frame.type === FrameType.TurnStatus) {
-        setTurnStatus(frame)
-        return
-      }
-      if (frame.type === FrameType.Ui) {
-        // v1.7 hook UI: only the inline panel joins the shell-level scrollback (so a
-        // frame arriving while on the menu isn't lost before GameView mounts). Sidebar
-        // regions are live-view state GameView rebuilds from the turns it renders.
-        if (frame.panel === "inline") setFrames((current) => appendFrame(current, frame))
-        return
-      }
-      if (frame.type === FrameType.AdminConfig && typeof frame.using_demo === "boolean") {
-        // A model save hot-swaps MutableLLM immediately. Keep the menu's guided
-        // demo capability in sync too, instead of leaving a stale button until
-        // the next reconnect/welcome frame.
-        setWelcome((current) => {
-          if (!current) return current
-          const features = new Set(current.features ?? [])
-          // A welcome advertises demo only after the server has verified that this
-          // specific room is empty. A global switch back to the fallback therefore
-          // must not add it blindly; reconnecting performs the room-scoped check.
-          if (!frame.using_demo) features.delete("demo")
-          return { ...current, features: [...features] }
-        })
-      }
-      if (frame.type === FrameType.AudioLibraryItem || frame.type === FrameType.AudioControl || frame.type === FrameType.AudioState) {
-        void audioController.handle(frame, client).catch((error) => {
-          setFrames((current) =>
-            appendFrame(current, {
-              type: FrameType.System,
-              level: "warn",
-              text: tt(locale, "audio.playbackFailed", { error: error instanceof Error ? error.message : String(error) }),
-            }),
-          )
-        })
-      }
-      if (
-        frame.type === FrameType.Narrative ||
-        frame.type === FrameType.Dice ||
-        frame.type === FrameType.System ||
-        frame.type === FrameType.Media ||
-        frame.type === FrameType.AudioControl
-      ) {
-        // Accumulate the room log even while off the game view (e.g. the menu), so
-        // the join-time replay survives until the player opens GameView, which
-        // seeds from it. GameView keeps its own copy for live play + dice effects.
-        // AudioLibraryItem frames deliberately stay OUT of the chat log: they are
-        // library bookkeeping (join replays the whole library, which read as
-        // backstage "[AUDIO] setup:" noise) — audioController owns them above.
-        setFrames((current) => appendFrame(current, frame))
-        return
-      }
-      if (
-        frame.type === FrameType.Error &&
-        (frame.code === "bad_key" || frame.code === "forbidden")
-      ) {
-        // `bad_key` rejects the join; a top-level `forbidden` means the active key no longer
-        // authorizes this connection (admin permission failures use `admin_error` instead).
-        // Both require a fresh credential and must drop all room-scoped state.
-        refuse(frame.message)
-        return
-      }
-    })
-  }, [client, onRememberConnect, audioController, locale])
-
-  // Optional: an older mock client (or a transport with no `onStatus`) simply never fires,
-  // so `connectionStatus` stays undefined and the HUD indicator renders nothing.
-  useEffect(() => {
-    return client.onStatus?.((status: ConnectionStatus) => setConnectionStatus(status))
-  }, [client, audioController])
-
-  const handleConnect = async (url: string, key: string, name: string) => {
-    if (!key) {
-      setError(tt(locale, "app.error.keyRequired"))
-      return
-    }
-    setError(undefined)
-    setConnecting(true)
-    pendingConnect.current = { host: url, key, name: name || tt(locale, "connect.defaultName"), locale, localServerHome }
-    try {
-      await client.connect(url)
-      client.join(key, name || undefined)
-    } catch (err) {
-      pendingConnect.current = undefined
-      setConnecting(false)
-      setError(err instanceof Error ? err.message : String(err))
-    }
+  const handleQuit = () => {
+    current.current?.stop()
+    void stopLocal()
+    onQuit?.()
   }
 
-  // "Host locally & play": open the bring-up screen, which detects the environment, sets up +
-  // starts a server (streaming its output), then logs straight in as Keeper (onReady, below).
-  const handleHostLocal = () => setScreen("host_local")
-
-  // Kill a button-spawned local server AND close the client connection on exit, so a raw
-  // Ctrl-C (or any process-level exit) doesn't leave a zombie server child or a p2p endpoint
-  // still trying to redial in the background.
+  // Release the connection and a button-started server on any process exit, so a raw Ctrl+C
+  // never leaves a server child or a redialling endpoint behind.
   useEffect(() => {
     const kill = () => {
-      localServer.current?.stop()
-      audioController.stopAll()
-      client.close?.()
+      current.current?.stop()
+      void stopLocal()
     }
     process.on("exit", kill)
     process.on("SIGINT", kill)
@@ -377,14 +138,69 @@ export function App({
       process.off("SIGTERM", kill)
       kill()
     }
-  }, [client])
+  }, [])
 
-  // The TUI language is a local user preference (remembered choice, TRPG_LOCALE,
-  // or system locale), independent from the server's narration/room locale.
+  // Theme keys and Esc never collide with typing, so they are global. Ctrl+C copies the selection
+  // in the game view (not on macOS, where copy is the terminal's Cmd+C) and otherwise quits.
+  useKeyboard((event: KeyEvent) => {
+    const name = typeof event.name === "string" ? event.name.toLowerCase() : ""
+    const index = themeKeyIndex[name]
+    if (index !== undefined && themeOrder[index]) setThemeName(themeOrder[index])
+    if (name === "escape") setScreen((prev) => (prev === "game" || prev === "commands" ? "menu" : prev))
+    if (event.ctrl && name === "c") {
+      const copyable = screen === "game" && usesAppClipboardCopy(platform)
+      const outcome = copyable ? copySelection(renderer) : { kind: "empty" as const }
+      if (outcome.kind === "empty") handleQuit()
+      else showCopyNotice(outcome)
+    }
+  })
+
+  const connect = async (host: string, key: string, name: string, mode: IrohMode, remember: boolean) => {
+    const ticket = host.trim()
+    if (!key) {
+      setError(tt(locale, "app.error.keyRequired"))
+      return
+    }
+    if (!looksLikeTicket(ticket)) {
+      setError(tt(locale, /^wss?:\/\//i.test(ticket) ? "app.error.noWebSocket" : "app.error.badTicket"))
+      return
+    }
+    current.current?.stop()
+    setError(undefined)
+    setConnecting(true)
+    const connection = new Connection({ ticket, key, ...(name ? { name } : {}), locale, client: clientInfo(), dial: dial(mode) })
+    try {
+      await connection.start()
+    } catch (caught) {
+      setConnecting(false)
+      setError(tt(locale, "app.error.dialFailed", { reason: caught instanceof Error ? caught.message : String(caught) }))
+      setScreen("connect")
+      return
+    }
+    setAttempt({ id: ++attempts.current, connection, remember: remember ? { host: ticket, key, ...(name ? { name } : {}) } : null })
+  }
+
+  /** The session is over: back to the connect screen, saying why. */
+  const ended = (message: string | undefined) => {
+    current.current?.stop()
+    setAttempt(null)
+    setConnecting(false)
+    setError(message)
+    setScreen("connect")
+  }
+
+  const welcomed = () => {
+    setConnecting(false)
+    setError(undefined)
+    if (attempt?.remember) {
+      onRememberConnect?.(attempt.remember)
+      setSavedServers((servers) => [attempt.remember as SavedServer, ...servers.filter((s) => !(s.host === attempt.remember?.host && s.key === attempt.remember?.key))])
+    }
+    setScreen((prev) => (prev === "connect" || prev === "host_local" ? "menu" : prev))
+  }
+
   const handleLocaleChange = (next: TuiLocale) => {
     setLocale(next)
-    localePinned.current = true
-    if (pendingConnect.current) pendingConnect.current = { ...pendingConnect.current, locale: next }
     onLocaleChange?.(next)
   }
 
@@ -393,210 +209,172 @@ export function App({
     onLocalServerHomeChange?.(next)
   }
 
-  // A saved-server delete (Part C): update the connect screen's list immediately, and persist
-  // it via the index.tsx-supplied callback (load memory, apply forgetServer, re-save).
   const handleForgetServer = (entry: SavedServer) => {
-    setSavedServers((current: SavedServer[]) => forgetServer(current, entry))
+    setSavedServers((servers) => forgetServer(servers, entry))
     onForgetConnect?.(entry)
   }
 
-  // A user-visible Quit (menu row / connect-screen button): release everything a raw Ctrl-C
-  // would (stop a button-spawned local server, close the client so its reconnect loop can't
-  // keep redialing), then hand off to the caller (index.tsx restores the terminal and exits).
-  const handleQuit = () => {
-    localServer.current?.stop()
-    client.close?.()
-    audioController.stopAll()
-    onQuit?.()
-  }
+  const connectScreen = (
+    <ConnectScreen
+      theme={theme}
+      defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name, localServerHome }}
+      savedServers={savedServers}
+      connecting={connecting || attempt !== null}
+      error={error}
+      locale={locale}
+      onLocaleChange={handleLocaleChange}
+      onLocalServerHomeChange={handleLocalServerHomeChange}
+      onHostLocal={() => {
+        // A server started earlier is stopped first: the new one takes its folder.
+        current.current?.stop()
+        void stopLocal()
+        setScreen("host_local")
+      }}
+      onSubmit={(host, key, name) => void connect(host, key, name, "n0", true)}
+      onForgetServer={handleForgetServer}
+      onQuit={handleQuit}
+    />
+  )
 
-  const handleStartDemo = () => {
-    // The server's demo responder treats this localized, human-readable action
-    // as one guided transaction: install the sample module, create its pregenerated
-    // investigator, inspect the module summary, then narrate the opening scene.
-    setFrames((current) =>
-      appendFrame(current, {
-        type: FrameType.System,
-        level: "info",
-        text: tt(locale, "demo.starting"),
-      }),
-    )
-    // The capability is single-use for an empty room. Remove it before sending so returning
-    // to the menu cannot offer a stale second start while the server is creating the sample.
-    setWelcome((current) =>
-      current
-        ? { ...current, features: (current.features ?? []).filter((feature) => feature !== "demo") }
-        : current,
-    )
-    client.sendInput(tt(locale, "demo.action"))
-    setScreen("game")
-  }
-
-  if (screen === "host_local") {
+  if (screen === "host_local" && attempt === null) {
     return (
       <HostLocalScreen
         theme={theme}
         locale={locale}
         localServerHome={localServerHome}
-        onReady={(host, key, stop) => {
-          localServer.current = { host, key, stop }
-          void handleConnect(host, key, tt(locale, "menu.role.keeper"))
+        knownKey={localKeys.find((entry) => entry.home === localServerHome)?.key}
+        bringUp={bringUp}
+        after={localStopping.current}
+        onReady={(handle) => {
+          localServer.current = handle
+          if (handle.newKey) {
+            const entry = { home: localServerHome, key: handle.key }
+            setLocalKeys((keys) => rememberLocalKey(keys, entry))
+            onLocalKey?.(entry)
+          }
+          void connect(handle.ticket, handle.key, prefill?.name ?? "", "local", false)
         }}
         onBack={() => setScreen("connect")}
       />
     )
   }
 
-  if (screen === "settings" && welcome) {
+  if (attempt === null) return connectScreen
+
+  return (
+    <Table
+      key={attempt.id}
+      connection={attempt.connection}
+      screen={screen}
+      setScreen={setScreen}
+      theme={theme}
+      themeName={themeName}
+      setThemeName={setThemeName}
+      locale={locale}
+      onLocaleChange={handleLocaleChange}
+      copyNotice={copyNotice}
+      platform={platform}
+      onWelcome={welcomed}
+      onEnded={ended}
+      onQuit={handleQuit}
+      waiting={connectScreen}
+    />
+  )
+}
+
+interface TableProps {
+  connection: Connection
+  screen: Screen
+  setScreen: (screen: Screen | ((prev: Screen) => Screen)) => void
+  theme: Palette
+  themeName: ThemeName
+  setThemeName: (name: ThemeName) => void
+  locale: TuiLocale
+  onLocaleChange: (locale: TuiLocale) => void
+  copyNotice?: string
+  platform: string
+  onWelcome: () => void
+  onEnded: (message: string | undefined) => void
+  onQuit: () => void
+  /** What shows before the welcome: the connect screen, busy. */
+  waiting: ReactNode
+}
+
+/** Everything behind a connection: it reads the session and routes the screens. */
+function Table({ connection, screen, setScreen, theme, themeName, setThemeName, locale, onLocaleChange, copyNotice, platform, onWelcome, onEnded, onQuit, waiting }: TableProps) {
+  const snapshot = useSnapshot(connection)
+  const state = useConnectionState(connection)
+  const welcome = snapshot.welcome
+  const welcomedOnce = useRef(false)
+
+  useEffect(() => {
+    if (welcome && !welcomedOnce.current) {
+      welcomedOnce.current = true
+      onWelcome()
+    }
+  }, [welcome])
+
+  // A session that is over for good — refused, or a first connection that never got in.
+  useEffect(() => {
+    const failure = snapshot.lastError
+    if (snapshot.status === "ended") {
+      if (failure?.code === "ended") return
+      if (failure?.code === "protocol_mismatch" && /^server /.test(failure.message)) {
+        const [, server = "?", client = "?"] = /^server (\S+), client (\S+)$/.exec(failure.message) ?? []
+        onEnded(tt(locale, "app.error.protocolMismatch", { server, client }))
+        return
+      }
+      onEnded(failure?.message || tt(locale, "app.error.ended"))
+      return
+    }
+    if (state.phase === "ended" && !welcomedOnce.current) onEnded(tt(locale, "app.error.closedBeforeWelcome"))
+  }, [snapshot.status, state.phase])
+
+  if (!welcome) return <>{waiting}</>
+
+  if (screen === "settings") {
     return (
       <SettingsScreen
+        connection={connection}
         theme={theme}
         themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
         locale={locale}
-        onLocaleChange={handleLocaleChange}
+        onLocaleChange={onLocaleChange}
         onThemeChange={setThemeName}
         onBack={() => setScreen("menu")}
       />
     )
   }
-
-  if (screen === "game" && welcome) {
+  if (screen === "game") {
     return (
       <GameView
-        client={client}
-        welcome={{ ...welcome, locale }}
+        connection={connection}
+        locale={locale}
         theme={theme}
         themeName={themeName}
-        initialFrames={frames}
-        initialState={stateFrame}
-        initialPresence={presence}
-        initialTurnStatus={turnStatus}
-        connectionStatus={connectionStatus}
-        renderer={renderer}
         copyNotice={copyNotice}
         platform={platform}
+        onCommands={() => setScreen("commands")}
       />
     )
   }
-
-  if (screen === "character" && welcome) {
-    return (
-      <CharacterScreen
-        client={client}
-        theme={theme}
-        themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
-        onBack={() => setScreen("menu")}
-      />
-    )
+  if (screen === "character") {
+    return <CharacterScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
-
-  // Keeper-only screens: guarded on the welcome role (the MainMenu only offers them
-  // to a keeper, and the server re-enforces role on every admin_* frame anyway).
-  if (screen === "keeper_keys" && welcome?.you.role === "keeper") {
-    return (
-      <KeeperKeys
-        client={client}
-        theme={theme}
-        themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
-        onBack={() => setScreen("menu")}
-      />
-    )
+  if (screen === "commands") {
+    return <CommandsScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
-
-  if (screen === "keeper_module" && welcome?.you.role === "keeper") {
-    return (
-      <KeeperModule
-        client={client}
-        theme={theme}
-        themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
-        onBack={() => setScreen("menu")}
-      />
-    )
-  }
-
-  if (screen === "keeper_model" && welcome?.you.role === "keeper") {
-    return (
-      <KeeperModel
-        client={client}
-        theme={theme}
-        themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
-        onBack={() => setScreen("menu")}
-      />
-    )
-  }
-
-  if (screen === "keeper_rules" && welcome?.you.role === "keeper") {
-    return (
-      <KeeperRules
-        client={client}
-        theme={theme}
-        themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
-        onBack={() => setScreen("menu")}
-      />
-    )
-  }
-
-  if (screen === "keeper_skills" && welcome?.you.role === "keeper") {
-    return (
-      <KeeperSkills
-        client={client}
-        theme={theme}
-        themeName={themeName}
-        welcome={{ ...welcome, locale }}
-        stateFrame={stateFrame}
-        onBack={() => setScreen("menu")}
-      />
-    )
-  }
-
-  if (screen === "menu" && welcome) {
-    return (
-      <MainMenu
-        welcome={{ ...welcome, locale }}
-        theme={theme}
-        themeName={themeName}
-        stateFrame={stateFrame}
-        presence={presence}
-        onStartDemo={handleStartDemo}
-        onEnterGame={() => setScreen("game")}
-        onCharacter={() => setScreen("character")}
-        onSettings={() => setScreen("settings")}
-        onKeeperKeys={() => setScreen("keeper_keys")}
-        onKeeperModule={() => setScreen("keeper_module")}
-        onKeeperModel={() => setScreen("keeper_model")}
-        onKeeperRules={() => setScreen("keeper_rules")}
-        onKeeperSkills={() => setScreen("keeper_skills")}
-        onQuit={handleQuit}
-      />
-    )
-  }
-
   return (
-    <ConnectScreen
+    <MainMenu
+      connection={connection}
       theme={theme}
-      defaults={{ host: prefill?.host, key: prefill?.key, name: prefill?.name, localServerHome }}
-      savedServers={savedServers}
-      connecting={connecting}
-      error={error}
+      themeName={themeName}
       locale={locale}
-      onLocaleChange={handleLocaleChange}
-      onLocalServerHomeChange={handleLocalServerHomeChange}
-      onHostLocal={handleHostLocal}
-      onSubmit={handleConnect}
-      onForgetServer={handleForgetServer}
-      onQuit={handleQuit}
+      onEnterGame={() => setScreen("game")}
+      onCharacter={() => setScreen("character")}
+      onCommands={() => setScreen("commands")}
+      onSettings={() => setScreen("settings")}
+      onQuit={onQuit}
     />
   )
 }
