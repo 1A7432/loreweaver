@@ -1,10 +1,21 @@
 {
   "net.error.bad_frame": "无法识别这条数据。",
   "net.error.bad_key": "钥匙无效。",
+  "net.error.bad_name": "名字太长了（上限 {limit}）。",
+  "net.error.command_failed": "执行这条命令时出了问题；没有任何改动。",
   "net.error.forbidden": "你没有这个权限。",
   "net.error.hello_first": "第一帧必须是 hello。",
   "net.error.input_too_long": "这条消息太长了。",
   "net.error.invalid_params": "参数不合法。",
+  "net.error.media_unavailable": "本服务器暂不支持上传。",
+  "net.error.not_open": "这个连接还没有加入房间。",
+  "net.error.observer_speech": "旁观者只能看，不能在桌上发言。",
   "net.error.protocol_mismatch": "协议不匹配：服务器是 {server}，客户端是 {client}。",
-  "net.error.unknown_method": "没有这个方法。"
+  "net.error.rate_limited": "慢一点：一次发的消息太多了。",
+  "net.error.too_large": "这个视图太大，无法发送。",
+  "net.error.too_many_views": "同时订阅的视图太多了。",
+  "net.error.unknown_method": "没有这个方法。",
+  "net.error.unknown_view": "没有这个视图。",
+  "net.error.view_failed": "这个视图没能算出来。",
+  "net.notice.turn_failed": "守秘人这次没能回应。"
 }

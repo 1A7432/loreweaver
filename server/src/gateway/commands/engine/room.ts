@@ -1,5 +1,5 @@
 // Running the room: `undo`, `reset` (armed, then confirmed), `save` (export and import of
-// the whole room), `language`, `rule` (the house-rule variant), `bot` (mute the Keeper),
+// the whole room), `language`, `rule` (the rule system and its house-rule variant), `bot` (mute the Keeper),
 // and `help` (the commands view as text).
 //
 // Undo, reset and import move the room's generation: the command's own writer is void
@@ -12,9 +12,9 @@ import { translate } from "../../../infra/i18n.ts";
 import { COMMANDS_CATALOG } from "../catalog.ts";
 import { compact, integer, object, oneOf, type ObjectSchema, text, BOOLEAN } from "../schema.ts";
 import { firstWord, parseInteger } from "../parse.ts";
-import { KEEPER_MUTED, ROOM_LOCALE, ROOM_LOCALES, ROOM_RULE_VARIANT } from "../state.ts";
+import { KEEPER_MUTED, ROOM_LOCALE, ROOM_LOCALES, ROOM_RULE_PACK, ROOM_RULE_VARIANT } from "../state.ts";
 import { documentCatalogOf } from "../support.ts";
-import { type CommandCall, type CommandSpec, type CommandViewEntry, type Done, refuse, type Refused } from "../types.ts";
+import { type CommandCall, type CommandEvent, type CommandSpec, type CommandViewEntry, type Done, refuse, type Refused } from "../types.ts";
 
 /** How long an armed reset waits for its confirmation. */
 export const RESET_CONFIRM_MS = 60_000;
@@ -241,44 +241,94 @@ function variantDisplay(variant: string | null, call: CommandCall): string {
   return digits === null ? variant : (digits[1] as string);
 }
 
+/** The words that introduce a rule system in the text form: `.rule system dnd5e`. */
+const SYSTEM_WORDS: ReadonlySet<string> = new Set(["system", "系统", "系統"]);
+/** The words that set a setting back to the server's default. */
+const DEFAULT_WORDS: ReadonlySet<string> = new Set(["0", "default", "默认", "默認"]);
+
+const NAME_OR_NULL = { type: ["string", "null"], minLength: 1, maxLength: 64 } as const;
+
+/**
+ * `rule`: the room's rule system and its house-rule ladder. Anyone may look; the admin
+ * chooses. `system` is a rule-pack id (or one of its names); null goes back to the
+ * server's default system. Choosing a system clears the ladder, which belonged to the
+ * previous one; `variant` given beside it is checked against the new system.
+ */
 export const ruleCommand: CommandSpec = {
   id: "rule",
   source: "engine",
   key: "rule",
-  params: object({ variant: { type: ["string", "null"], minLength: 1, maxLength: 64 } }),
+  params: object({ variant: NAME_OR_NULL, system: NAME_OR_NULL }),
   text: { en: ["rule"], zh: ["rule", "规则", "規則"] },
   role: "player",
-  adminWhen: (args) => args.variant !== undefined,
-  available: (context) => (context.pack?.resolution ? true : "no_rule_system"),
+  adminWhen: (args) => args.variant !== undefined || args.system !== undefined,
   parseText(rest) {
+    const [first, after] = firstWord(rest);
+    if (SYSTEM_WORDS.has(first)) {
+      if (after === "") return refuse("usage");
+      return { system: DEFAULT_WORDS.has(after.toLowerCase()) ? null : after };
+    }
     const word = rest.trim().toLowerCase();
     if (word === "") return {};
-    if (word === "0" || word === "default") return { variant: null };
+    if (DEFAULT_WORDS.has(word)) return { variant: null };
     return { variant: /^\d+$/u.test(word) ? `rule${word}` : word };
   },
   run(call, args): Done | Refused {
-    const resolution = call.context.pack?.resolution ?? null;
-    if (resolution === null) return refuse("no_rule_system");
-    const available = [...resolution.variants.keys()];
-    const list = [call.say("rule.default"), ...available.map((variant) => variantDisplay(variant, call))].join(call.say("list.separator"));
-    if (args.variant === undefined) {
-      const stored = call.context.services.store.stateGet(call.context.room, ROOM_RULE_VARIANT);
+    const { services, room, writer } = call.context;
+    const separator = call.say("list.separator");
+    const systems = services.packs.packs().map((pack) => pack.id);
+    let pack = call.context.pack;
+    let systemChanged = false;
+    if (args.system !== undefined) {
+      const asked = args.system as string | null;
+      if (asked === null) {
+        writer.stateDelete(ROOM_RULE_PACK);
+        pack = null;
+      } else {
+        const found = services.packs.get(asked) ?? services.packs.resolve(asked);
+        if (found === null) return refuse("unknown_system", { system: asked, systems: systems.join(separator) });
+        writer.statePut(ROOM_RULE_PACK, found.id);
+        pack = found;
+      }
+      // A ladder belongs to the system it was chosen in.
+      writer.stateDelete(ROOM_RULE_VARIANT);
+      systemChanged = true;
+    }
+    const resolution = pack?.resolution ?? null;
+    const available = resolution === null ? [] : [...resolution.variants.keys()];
+    const list = [call.say("rule.default"), ...available.map((variant) => variantDisplay(variant, call))].join(separator);
+    if (args.variant === undefined && !systemChanged) {
+      const lines = [
+        call.say("rule.system_current", { system: pack === null ? call.say("rule.no_system") : pack.id }),
+        call.say("rule.systems", { systems: systems.join(separator) }),
+      ];
+      if (resolution === null) return { text: lines.join("\n"), data: { system: pack?.id ?? null, systems, variant: null, available } };
+      const stored = services.store.stateGet(room, ROOM_RULE_VARIANT);
       // A stored ladder the pack no longer declares grades by the default; say so.
       const stale = stored !== null && !resolution.variants.has(stored);
-      const lines = [call.say("rule.current", { rule: variantDisplay(stale ? null : stored, call) }), call.say("rule.available", { rules: list })];
+      lines.push(call.say("rule.current", { rule: variantDisplay(stale ? null : stored, call) }), call.say("rule.available", { rules: list }));
       if (stale) lines.push(call.say("rule.stale"));
-      return { text: lines.join("\n"), data: { variant: stale ? null : stored, available } };
+      return { text: lines.join("\n"), data: { system: pack?.id ?? null, systems, variant: stale ? null : stored, available } };
     }
-    const variant = args.variant as string | null;
-    if (variant === null) call.context.writer.stateDelete(ROOM_RULE_VARIANT);
-    else {
-      if (!resolution.variants.has(variant)) return refuse("unknown_variant", { rules: list });
-      call.context.writer.statePut(ROOM_RULE_VARIANT, variant);
+    const events: CommandEvent[] = [];
+    if (systemChanged) {
+      const name = pack === null ? call.tell("rule.system_default") : pack.id;
+      events.push({ kind: "narrative", data: { speaker: "system", text: call.tell("rule.system_event", { system: name }), format: "plain" } });
     }
-    return {
-      data: { variant },
-      events: [{ kind: "narrative", data: { speaker: "system", text: call.tell("rule.event", { rule: variant === null ? call.tell("rule.default") : variantDisplay(variant, call) }), format: "plain" } }],
-    };
+    const data: Record<string, unknown> = {};
+    if (systemChanged) data.system = pack?.id ?? null;
+    if (args.variant !== undefined) {
+      if (resolution === null) return refuse("no_rule_system");
+      const variant = args.variant as string | null;
+      if (variant === null) writer.stateDelete(ROOM_RULE_VARIANT);
+      else {
+        if (!resolution.variants.has(variant)) return refuse("unknown_variant", { rules: list });
+        writer.statePut(ROOM_RULE_VARIANT, variant);
+      }
+      data.variant = variant;
+      events.push({ kind: "narrative", data: { speaker: "system", text: call.tell("rule.event", { rule: variant === null ? call.tell("rule.default") : variantDisplay(variant, call) }), format: "plain" } });
+    }
+    return { data, events };
   },
 };
 

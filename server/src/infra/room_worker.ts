@@ -53,8 +53,18 @@ export interface RoomWorkerOptions {
   readonly timeoutMs: number;
   /** Saved states by module id (from the store) of a room that has run before. */
   readonly checkpoints?: ReadonlyMap<string, Json>;
-  /** Told each new checkpoint, to persist it. */
-  readonly onCheckpoint?: (module: string, snapshot: Json) => void;
+  /**
+   * Told each new checkpoint, to persist it, with the `token` of the call that produced it
+   * (undefined when no `token` option was given).
+   */
+  readonly onCheckpoint?: (module: string, snapshot: Json, token: unknown) => void;
+  /**
+   * Read synchronously when a call is MADE (not when it reaches the thread) and handed back
+   * with that call's checkpoints: an opaque name for the piece of work that asked. The
+   * caller uses it to write a checkpoint through the writer of the work that made the call,
+   * so a call of a generation that has since passed cannot land in the new one.
+   */
+  readonly token?: () => unknown;
   /**
    * End the worker after every mutating call, so the next call cold-starts from the
    * checkpoints. Dev rooms use it: a `save()` that drops state shows at once.
@@ -73,7 +83,8 @@ export class RoomWorker {
   readonly #timeoutMs: number;
   readonly #paths: readonly string[];
   readonly #checkpoints = new Map<string, Json>();
-  readonly #onCheckpoint: (module: string, snapshot: Json) => void;
+  readonly #onCheckpoint: (module: string, snapshot: Json, token: unknown) => void;
+  readonly #token: () => unknown;
   readonly #coldStart: boolean;
   readonly #now: () => number;
   #descriptions: readonly ModuleDescription[] | null = null;
@@ -89,6 +100,7 @@ export class RoomWorker {
     this.#paths = modulePaths;
     this.#timeoutMs = options.timeoutMs;
     this.#onCheckpoint = options.onCheckpoint ?? (() => undefined);
+    this.#token = options.token ?? (() => undefined);
     this.#coldStart = options.coldStart ?? false;
     this.#now = options.now ?? Date.now;
     this.#lastActive = this.#now();
@@ -122,7 +134,8 @@ export class RoomWorker {
 
   /** The static descriptions, loading the modules first if they never were. */
   describe(): Promise<readonly ModuleDescription[]> {
-    return this.#enqueue(() => this.#describeNow());
+    const token = this.#token();
+    return this.#enqueue(() => this.#describeNow(token));
   }
 
   /** The turn-start exchange. A module claiming the clock is read inside it. */
@@ -173,7 +186,22 @@ export class RoomWorker {
    * one from the checkpoints. The answer is unchecked; the caller validates it.
    */
   assembleLore(request: LoreRequest): Promise<unknown> {
-    return this.#enqueue(() => this.#exchange({ op: "lore", request }));
+    const token = this.#token();
+    return this.#enqueue(() => this.#exchange({ op: "lore", request }, token));
+  }
+
+  /**
+   * Start over from `checkpoints` (the store's, after an undo, a reset or an import, or
+   * after a checkpoint of a past generation was refused): queued behind any call in
+   * flight, it replaces the checkpoints this handle holds and ends the thread, so the next
+   * call loads the modules from them. The static descriptions are kept.
+   */
+  reload(checkpoints: ReadonlyMap<string, Json>): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#checkpoints.clear();
+      for (const [module, snapshot] of checkpoints) this.#checkpoints.set(module, snapshot);
+      await this.#terminate();
+    }, false);
   }
 
   /**
@@ -205,27 +233,28 @@ export class RoomWorker {
     empty: () => WorkerValues[Op],
     mutating: boolean,
   ): Promise<WorkerValues[Op]> {
+    const token = this.#token();
     return this.#enqueue(async () => {
-      const descriptions = await this.#describeNow();
+      const descriptions = await this.#describeNow(token);
       if (!descriptions.some(handles)) return empty();
-      const value = (await this.#exchange(request)) as WorkerValues[Op];
-      if ("checkpoints" in value) this.#absorb(value.checkpoints);
+      const value = (await this.#exchange(request, token)) as WorkerValues[Op];
+      if ("checkpoints" in value) this.#absorb(value.checkpoints, token);
       // A module whose restore failed is in an unknown state: rebuild from checkpoints.
       if (value.broken.length > 0 || (mutating && this.#coldStart)) await this.#terminate();
       return value;
     });
   }
 
-  async #describeNow(): Promise<readonly ModuleDescription[]> {
+  async #describeNow(token: unknown): Promise<readonly ModuleDescription[]> {
     if (this.#descriptions) return this.#descriptions;
-    await this.#ensure().ready;
+    await this.#ensure(token).ready;
     return this.#descriptions ?? [];
   }
 
-  #absorb(checkpoints: Readonly<Record<string, Json>>): void {
+  #absorb(checkpoints: Readonly<Record<string, Json>>, token: unknown): void {
     for (const [module, snapshot] of Object.entries(checkpoints)) {
       this.#checkpoints.set(module, snapshot);
-      this.#onCheckpoint(module, snapshot);
+      this.#onCheckpoint(module, snapshot, token);
     }
   }
 
@@ -246,13 +275,14 @@ export class RoomWorker {
     return result;
   }
 
-  async #exchange(request: Request): Promise<unknown> {
-    const running = this.#ensure();
+  async #exchange(request: Request, token: unknown): Promise<unknown> {
+    const running = this.#ensure(token);
     await running.ready;
     return this.#send(running, request);
   }
 
-  #ensure(): Running {
+  /** The running worker, started (and its modules loaded) for the call named by `token`. */
+  #ensure(token: unknown): Running {
     if (this.#running) return this.#running;
     const handle = this.#spawn();
     handle.onMessage((message) => {
@@ -265,7 +295,7 @@ export class RoomWorker {
       (value) => {
         const loaded = value as LoadValue;
         this.#descriptions = loaded.modules;
-        this.#absorb(loaded.checkpoints);
+        this.#absorb(loaded.checkpoints, token);
       },
       async (error: unknown) => {
         // A load that failed is retried by the next call, on a new worker: in a dev room

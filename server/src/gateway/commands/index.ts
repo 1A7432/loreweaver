@@ -8,7 +8,7 @@ export { RESET_CONFIRM_MS, ResetGate } from "./engine/room.ts";
 export { argumentTooLong, inlineRolls, MAX_COMMAND_ARG_CHARS, MAX_INLINE_ROLLS, PREFIXES, splitCommand } from "./parse.ts";
 export { CommandRegistry, type InputOutcome, type RegistryOptions } from "./registry.ts";
 export { MAX_ARG_CHARS, type ObjectSchema, type Schema, validateArgs } from "./schema.ts";
-export { KEEPER_MUTED, ROOM_LOCALE, ROOM_LOCALES, ROOM_RULE_VARIANT } from "./state.ts";
+export { KEEPER_MUTED, ROOM_LOCALE, ROOM_LOCALES, ROOM_RULE_PACK, ROOM_RULE_VARIANT } from "./state.ts";
 export { documentCatalogOf, whoIn } from "./support.ts";
 export type {
   Args,

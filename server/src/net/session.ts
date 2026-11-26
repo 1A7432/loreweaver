@@ -1,31 +1,40 @@
 // One connection, whatever carries it. A transport hands this class parsed JSON values
 // and a way to send frames back; everything the protocol says about a connection lives
-// here.
+// here: the hello and its welcome, resuming the log, the one `result` per `input` and
+// `call` matched by `rid`, and connection-level errors. What a member does in the room is
+// the room's (`gateway/room.ts`); text a person reads here comes from this layer's catalog
+// (`locales/*/net.json`), in the MEMBER's language (decision 32).
 import {
   decodeClientFrame,
   PROTOCOL_MAJOR,
   PROTOCOL_VERSION,
   protocolMajor,
+  charCount,
   type CallFrame,
   type ErrorBody,
   type HelloFrame,
   type ServerFrame,
 } from "loreweaver-protocol/v3";
 
-import { eventFrame, type Member, type Room } from "../gateway/room.ts";
-import { t } from "../infra/i18n.ts";
+import type { Answer, Member, Room } from "../gateway/room.ts";
+import { eventFrame } from "../gateway/room.ts";
+import { catalogLocale, t } from "../infra/i18n.ts";
 import { SERVER_VERSION } from "../infra/version.ts";
 import { memberId, type Keystore } from "./keystore.ts";
 
 /** How many missed events a reconnect is sent at once; the rest is fetched by page. */
 export const RESUME_LIMIT = 200;
 export const PAGE_LIMIT = 100;
+/** A name a client gives itself in `hello`, in code points. */
+export const MAX_MEMBER_NAME_CHARS = 64;
+/** A command id in `command.run`, in code points (a module id, a slash, a command name). */
+export const MAX_COMMAND_ID_CHARS = 200;
+/** View names in one `view.subscribe` / `view.unsubscribe`. */
+export const MAX_VIEW_NAMES = 64;
 
 export interface SessionDeps {
   readonly keystore: Keystore;
   readonly room: (id: string) => Room;
-  /** The language of rooms on this server until rooms carry their own setting. */
-  readonly roomLocale: string;
 }
 
 export interface Connection {
@@ -33,11 +42,17 @@ export interface Connection {
   close(): void;
 }
 
+let connections = 0;
+
+function isStringList(value: unknown, max: number): value is string[] {
+  return Array.isArray(value) && value.length <= max && value.every((item) => typeof item === "string");
+}
+
 export class Session {
   readonly #deps: SessionDeps;
   readonly #connection: Connection;
   #locale = "en";
-  #joined: { room: Room; member: Member; role: string } | null = null;
+  #joined: { room: Room; member: Member } | null = null;
 
   constructor(deps: SessionDeps, connection: Connection) {
     this.#deps = deps;
@@ -68,15 +83,10 @@ export class Session {
       return;
     }
     if (frame.type === "input") {
-      if (joined.role === "observer") {
-        this.#refuse(frame.rid, "forbidden");
-        return;
-      }
-      this.#connection.send({ type: "result", rid: frame.rid, ok: true });
-      void joined.room.say(joined.member, frame.text);
+      joined.room.input(joined.member, frame.text, this.#replier(frame.rid));
       return;
     }
-    this.#call(joined.room, frame);
+    this.#call(joined.room, joined.member, frame);
   }
 
   /** The transport reports the connection gone. */
@@ -86,7 +96,7 @@ export class Session {
   }
 
   #hello(frame: HelloFrame): void {
-    this.#locale = frame.locale;
+    this.#locale = catalogLocale(frame.locale);
     if (protocolMajor(frame.protocol) !== PROTOCOL_MAJOR) {
       this.#error("protocol_mismatch", true, { server: PROTOCOL_VERSION, client: frame.protocol });
       return;
@@ -96,10 +106,19 @@ export class Session {
       this.#error("bad_key", true);
       return;
     }
+    const asked = frame.name?.trim() ?? "";
+    if (charCount(asked) > MAX_MEMBER_NAME_CHARS) {
+      this.#error("bad_name", true, { limit: MAX_MEMBER_NAME_CHARS });
+      return;
+    }
     const room = this.#deps.room(record.room);
+    const id = memberId(frame.key);
     const member: Member = {
-      id: memberId(frame.key),
-      name: frame.name ?? record.name,
+      connection: `${id}#${++connections}`,
+      id,
+      name: asked === "" ? record.name : asked,
+      role: record.role,
+      locale: this.#locale,
       send: (out) => {
         this.#connection.send(out);
       },
@@ -109,14 +128,15 @@ export class Session {
       type: "welcome",
       protocol: PROTOCOL_VERSION,
       server: { name: "loreweaver", version: SERVER_VERSION },
-      room: { id: room.id, locale: this.#deps.roomLocale },
-      you: { id: member.id, name: member.name, role: record.role },
+      room: { id: room.id, locale: room.locale },
+      you: { id: member.id, name: member.name, role: member.role },
       features: [],
       epoch: meta.epoch,
       head: meta.head,
     });
-    // Same generation: send what was missed. Another generation (or a first visit):
-    // the client holds nothing valid, so it gets the newest stretch of the log.
+    // Same generation: send what was missed. Another generation (or a first visit): the
+    // client holds nothing valid — the welcome's epoch tells it so — and it gets the newest
+    // stretch of the log.
     const oldest = Math.max(0, meta.head - RESUME_LIMIT);
     const resume = frame.resume;
     const after = resume !== undefined && resume.epoch === meta.epoch ? Math.max(resume.after, oldest) : oldest;
@@ -124,30 +144,109 @@ export class Session {
     // so no live event can land between two replayed ones or be missed.
     for (const event of room.eventsAfter(after, RESUME_LIMIT)) this.#connection.send(eventFrame(event));
     room.join(member);
-    this.#joined = { room, member, role: record.role };
+    this.#joined = { room, member };
   }
 
-  #call(room: Room, frame: CallFrame): void {
-    if (frame.method === "log.page") {
-      const before = frame.params.before;
-      const limit = frame.params.limit ?? PAGE_LIMIT;
-      if (!Number.isSafeInteger(before) || !Number.isSafeInteger(limit) || (limit as number) < 1) {
-        this.#refuse(frame.rid, "invalid_params");
+  #call(room: Room, member: Member, frame: CallFrame): void {
+    const params = frame.params;
+    switch (frame.method) {
+      case "command.run": {
+        const id = params.id;
+        if (typeof id !== "string" || id === "" || charCount(id) > MAX_COMMAND_ID_CHARS) {
+          this.#refuse(frame.rid, "invalid_params");
+          return;
+        }
+        room.run(member, id, params.args ?? {}, this.#replier(frame.rid));
         return;
       }
-      const events = room.eventsBefore(before as number, Math.min(limit as number, PAGE_LIMIT)).map(eventFrame);
-      this.#connection.send({ type: "result", rid: frame.rid, ok: true, data: { events } });
-      return;
+      case "view.list":
+        void room.viewList(member).then((views) => {
+          this.#ok(frame.rid, { views });
+        });
+        return;
+      case "view.subscribe": {
+        const names = params.names;
+        if (!isStringList(names, MAX_VIEW_NAMES)) {
+          this.#refuse(frame.rid, "invalid_params");
+          return;
+        }
+        void room.viewSubscribe(member, names).then((delivery) => {
+          // The answer first; the current values follow as view frames.
+          this.#ok(frame.rid, { problems: delivery.problems });
+          for (const view of delivery.frames) this.#connection.send(view);
+        });
+        return;
+      }
+      case "view.unsubscribe": {
+        const names = params.names;
+        if (!isStringList(names, MAX_VIEW_NAMES)) {
+          this.#refuse(frame.rid, "invalid_params");
+          return;
+        }
+        void room.viewUnsubscribe(member, names).then((removed) => {
+          this.#ok(frame.rid, { removed });
+        });
+        return;
+      }
+      case "view.get": {
+        const name = params.name;
+        if (typeof name !== "string") {
+          this.#refuse(frame.rid, "invalid_params");
+          return;
+        }
+        void room.viewGet(member, name).then((view) => {
+          if ("code" in view) this.#refuse(frame.rid, view.code);
+          else this.#ok(frame.rid, { name: view.name, rev: view.rev, at: view.at, data: view.data });
+        });
+        return;
+      }
+      case "log.page": {
+        const before = params.before;
+        const limit = params.limit ?? PAGE_LIMIT;
+        if (!Number.isSafeInteger(before) || !Number.isSafeInteger(limit) || (limit as number) < 1) {
+          this.#refuse(frame.rid, "invalid_params");
+          return;
+        }
+        const events = room.eventsBefore(before as number, Math.min(limit as number, PAGE_LIMIT)).map(eventFrame);
+        this.#ok(frame.rid, { events });
+        return;
+      }
+      case "media.offer":
+        // The byte channel is not built yet: nothing can be uploaded.
+        this.#refuse(frame.rid, "media_unavailable");
+        return;
+      default:
+        this.#refuse(frame.rid, "unknown_method");
     }
-    this.#refuse(frame.rid, "unknown_method");
   }
 
-  #refuse(rid: string, code: string): void {
-    const error: ErrorBody = { code, message: t(this.#locale, `net.error.${code}`) };
+  /** The one answer to `rid`, from the room. */
+  #replier(rid: string): (answer: Answer) => void {
+    let answered = false;
+    return (answer) => {
+      if (answered) return;
+      answered = true;
+      if (answer.ok) {
+        const result: { type: "result"; rid: string; ok: true; text?: string; data?: unknown } = { type: "result", rid, ok: true };
+        if (answer.text !== undefined) result.text = answer.text;
+        if (answer.data !== undefined) result.data = answer.data;
+        this.#connection.send(result);
+      } else {
+        this.#refuse(rid, answer.code, answer.message);
+      }
+    };
+  }
+
+  #ok(rid: string, data: unknown): void {
+    this.#connection.send({ type: "result", rid, ok: true, data });
+  }
+
+  #refuse(rid: string, code: string, message?: string): void {
+    const error: ErrorBody = { code, message: message ?? t(this.#locale, `net.error.${code}`) };
     this.#connection.send({ type: "result", rid, ok: false, error });
   }
 
-  #error(code: string, fatal: boolean, params: Record<string, string> = {}): void {
+  #error(code: string, fatal: boolean, params: Record<string, string | number> = {}): void {
     this.#connection.send({ type: "error", code, message: t(this.#locale, `net.error.${code}`, params), fatal });
     if (fatal) this.#connection.close();
   }

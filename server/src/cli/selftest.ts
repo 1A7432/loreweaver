@@ -10,11 +10,20 @@ import { join } from "node:path";
 
 import type { ServerFrame } from "loreweaver-protocol/v3";
 
-import { builtInPacks } from "../core/rulepacks/index.ts";
-import { builtInSkills } from "../core/skills/index.ts";
+import type { Services } from "../agent/context.ts";
+import { dispatchTurnStart } from "../agent/modules.ts";
+import { servicesOn } from "../agent/services.ts";
+import type { TurnEnvironment } from "../agent/turn/types.ts";
+import { DEFAULT_FOLD_SETTINGS } from "../core/chronicle/index.ts";
+import { builtInPacks, RulePackRegistry } from "../core/rulepacks/index.ts";
+import { builtInSkillRegistry, builtInSkills } from "../core/skills/index.ts";
+import { CommandRegistry } from "../gateway/commands/index.ts";
 import { Hub } from "../gateway/hub.ts";
-import { systemClock } from "../infra/ids.ts";
-import { ScriptedLLM } from "../infra/llm/index.ts";
+import type { RunKeeperTurn } from "../gateway/keeper.ts";
+import { LANES_OFF } from "../gateway/lanes.ts";
+import { REVIEW_OFF } from "../gateway/review.ts";
+import { type Clock, systemClock } from "../infra/ids.ts";
+import { type LLMClient, ScriptedLLM } from "../infra/llm/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
 import { spawnWorker } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";
@@ -32,6 +41,54 @@ export default defineModule({
   on: { turnStart(event, fx) { turns += 1; fx.inject("selftest module saw turn " + turns); } },
 });
 `;
+
+/** The services of a server on one store whose every model lane is `llm`. */
+export function selftestServices(store: Store, llm: LLMClient, clock: Clock, report: (room: string, text: string) => void): Services {
+  return servicesOn({ store, packs: new RulePackRegistry(builtInPacks()), models: { keeper: llm, npc: llm, scribe: llm, director: llm, memory: llm }, clock, report });
+}
+
+/** A Keeper turn's environment with the built-in skills and the default settings. */
+export function selftestEnvironment(): TurnEnvironment {
+  return {
+    skills: builtInSkillRegistry(),
+    settings: { maxRounds: 12, contextWindow: 200_000, foldEnabled: false, fold: DEFAULT_FOLD_SETTINGS },
+  };
+}
+
+/**
+ * A stand-in for the Keeper turn that calls no model: it tells the modules a turn started
+ * and publishes what they injected as the reply. The self-test proves the transport, the
+ * worker and the store of a built binary, not the Keeper (and iron rule 5 keeps the
+ * Keeper's model calls in the engine alone).
+ */
+export function selftestTurn(): RunKeeperTurn {
+  return async (context, input, ports) => {
+    const started = await dispatchTurnStart(ports.moduleWorker(), {
+      turn: context.turn,
+      seed: `${context.room}:${context.turn}:turnStart`,
+      text: input.text,
+      who: context.who,
+      variables: {},
+      clock: null,
+    });
+    const reply = started.injections.length > 0 ? started.injections.join("\n") : `[${input.speaker}] ${input.text}`;
+    const replyId = context.services.clock.id();
+    ports.signal("draft", { id: replyId, text: reply });
+    ports.publish("narrative", replyId, { speaker: "kp", text: reply, format: "markdown" });
+    return {
+      status: "replied",
+      reply,
+      replyId,
+      usage: { inputTokens: 0, outputTokens: 0 },
+      usageEstimated: true,
+      toolsCalled: [],
+      contentWrites: new Set(),
+      keeperRecordedChronicle: false,
+      narrateNowRequested: false,
+      problems: started.problems,
+    };
+  };
+}
 
 export interface SelftestReport {
   readonly ok: boolean;
@@ -61,23 +118,28 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
   const modulePath = join(dir, "module.ts");
   writeFileSync(modulePath, MODULE_SOURCE);
   const store = new Store(openDatabase(join(dir, "selftest.db")));
-  const llm = new ScriptedLLM(["The self-test turn ran."]);
+  // No lane calls a model in the self-test; a scripted client stands behind every lane.
+  const llm = new ScriptedLLM([]);
   const problems: string[] = [];
   const hub = new Hub({
-    store,
-    clock: systemClock,
-    llm,
-    systemPrompt: "selftest",
+    services: selftestServices(store, llm, systemClock, (_room, text) => {
+      problems.push(text);
+    }),
+    env: selftestEnvironment(),
+    commands: (modules) => new CommandRegistry({ modules }),
+    runTurn: selftestTurn(),
+    recordPlayerAction: () => ({ ok: true }),
+    defaultLocale: "en",
+    review: REVIEW_OFF,
+    lanes: LANES_OFF,
+    kitFor: () => null,
     spawnWorker: () => spawnWorker(workerEntry),
     modulesFor: () => [modulePath],
     workerTimeoutMs: 5000,
-    onProblem: (_room, text) => {
-      problems.push(text);
-    },
   });
   const keystore = new Keystore();
   keystore.add("selftest-key", { room: "selftest", name: "Tester", role: "player" });
-  const server = new IrohServer({ keystore, room: (id) => hub.room(id), roomLocale: "en" }, { mode: "local" });
+  const server = new IrohServer({ keystore, room: (id) => hub.room(id) }, { mode: "local" });
   try {
     const ticket = await server.start();
     steps.transport_bound = true;
@@ -96,7 +158,8 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
     link.send({ type: "input", rid: "1", text: "ping" });
     await until((frame) => frame.type === "event" && frame.kind === "narrative" && frame.data.speaker === "kp");
     steps.turn_answered = true;
-    steps.module_loaded_and_injected = llm.calls[0]?.[0]?.content === "selftest\n\nselftest module saw turn 1";
+    const reply = frames.find((frame) => frame.type === "event" && frame.kind === "narrative" && frame.data.speaker === "kp");
+    steps.module_loaded_and_injected = reply?.type === "event" && reply.kind === "narrative" && reply.data.text === "selftest module saw turn 1";
     steps.module_state_stored = JSON.stringify(store.moduleStates("selftest").get("selftest")) === '{"turns":1}';
     steps.log_stored = store.room("selftest").head === 2;
     steps.no_problems = problems.length === 0;

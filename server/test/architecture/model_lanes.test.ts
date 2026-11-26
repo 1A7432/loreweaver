@@ -20,8 +20,6 @@ type Lane = "keeper" | "scoped-actor" | "memory" | "plumbing";
 
 const MODEL_CALL_LANES: ReadonlyMap<string, { readonly lane: Lane; readonly what: string }> = new Map([
   ["agent/turn/engine.ts", { lane: "keeper", what: "the Keeper's turn: tool rounds, check rounds, the finalizer" }],
-  // The thin 3.0 placeholder the room still calls until it moves to the engine; delete both together.
-  ["agent/turn.ts", { lane: "keeper", what: "the placeholder Keeper turn gateway/room.ts still uses" }],
   ["agent/lanes/npc_actor.ts", { lane: "scoped-actor", what: "one NPC, prompted from its own record" }],
   ["agent/lanes/scribe.ts", { lane: "scoped-actor", what: "the Scribe's bookkeeping pass" }],
   ["agent/lanes/director.ts", { lane: "scoped-actor", what: "the Stage Director" }],
@@ -71,6 +69,5 @@ test("the Keeper's prompt has one assembler and one caller", () => {
     .sort();
   expect(callers).toEqual(["agent/turn/engine.ts"]);
   const keeperLanes = [...MODEL_CALL_LANES].filter(([, entry]) => entry.lane === "keeper").map(([path]) => path);
-  // The placeholder sends its own one-message prompt; it goes when the room moves to the engine.
-  expect(keeperLanes.sort()).toEqual(["agent/turn.ts", "agent/turn/engine.ts"]);
+  expect(keeperLanes.sort()).toEqual(["agent/turn/engine.ts"]);
 });

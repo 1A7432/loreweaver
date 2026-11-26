@@ -1,0 +1,224 @@
+// A server for the room's tests: a real store, registry, views and session, a scripted Keeper
+// turn (each test decides what a turn does, and may hold one open), scripted Scribe and
+// Director models, and an optional real module worker.
+import type { EventFrame, ResultFrame, ServerFrame, SignalFrame, ViewFrame } from "loreweaver-protocol/v3";
+
+import type { RoomContext } from "../../src/agent/context.ts";
+import type { DirectorImageDeps } from "../../src/agent/lanes/director.ts";
+import { type InstalledKit, mergeRoomKit, parsePresentationKit, type RoomKit } from "../../src/agent/lanes/presentation.ts";
+import { servicesOn } from "../../src/agent/services.ts";
+import type { TurnInput, TurnPorts, TurnResult } from "../../src/agent/turn/types.ts";
+import { selftestEnvironment } from "../../src/cli/selftest.ts";
+import { builtInPacks, RulePackRegistry } from "../../src/core/rulepacks/index.ts";
+import { CommandRegistry } from "../../src/gateway/commands/index.ts";
+import { Hub } from "../../src/gateway/hub.ts";
+import type { PlayerActionEntry } from "../../src/gateway/keeper.ts";
+import { type LaneSettings, LANES_OFF } from "../../src/gateway/lanes.ts";
+import type { RateLimitSettings } from "../../src/gateway/rate_limit.ts";
+import { REVIEW_OFF } from "../../src/gateway/review.ts";
+import { type Responder, type ScriptedReply, ScriptedLLM } from "../../src/infra/llm/index.ts";
+import { openDatabase } from "../../src/infra/runtime/sqlite.ts";
+import { spawnWorker, type WorkerHandle } from "../../src/infra/runtime/worker.ts";
+import { Store } from "../../src/infra/store.ts";
+import { Keystore } from "../../src/net/keystore.ts";
+import { fixtureModule, testClock, Wire, WORKER_ENTRY } from "../helpers.ts";
+
+export const ROOM = "table";
+
+export const KEYS = { ada: "ada-key", bao: "bao-key", root: "root-key", eve: "eve-key" } as const;
+
+/** A promise the test resolves by hand. */
+export interface Gate {
+  readonly promise: Promise<void>;
+  open(): void;
+}
+
+export function gate(): Gate {
+  let open = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+/** One call of the turn function, as the room made it. */
+export interface TurnCall {
+  readonly context: RoomContext;
+  readonly input: TurnInput;
+  readonly ports: TurnPorts;
+}
+
+export type TurnScript = (call: TurnCall) => Promise<TurnResult> | TurnResult;
+
+export function result(status: TurnResult["status"], reply: string | null = null, replyId: string | null = null): TurnResult {
+  return {
+    status,
+    reply,
+    replyId,
+    usage: { inputTokens: 100, outputTokens: 10 },
+    usageEstimated: false,
+    toolsCalled: [],
+    contentWrites: new Set(),
+    keeperRecordedChronicle: false,
+    narrateNowRequested: false,
+    problems: [],
+  };
+}
+
+/** Publish the Keeper's reply and say so. */
+export function reply(call: TurnCall, text: string): TurnResult {
+  const id = `reply-${call.context.turn}-${call.input.work}`;
+  call.ports.publish("narrative", id, { speaker: "kp", text, format: "markdown" });
+  return result("replied", text, id);
+}
+
+/** The scripted Keeper: each turn takes the next script, or replies `Reply N` by default. */
+export class Keeper {
+  readonly calls: TurnCall[] = [];
+  readonly #scripts: TurnScript[] = [];
+
+  next(...scripts: TurnScript[]): void {
+    this.#scripts.push(...scripts);
+  }
+
+  readonly run = async (context: RoomContext, input: TurnInput, ports: TurnPorts): Promise<TurnResult> => {
+    const call = { context, input, ports };
+    this.calls.push(call);
+    const script = this.#scripts.shift();
+    return script === undefined ? reply(call, `Reply ${this.calls.length}`) : script(call);
+  };
+}
+
+/** A kit with something to stage. */
+export function testKit(): RoomKit {
+  const parsed = parsePresentationKit({ version: 2, style: { keywords: { en: "ink wash" } }, subjects: [{ id: "quay", kind: "location", name: "The quay" }], templates: ["letter", "text"] });
+  if (!parsed.ok) throw new Error(parsed.code);
+  const installed: InstalledKit = { packId: "pack", kit: parsed.kit, assets: new Map() };
+  return mergeRoomKit([installed], "en").kit;
+}
+
+export interface BenchOptions {
+  readonly modules?: readonly string[];
+  readonly lanes?: LaneSettings;
+  readonly kit?: RoomKit | null;
+  readonly scribe?: readonly ScriptedReply[] | Responder;
+  readonly director?: readonly ScriptedReply[] | Responder;
+  readonly system?: string | null;
+  readonly rateLimit?: RateLimitSettings;
+  readonly images?: DirectorImageDeps;
+  /** Told every op posted to the room worker, as it is posted. */
+  readonly onPost?: (op: string) => void;
+}
+
+export const LANES_ON: LaneSettings = { scribe: true, director: true, directorSettings: { imagesEnabled: false, maxImages: 0, pregenPerBeat: 0 } };
+
+export class RoomBench {
+  readonly store: Store;
+  readonly hub: Hub;
+  readonly keeper = new Keeper();
+  readonly reports: string[] = [];
+  readonly actions: PlayerActionEntry[] = [];
+  readonly scribe: ScriptedLLM;
+  readonly director: ScriptedLLM;
+  readonly keystore = new Keystore();
+
+  constructor(options: BenchOptions = {}) {
+    this.store = new Store(openDatabase(":memory:"));
+    this.scribe = new ScriptedLLM(options.scribe ?? (() => "{}"));
+    this.director = new ScriptedLLM(options.director ?? (() => "{}"));
+    const unused = new ScriptedLLM([]);
+    const services = servicesOn({
+      store: this.store,
+      packs: new RulePackRegistry(builtInPacks()),
+      models: { keeper: unused, npc: unused, scribe: this.scribe, director: this.director, memory: unused },
+      clock: testClock(),
+      report: (_room, text) => {
+        this.reports.push(text);
+      },
+    });
+    const spawn = (): WorkerHandle => {
+      const inner = spawnWorker(WORKER_ENTRY);
+      return {
+        post: (message) => {
+          options.onPost?.((message as { op: string }).op);
+          inner.post(message);
+        },
+        onMessage: (listener) => {
+          inner.onMessage(listener);
+        },
+        terminate: () => inner.terminate(),
+      };
+    };
+    const modules = (options.modules ?? []).map(fixtureModule);
+    this.hub = new Hub({
+      services,
+      env: selftestEnvironment(),
+      commands: (seam) => new CommandRegistry({ modules: seam }),
+      runTurn: this.keeper.run,
+      recordPlayerAction: (_context, entry) => {
+        this.actions.push(entry);
+        return { ok: true };
+      },
+      defaultLocale: "en",
+      defaultRulePack: options.system === undefined ? "coc7" : options.system,
+      review: REVIEW_OFF,
+      lanes: options.lanes ?? LANES_OFF,
+      kitFor: () => options.kit ?? null,
+      ...(options.images === undefined ? {} : { images: options.images }),
+      rateLimit: options.rateLimit ?? { capacity: 10_000, refillPerSecond: 10_000 },
+      spawnWorker: spawn,
+      modulesFor: () => modules,
+      workerTimeoutMs: 5000,
+    });
+    this.keystore.add(KEYS.ada, { room: ROOM, name: "Ada", role: "player" });
+    this.keystore.add(KEYS.bao, { room: ROOM, name: "Bao", role: "player" });
+    this.keystore.add(KEYS.root, { room: ROOM, name: "Root", role: "admin" });
+    this.keystore.add(KEYS.eve, { room: ROOM, name: "Eve", role: "observer" });
+  }
+
+  /** A connection that has said hello with `key`. */
+  join(key: string, extra: Record<string, unknown> = {}): Wire {
+    const wire = new Wire({ keystore: this.keystore, room: (id) => this.hub.room(id) });
+    wire.hello(key, extra);
+    return wire;
+  }
+
+  /** Everything queued under the room's lock, every view refresh and every after-turn pass, done. */
+  async settled(): Promise<void> {
+    for (let i = 0; i < 3; i++) {
+      await this.hub.room(ROOM).settled();
+      await this.hub.lanesIdle(ROOM);
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.settled();
+    await this.hub.close();
+    this.store.close();
+  }
+}
+
+export function events(frames: readonly ServerFrame[]): EventFrame[] {
+  return frames.filter((frame): frame is EventFrame => frame.type === "event");
+}
+
+export function results(frames: readonly ServerFrame[]): ResultFrame[] {
+  return frames.filter((frame): frame is ResultFrame => frame.type === "result");
+}
+
+export function views(frames: readonly ServerFrame[], name?: string): ViewFrame[] {
+  return frames.filter((frame): frame is ViewFrame => frame.type === "view" && (name === undefined || frame.name === name));
+}
+
+export function signals(frames: readonly ServerFrame[], kind?: string): SignalFrame[] {
+  return frames.filter((frame): frame is SignalFrame => frame.type === "signal" && (kind === undefined || frame.kind === kind));
+}
+
+export function resultFor(frames: readonly ServerFrame[], rid: string): ResultFrame | undefined {
+  return results(frames).find((frame) => frame.rid === rid);
+}
+
+/** The Scribe's answer, as its model writes one. */
+export function scribeReply(body: Record<string, unknown>): string {
+  return JSON.stringify(body);
+}

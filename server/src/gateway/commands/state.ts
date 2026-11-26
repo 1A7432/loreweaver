@@ -7,6 +7,12 @@ const ROOM_SETTING = "a room setting chosen by the admin, not part of the story:
 /** The room's language (`en`, `zh`): everything sent to the table is written in it. */
 export const ROOM_LOCALE = textStateKey("room.locale", { reset: "never", because: ROOM_SETTING });
 
+/**
+ * The room's rule system: a rule-pack id the admin chose. Absent: the server's default
+ * system for its rooms (which may be none).
+ */
+export const ROOM_RULE_PACK = textStateKey("room.rule_pack", { reset: "never", because: ROOM_SETTING });
+
 /** The house-rule ladder the room chose within its rule system; absent for the system's default. */
 export const ROOM_RULE_VARIANT = textStateKey("room.rule_variant", { reset: "never", because: ROOM_SETTING });
 

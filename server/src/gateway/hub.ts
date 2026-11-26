@@ -1,18 +1,56 @@
-// Every room this server runs, created on first use.
+// Every room this server runs, created on first use, and each room's worker.
+//
+// The hub is handed everything as plain values — the services, the turn environment, the
+// command table, the turn function — so that the composition root (`serve`) and a test
+// build it the same way. It owns one worker thread per room that needs one (a room with
+// modules, or one whose lore asks — `workerForLore`), and writes each module checkpoint
+// through the writer of the work whose call produced it (see `keeper.ts` `Work`): a
+// checkpoint of a past generation is dropped and the worker starts over from the store.
 import type { Json } from "loreweaver/module";
 
-import type { Clock } from "../infra/ids.ts";
-import type { LLMClient } from "../infra/llm/index.ts";
+import type { Services } from "../agent/context.ts";
+import type { DirectorImageDeps } from "../agent/lanes/director.ts";
+import type { RoomKit } from "../agent/lanes/presentation.ts";
+import type { TurnEnvironment } from "../agent/turn/types.ts";
 import { RoomWorker } from "../infra/room_worker.ts";
 import type { WorkerHandle } from "../infra/runtime/worker.ts";
-import type { Store } from "../infra/store.ts";
-import { Room } from "./room.ts";
+import { OrderedChains } from "./chain.ts";
+import type { CommandRegistry, ModuleCommands } from "./commands/index.ts";
+import { currentWork, type RecordPlayerAction, type RunKeeperTurn, Work } from "./keeper.ts";
+import type { LaneSettings } from "./lanes.ts";
+import { RoomModuleCommands } from "./module_commands.ts";
+import { DEFAULT_RATE_LIMIT, RateLimiter, type RateLimitSettings } from "./rate_limit.ts";
+import { type ReviewFilter } from "./review.ts";
+import { Room, type RoomHost } from "./room.ts";
 
 export interface HubDeps {
-  readonly store: Store;
-  readonly clock: Clock;
-  readonly llm: LLMClient;
-  readonly systemPrompt: string;
+  readonly services: Services;
+  /** What a Keeper turn needs beyond the services (skills, recall, images, its settings). */
+  readonly env: TurnEnvironment;
+  /**
+   * Build the server's command table around the module-command seam the hub provides
+   * (`(modules) => new CommandRegistry({ modules })`): the seam needs the hub's rooms and
+   * workers, the table is needed by the hub, so the hub makes the one call that joins them.
+   */
+  readonly commands: (modules: ModuleCommands) => CommandRegistry;
+  /** One Keeper turn (`agent/turn` `runKeeperTurn`). */
+  readonly runTurn: RunKeeperTurn;
+  /** The record of commands players ran (`agent/turn` `recordPlayerAction`). */
+  readonly recordPlayerAction: RecordPlayerAction;
+  /** The language of a room that never chose one. */
+  readonly defaultLocale: string;
+  /** The rule system of a room that never chose one; null (the default) for none. */
+  readonly defaultRulePack?: string | null;
+  /** The operator's word filter (`review.ts`; `REVIEW_OFF` for none). */
+  readonly review: ReviewFilter;
+  /** The after-turn lanes' switches. */
+  readonly lanes: LaneSettings;
+  /** A room's presentation kit (from its installed packs), or null for none. */
+  readonly kitFor: (room: string) => RoomKit | null;
+  /** The image client and media store for the Stage Director; absent: no new pictures. */
+  readonly images?: DirectorImageDeps;
+  /** Per-member input rate (default: a burst of 5, one every 2 s). */
+  readonly rateLimit?: RateLimitSettings;
   /** Start a room worker thread. */
   readonly spawnWorker: () => WorkerHandle;
   /** The module entry files enabled in a room. */
@@ -24,62 +62,113 @@ export interface HubDeps {
    * checkpoints (dev rooms: a lossy `save()` shows at once). Default: none.
    */
   readonly workerColdStart?: (room: string) => boolean;
-  readonly onProblem: (room: string, text: string) => void;
 }
 
 export class Hub {
+  readonly registry: CommandRegistry;
   readonly #deps: HubDeps;
   readonly #rooms = new Map<string, Room>();
   readonly #workers = new Map<string, RoomWorker>();
+  readonly #chains: OrderedChains;
+  readonly #limiter: RateLimiter;
 
   constructor(deps: HubDeps) {
     this.#deps = deps;
+    this.#chains = new OrderedChains((room, error) => {
+      deps.services.report(room, `after-turn pass failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    this.#limiter = new RateLimiter(deps.rateLimit ?? DEFAULT_RATE_LIMIT, () => deps.services.clock.now());
+    this.registry = deps.commands(
+      new RoomModuleCommands({
+        worker: (room) => this.moduleWorker(room),
+        actionOf: (context) => this.room(context.room).actionOf(context),
+        reviewFact: (context) => this.room(context.room).reviewFactFor(context),
+        moduleClock: (room) => this.room(room).moduleClock,
+      }),
+    );
   }
 
   room(id: string): Room {
     const existing = this.#rooms.get(id);
     if (existing) return existing;
-    // A room with content code gets its worker now; one without has none until its lore
-    // needs one (`workerForLore`).
-    const worker = this.#deps.modulesFor(id).length > 0 ? (this.#workers.get(id) ?? this.#worker(id)) : null;
-    const room = new Room(
-      id,
-      this.#deps.store,
-      this.#deps.clock,
-      { llm: this.#deps.llm, clock: this.#deps.clock, worker, systemPrompt: this.#deps.systemPrompt },
-      this.#deps.onProblem,
-    );
+    const deps = this.#deps;
+    const host: RoomHost = {
+      services: deps.services,
+      env: deps.env,
+      registry: this.registry,
+      runTurn: deps.runTurn,
+      recordPlayerAction: deps.recordPlayerAction,
+      defaultLocale: deps.defaultLocale,
+      defaultRulePack: deps.defaultRulePack ?? null,
+      review: deps.review,
+      lanes: deps.lanes,
+      images: deps.images ?? null,
+      limiter: this.#limiter,
+      chains: this.#chains,
+      kitFor: (room) => deps.kitFor(room),
+      moduleWorker: (room) => this.moduleWorker(room),
+      loreWorker: (room) => this.workerForLore(room),
+      reloadWorker: (room) => {
+        this.#reload(room);
+      },
+    };
+    const room = new Room(id, host);
     this.#rooms.set(id, room);
     return room;
+  }
+
+  /** The room's worker when it has modules (started on its first call); null otherwise. */
+  moduleWorker(id: string): RoomWorker | null {
+    if (this.#deps.modulesFor(id).length === 0) return null;
+    return this.#workers.get(id) ?? this.#worker(id);
   }
 
   /**
    * The room's worker for the lore exchange, started on demand.
    *
-   * Which rooms need a worker: a room with modules (known when the room is first used,
-   * from `modulesFor`), and a room whose lore assembly has at least one enabled entry to
-   * scan. The second test costs nothing extra: the lore step reads the room's entries to
-   * build its request anyway, and calls this only when one is enabled (a room with no lore
-   * never starts a thread). A room that has both shares ONE worker — one thread per room,
-   * one queue (decision 21). The worker is kept like any other: idle eviction and `close`
-   * stop it, and the next call starts a fresh one.
+   * Which rooms need a worker: a room with modules, and a room whose lore assembly has at
+   * least one enabled entry to scan (the lore step reads the room's entries to build its
+   * request anyway, and calls this only when one is enabled: a room with no lore never
+   * starts a thread). A room that has both shares ONE worker — one thread per room, one
+   * queue (decision 21). The worker is kept like any other: idle eviction and `close` stop
+   * it, and the next call starts a fresh one.
    */
   workerForLore(id: string): RoomWorker {
     return this.#workers.get(id) ?? this.#worker(id);
   }
 
+  /** Settles when every after-turn pass scheduled for `room` so far has finished (tests, shutdown). */
+  lanesIdle(room: string): Promise<void> {
+    return this.#chains.idle(room);
+  }
+
   #worker(id: string): RoomWorker {
-    const worker = new RoomWorker(this.#deps.spawnWorker, this.#deps.modulesFor(id), {
+    const store = this.#deps.services.store;
+    const worker: RoomWorker = new RoomWorker(this.#deps.spawnWorker, this.#deps.modulesFor(id), {
       timeoutMs: this.#deps.workerTimeoutMs,
       coldStart: this.#deps.workerColdStart?.(id) ?? false,
-      now: () => this.#deps.clock.now(),
-      checkpoints: this.#deps.store.moduleStates(id) as Map<string, Json>,
-      onCheckpoint: (module, snapshot) => {
-        this.#deps.store.writer(id).setModuleState(module, snapshot);
+      now: () => this.#deps.services.clock.now(),
+      checkpoints: store.moduleStates(id) as Map<string, Json>,
+      token: () => currentWork(),
+      onCheckpoint: (module, snapshot, token) => {
+        // Outside any work (a render, a description): the call changed nothing the store
+        // lacks. The next mutating call's checkpoint carries it.
+        if (!(token instanceof Work) || token.writer.room !== id) return;
+        if (token.writer.current()) {
+          token.writer.setModuleState(module, snapshot);
+          return;
+        }
+        // Work of a past generation advanced the module: throw that state away.
+        void worker.reload(store.moduleStates(id) as Map<string, Json>);
       },
     });
     this.#workers.set(id, worker);
     return worker;
+  }
+
+  #reload(id: string): void {
+    const worker = this.#workers.get(id);
+    if (worker !== undefined) void worker.reload(this.#deps.services.store.moduleStates(id) as Map<string, Json>);
   }
 
   /**

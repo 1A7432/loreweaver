@@ -1,10 +1,21 @@
 {
   "net.error.bad_frame": "That frame could not be read.",
   "net.error.bad_key": "That key is not recognised.",
+  "net.error.bad_name": "That name is too long (limit {limit}).",
+  "net.error.command_failed": "Something went wrong running that command; nothing was changed.",
   "net.error.forbidden": "You are not allowed to do that.",
   "net.error.hello_first": "The first frame must be hello.",
   "net.error.input_too_long": "That message is too long.",
   "net.error.invalid_params": "Those parameters are not valid.",
+  "net.error.media_unavailable": "Uploads are not available on this server yet.",
+  "net.error.not_open": "This connection has not joined a room.",
+  "net.error.observer_speech": "Observers watch the table; they do not speak at it.",
   "net.error.protocol_mismatch": "Protocol mismatch: this server speaks {server}, the client speaks {client}.",
-  "net.error.unknown_method": "No such method."
+  "net.error.rate_limited": "Slow down: too many messages at once.",
+  "net.error.too_large": "That view is too large to send.",
+  "net.error.too_many_views": "Too many views at once.",
+  "net.error.unknown_method": "No such method.",
+  "net.error.unknown_view": "No such view.",
+  "net.error.view_failed": "That view could not be computed.",
+  "net.notice.turn_failed": "The Keeper could not answer this time."
 }

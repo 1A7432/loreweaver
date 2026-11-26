@@ -2,7 +2,11 @@ import { join } from "node:path";
 
 import type { ClientFrame, ServerFrame } from "loreweaver-protocol/v3";
 
+import { selftestEnvironment, selftestServices, selftestTurn } from "../src/cli/selftest.ts";
+import { CommandRegistry } from "../src/gateway/commands/index.ts";
 import { Hub } from "../src/gateway/hub.ts";
+import { LANES_OFF } from "../src/gateway/lanes.ts";
+import { REVIEW_OFF } from "../src/gateway/review.ts";
 import type { Clock } from "../src/infra/ids.ts";
 import type { LLMClient } from "../src/infra/llm/index.ts";
 import { openDatabase } from "../src/infra/runtime/sqlite.ts";
@@ -39,23 +43,28 @@ export function bench(options: {
 }): Bench {
   const store = new Store(openDatabase(options.dbPath ?? ":memory:"));
   const problems: string[] = [];
+  // The self-test's thin turn: these tests are about transport, workers and the log.
   const hub = new Hub({
-    store,
-    clock: testClock(),
-    llm: options.llm,
-    systemPrompt: "You are the Keeper.",
+    services: selftestServices(store, options.llm, testClock(), (_room, text) => {
+      problems.push(text);
+    }),
+    env: selftestEnvironment(),
+    commands: (modules) => new CommandRegistry({ modules }),
+    runTurn: selftestTurn(),
+    recordPlayerAction: () => ({ ok: true }),
+    defaultLocale: "en",
+    review: REVIEW_OFF,
+    lanes: LANES_OFF,
+    kitFor: () => null,
     spawnWorker: () => spawnWorker(WORKER_ENTRY),
     modulesFor: () => options.modules ?? [],
     workerTimeoutMs: options.workerTimeoutMs ?? 2000,
-    onProblem: (_room, text) => {
-      problems.push(text);
-    },
   });
   const keystore = new Keystore();
   keystore.add("player-key", { room: "table", name: "Ada", role: "player" });
   keystore.add("second-key", { room: "table", name: "Bao", role: "player" });
   keystore.add("watch-key", { room: "table", name: "Eve", role: "observer" });
-  return { hub, store, problems, deps: { keystore, room: (id) => hub.room(id), roomLocale: "en" } };
+  return { hub, store, problems, deps: { keystore, room: (id) => hub.room(id) } };
 }
 
 /** An in-memory connection: what the server sent, in order, and whether it hung up. */
