@@ -64,6 +64,34 @@ const client = new WsClient({
 It is a warning, not a refusal: the `welcome` frame is still delivered and the
 socket stays open. Hanging up (or not) is your call.
 
+## Protocol 3.0 (`loreweaver-protocol/v3`)
+
+The 3.0 entry has the frames and built-in views, `decodeServerFrame` (structural
+validation of everything a server sends; unknown frame types and kinds are ignored,
+unknown fields dropped) and a client `Session` that does no I/O: hand it a link and
+the frames that arrive, and it keeps the room's log, the drafts being streamed, the
+turn status and the views you want as one immutable snapshot.
+
+```ts
+import { Session, stripControlChars } from "loreweaver-protocol/v3"
+
+const session = new Session({ key, locale: "en", client: { name: "my-client", version: "1.0" } })
+const attachment = session.attach({ send: (frame) => socket.send(JSON.stringify(frame)) })
+socket.onmessage = (line) => attachment.receive(JSON.parse(line))
+socket.onclose = () => attachment.closed("socket closed")
+
+session.subscribe(() => render(session.getSnapshot()))   // or React's useSyncExternalStore
+await session.viewSubscribe(["me", "party", "commands"]) // re-subscribed on every reconnect
+const result = await session.input("I open the door.")   // one result per request, by rid
+await session.runCommand("roll", { expr: "2d6" })
+```
+
+After a drop, dial again and `attach` the new link: the session resumes from the log
+it kept (`resume {epoch, after}`), re-subscribes its views, and reports a gap the
+server could not replay (`snapshot.gap`, filled by `loadOlder()`). When
+`session.canRedial` is false (a fatal `error`: bad key, other protocol major…), do
+not dial again.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

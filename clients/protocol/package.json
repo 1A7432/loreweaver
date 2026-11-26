@@ -36,9 +36,12 @@
       "default": "./dist/types.js"
     },
     "./v3": {
-      "bun": "./src/v3/frames.ts",
-      "types": "./src/v3/frames.ts",
-      "default": "./src/v3/frames.ts"
+      "bun": "./src/v3/index.ts",
+      "types": [
+        "./dist/v3/index.d.ts",
+        "./src/v3/index.ts"
+      ],
+      "default": "./dist/v3/index.js"
     },
     "./client": {
       "bun": "./src/client.ts",
@@ -49,7 +52,7 @@
   "files": [
     "dist",
     "src",
-    "!src/*.test.ts",
+    "!src/**/*.test.ts",
     "README.md",
     "LICENSE"
   ],
