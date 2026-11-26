@@ -29,6 +29,7 @@
  * - Letters are case-insensitive outside labels and slot names. Full-width ASCII forms
  *   (U+FF01-U+FF5E) and the ideographic space read as their ASCII counterparts, because
  *   CJK input methods produce them (`１d20＋5`). Labels keep their text as typed.
+ * - `d%` is `d100` (1-100) and is written back as `d100`.
  * - A count may be omitted: `d20` is one die, but a bare `dF` is FOUR Fate dice (the
  *   Fate standard roll); an explicit count means what it says (`1dF`, `0dF`).
  * - Whitespace is allowed between tokens, never inside a dice group.
@@ -204,7 +205,9 @@ class Parser {
   #dice(count: IntTerm | null): DiceExpr {
     this.#pos++; // the "d"
     let sides: SidesTerm;
-    if (this.#eat("%")) sides = { kind: "percent" };
+    // `d%` is the percentile die, exactly `d100` (standard notation; the d20 library's
+    // tens-die reading of it is a quirk players read as broken).
+    if (this.#eat("%")) sides = { kind: "int", value: 100 };
     else if (this.#eat("f")) sides = { kind: "fate" };
     else sides = this.#intTerm();
     const ops = this.#ops(true);
@@ -346,7 +349,6 @@ function formatLabels(labels: readonly string[]): string {
 }
 
 function formatSides(sides: SidesTerm): string {
-  if (sides.kind === "percent") return "%";
   if (sides.kind === "fate") return "F";
   return formatIntTerm(sides);
 }

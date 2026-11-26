@@ -239,12 +239,10 @@ describe("ruling 6: `!` explodes everywhere", () => {
     expect(roll("1d6!==8", faces(6, 6, 2)).total).toBe(1);
   });
 
-  test("percentile tens and Fate dice explode on their own highest face", () => {
-    const random = new ScriptedRandom([
-      { lo: 0, hi: 90, step: 10, value: 90 },
-      { lo: 0, hi: 90, step: 10, value: 30 },
-    ]);
-    expect(roll("1d%!", random).total).toBe(120);
+  test("d% explodes on 100, Fate dice on +1", () => {
+    expect(roll("1d%!", faces(100, 100, 30)).total).toBe(130);
+    const fate = new ScriptedRandom([1, 0].map((value) => ({ lo: -1, hi: 1, step: 1, value })));
+    expect(roll("1dF!", fate).total).toBe(1);
   });
 });
 
@@ -399,6 +397,30 @@ describe("special rollers", () => {
   });
 });
 
+describe("d% is d100", () => {
+  test("d% and d100 consume the same draw and give the same result", () => {
+    const a = roll("d%", faces(100, 73));
+    const b = roll("d100", faces(100, 73));
+    expect(a).toEqual(b);
+    expect(a.total).toBe(73);
+    expect(parseDice("1d%+5").root).toEqual(parseDice("1d100+5").root);
+    expect(parseDice("2d%kh1").notation).toBe("2d100kh1");
+  });
+
+  test("the range is 1 to 100, and 3d% is three dice", () => {
+    expect(roll("d%", faces(100, 1)).total).toBe(1);
+    expect(roll("d%", faces(100, 100)).total).toBe(100);
+    const r = roll("3d%", faces(100, 5, 50, 100));
+    expect(dice(r).map((d) => d.face)).toEqual([5, 50, 100]);
+    expect(r.total).toBe(155);
+  });
+
+  test("naturals follow d100", () => {
+    const group = primaryDice(roll("d%", faces(100, 1)));
+    expect(group && naturalCritical(group.sides, [1])).toBe("success");
+  });
+});
+
 describe("natural critical", () => {
   test("single kept die: max face succeeds, 1 fails; d100 the other way round", () => {
     expect(naturalCritical(20, [20])).toBe("success");
@@ -408,9 +430,8 @@ describe("natural critical", () => {
     expect(naturalCritical(100, [100])).toBe("failure");
   });
 
-  test("none for several dice, percentile tens, Fate, or a die that cannot vary", () => {
+  test("none for several dice, Fate, or a die that cannot vary", () => {
     expect(naturalCritical(20, [20, 20])).toBeNull();
-    expect(naturalCritical("%", [0])).toBeNull();
     expect(naturalCritical("F", [1])).toBeNull();
     expect(naturalCritical(1, [1])).toBeNull();
   });

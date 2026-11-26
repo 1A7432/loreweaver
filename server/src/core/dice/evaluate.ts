@@ -310,13 +310,11 @@ function rollFace(ctx: Context, sides: DieSides): number {
   if (sides === 0) throw new DiceError("ZERO_SIDED_DIE");
   if (ctx.rolled + 1 > ctx.budget) throw new DiceError("TOO_MANY_DICE");
   ctx.rolled++;
-  if (sides === "%") return ctx.random.nextInt(0, 90, 10);
   if (sides === "F") return ctx.random.nextInt(-1, 1);
   return ctx.random.nextInt(1, sides);
 }
 
 function maxFace(sides: DieSides): number {
-  if (sides === "%") return 90;
   if (sides === "F") return 1;
   return sides;
 }
@@ -324,8 +322,7 @@ function maxFace(sides: DieSides): number {
 function newDiceNode(ctx: Context, expr: DiceExpr): DiceNode {
   const count = expr.count === null ? 1 : countValue(ctx, expr.count);
   let sides: DieSides;
-  if (expr.sides.kind === "percent") sides = "%";
-  else if (expr.sides.kind === "fate") sides = "F";
+  if (expr.sides.kind === "fate") sides = "F";
   else {
     sides = countValue(ctx, expr.sides);
     if (sides > LIMITS.maxSides) throw new DiceError("TOO_MANY_SIDES");

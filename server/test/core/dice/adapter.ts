@@ -43,9 +43,13 @@ export type Replay =
  * Rows the new engine answers differently on purpose, with the ruling or decision behind
  * each. Matched on `fn` + the row's arguments.
  */
+const PERCENT_EXPRESSIONS = new Set(["1d%", "d%", "2d%", "1d%+5", "2d%kh1", "1d%+1d10", "3d%kl1"]);
+
 function deliberateSkip(row: VectorRow): string | null {
   const expr = typeof row.args.expression === "string" ? row.args.expression : null;
   const failed = row.error !== null;
+  // The old engine read `d%` as the d20 library's tens die (0-90); these rows recorded that.
+  if (expr !== null && PERCENT_EXPRESSIONS.has(expr)) return "d% is a d100 now";
   if (expr !== null && ["roll_expression", "roll_advantage", "roll_disadvantage", "roll_repeat"].includes(row.fn)) {
     if (failed && expr.includes("!") && expr !== "!" && expr !== "1d6!!" && !expr.includes("!=")) {
       return "ruling 6: `!` explodes in every entry point (the old roll_expression refused it, so no draws were recorded)";
@@ -86,8 +90,7 @@ function scripted(row: VectorRow, fate: boolean): ScriptedRandom {
   return new ScriptedRandom(draws);
 }
 
-function sidesNumber(sides: number | "%" | "F"): number {
-  if (sides === "%") return 100;
+function sidesNumber(sides: number | "F"): number {
   if (sides === "F") return 3;
   return sides;
 }

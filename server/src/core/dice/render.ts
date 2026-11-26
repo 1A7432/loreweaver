@@ -48,8 +48,8 @@ export function keptFaces(group: DiceRoll): number[] {
 /**
  * The natural critical of a roll that kept exactly ONE die: the highest face is a success
  * and a 1 a failure, except on a d100, where 1 is the success and 100 the failure (the
- * bare roll-under reading; graded checks are the rule packs' business). Percentile tens
- * and Fate dice have no natural critical, and neither has a die that cannot vary (fewer
+ * bare roll-under reading; graded checks are the rule packs' business; `d%` is a d100).
+ * Fate dice have no natural critical, and neither has a die that cannot vary (fewer
  * than two faces: a d1 would otherwise be a success and a failure at once). Whether
  * criticals apply at all is the caller's decision.
  */

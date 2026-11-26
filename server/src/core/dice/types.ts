@@ -11,8 +11,8 @@
 /** An integer written in the notation, or a `{name}` slot filled from `params` at roll time. */
 export type IntTerm = { readonly kind: "int"; readonly value: number } | { readonly kind: "slot"; readonly name: string };
 
-/** Faces of a die: a number, `%` (the percentile TENS die: 0, 10, ..., 90) or `F` (Fate: -1, 0, +1). */
-export type SidesTerm = IntTerm | { readonly kind: "percent" } | { readonly kind: "fate" };
+/** Faces of a die: a number (`d%` parses as 100) or `F` (Fate: -1, 0, +1). */
+export type SidesTerm = IntTerm | { readonly kind: "fate" };
 
 /**
  * How a selector picks dice or set members: `h`/`l` the n highest/lowest, `>`/`<` those
@@ -77,7 +77,7 @@ export interface DiceExpression {
 // Rolled outcome
 // ---------------------------------------------------------------------------
 
-export type DieSides = number | "%" | "F";
+export type DieSides = number | "F";
 
 export interface Die {
   /** What the die counts for: its last roll, raised or lowered by `mi`/`ma`. */
