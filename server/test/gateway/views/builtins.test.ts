@@ -167,13 +167,24 @@ describe("room", () => {
   test("language, system, variant, muted — the language's name in the viewer's language", async () => {
     const room = seededRoom();
     const view: RoomView = await compute(room, "room", room.viewer(ADA));
-    expect(view).toEqual({ locale: "en", localeLabel: "English", system: { id: "coc7", label: view.system?.label ?? "" }, variant: null, keeperMuted: false });
+    expect(view).toEqual({ locale: "en", localeLabel: "English", system: { id: "coc7", label: view.system?.label ?? "" }, variant: null, keeperMuted: false, uploads: false });
     const writer = room.b.store.writer(ROOM);
     writer.statePut(ROOM_LOCALE, "zh");
     writer.statePut(KEEPER_MUTED, true);
     const after = await compute(room, "room", room.viewer(ADA));
     expect(after).toMatchObject({ locale: "zh", localeLabel: "Chinese", keeperMuted: true });
     expect((await compute(room, "room", room.viewer(ADA, "zh"))).localeLabel).toBe("中文");
+  });
+
+  test("the upload switch, as the room's source states it; a server without a media store has none", async () => {
+    const room = seededRoom();
+    const view = (uploads: boolean | undefined): Promise<RoomView> =>
+      Promise.resolve(BUILT_IN_VIEWS.find((entry) => entry.name === "room")!.compute(uploads === undefined ? room.source() : { ...room.source(), uploads }, room.viewer(EVE)) as RoomView);
+    expect((await view(true)).uploads).toBe(true);
+    expect((await view(false)).uploads).toBe(false);
+    expect((await view(undefined)).uploads).toBe(false);
+    expect(schemaProblems(BUILT_IN_VIEW_SCHEMAS.room, await view(true))).toEqual([]);
+    expect(schemaProblems(BUILT_IN_VIEW_SCHEMAS.room, { ...(await view(true)), uploads: "yes" })).not.toEqual([]);
   });
 });
 

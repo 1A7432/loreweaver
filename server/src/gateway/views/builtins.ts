@@ -75,6 +75,8 @@ export interface ViewSource {
   readonly commands: CommandsSource | null;
   /** The clock a module keeps, from the last render, when one does. */
   readonly moduleClock?: ClockInfo | null;
+  /** Whether members may upload to the room now; absent (a server without a media store): no. */
+  readonly uploads?: boolean;
 }
 
 export interface BuiltInView<N extends BuiltInViewName = BuiltInViewName> {
@@ -319,6 +321,7 @@ function room(source: ViewSource, viewer: ViewerContext): RoomView {
     system: source.pack === null ? null : { id: source.pack.id, label: systemLabel(source.pack) },
     variant,
     keeperMuted: store.stateGet(source.room, KEEPER_MUTED) ?? false,
+    uploads: source.uploads ?? false,
   };
 }
 

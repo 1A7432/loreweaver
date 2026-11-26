@@ -1,9 +1,11 @@
 // `loreweaver selftest`: bring the whole line up inside this process and push one turn
 // through it — the database on disk, a module loaded from a file into a room worker,
-// the real turn engine over a scripted model, and a client dialling in over iroh. It exists to prove a BUILT
+// the real turn engine over a scripted model, and a client dialling in over iroh — then a
+// small picture up and back down the byte channel. It exists to prove a BUILT
 // server works on the machine it was built for: the worker thread, the runtime loading
 // of a module's TypeScript and the native transport are exactly the parts a compiled
 // binary can lose.
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +24,7 @@ import { REVIEW_OFF } from "../gateway/review.ts";
 import { loadSettings } from "../infra/config.ts";
 import { type Clock, systemClock } from "../infra/ids.ts";
 import { type LLMClient, ScriptedLLM } from "../infra/llm/index.ts";
+import { MediaStore } from "../infra/media/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
 import { spawnWorker } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";
@@ -31,6 +34,9 @@ import { composeHub } from "./compose.ts";
 
 /** What the self-test's module injects, as the scripted model looks for it. */
 const INJECTION = /selftest module saw turn \d+/u;
+
+/** A small PNG for the byte channel's round trip: the signature and a few bytes are all the store checks. */
+const PICTURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 200 }, (_, i) => (i * 7) % 256)]);
 
 const MODULE_SOURCE = `
 import { defineModule } from "loreweaver/module";
@@ -119,7 +125,9 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
   const dir = mkdtempSync(join(tmpdir(), "loreweaver-selftest-"));
   const modulePath = join(dir, "module.ts");
   writeFileSync(modulePath, MODULE_SOURCE);
-  const store = new Store(openDatabase(join(dir, "selftest.db")));
+  const db = openDatabase(join(dir, "selftest.db"));
+  const store = new Store(db);
+  const media = new MediaStore(dir, db, { clock: systemClock });
   // The REAL turn engine, composed as `serve` composes it, over a scripted model that
   // answers with the module's injection when it finds it in the prompt: the reply proves
   // the module ran in a worker and that what it injected reached the model.
@@ -144,6 +152,7 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
     spawnWorker: () => spawnWorker(workerEntry),
     modulesFor: () => [modulePath],
     review: REVIEW_OFF,
+    media,
   });
   const keystore = new Keystore();
   keystore.add("selftest-key", { room: "selftest", name: "Tester", role: "player" });
@@ -170,6 +179,22 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
     steps.module_loaded_and_injected = reply?.type === "event" && reply.kind === "narrative" && reply.data.text === "selftest module saw turn 1";
     steps.module_state_stored = JSON.stringify(store.moduleStates("selftest").get("selftest")) === '{"turns":1}';
     steps.log_stored = store.room("selftest").head === 2;
+    // The byte channel: offer on the control stream, the bytes on a stream of their own, the
+    // table told, and the same bytes fetched back.
+    const sha256 = createHash("sha256").update(PICTURE).digest("hex");
+    link.send({ type: "call", rid: "offer", method: "media.offer", params: { name: "selftest.png", mime: "image/png", size: PICTURE.length, sha256 } });
+    await until((frame) => frame.type === "result" && frame.rid === "offer");
+    const offered = frames.at(-1);
+    const uploadId = offered?.type === "result" && offered.ok ? (offered.data as { upload_id?: unknown }).upload_id : undefined;
+    if (typeof uploadId === "string") {
+      const put = await link.put(uploadId, PICTURE);
+      await until((frame) => frame.type === "event" && frame.kind === "media");
+      steps.media_uploaded = put.ok && put.file.hash === sha256;
+    } else {
+      steps.media_uploaded = false;
+    }
+    const fetched = await link.get(sha256);
+    steps.media_fetched = fetched.ok && fetched.bytes.length === PICTURE.length && fetched.bytes.every((byte, at) => byte === PICTURE[at]);
     steps.no_problems = problems.length === 0;
     await link.close();
     const ok = Object.values(steps).every(Boolean);

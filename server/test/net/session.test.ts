@@ -94,7 +94,7 @@ test("every input and call gets exactly one result, matched by its rid", async (
   wire.receive({ type: "call", rid: "what", method: "no.such" });
   await b.settled();
   expect(results(wire.sent).map((frame) => frame.rid).sort()).toEqual(["list", "media", "roll", "run", "say", "what"]);
-  expect(resultFor(wire.sent, "media")).toEqual({ type: "result", rid: "media", ok: false, error: { code: "media_unavailable", message: "本服务器暂不支持上传。" } });
+  expect(resultFor(wire.sent, "media")).toEqual({ type: "result", rid: "media", ok: false, error: { code: "media_unavailable", message: "本服务器不保存文件：无法上传。" } });
   expect(resultFor(wire.sent, "what")).toMatchObject({ ok: false, error: { code: "unknown_method", message: "没有这个方法。" } });
   expect(resultFor(wire.sent, "say")?.ok).toBe(true);
 });

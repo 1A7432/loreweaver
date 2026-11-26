@@ -10,6 +10,7 @@ import {
   decodeClientFrame,
   type ErrorBody,
   type HelloFrame,
+  MAX_OFFER_NAME_CHARS,
   MAX_VIEW_NAMES,
   PAGE_LIMIT,
   PROTOCOL_MAJOR,
@@ -17,18 +18,26 @@ import {
   protocolMajor,
   RESUME_LIMIT,
   type ServerFrame,
+  UPLOAD_PURPOSES,
+  type UploadPurpose,
 } from "loreweaver-protocol/v3";
 
 import type { Answer, Member, Room } from "../gateway/room.ts";
+import type { UploadOffer } from "../gateway/uploads.ts";
 import { eventFrame } from "../gateway/room.ts";
 import { catalogLocale, t } from "../infra/i18n.ts";
 import { SERVER_VERSION } from "../infra/version.ts";
+import type { ByteAccess } from "./bytes.ts";
 import { memberId, type Keystore } from "./keystore.ts";
 
 /** A name a client gives itself in `hello`, in code points. */
 export const MAX_MEMBER_NAME_CHARS = 64;
 /** A command id in `command.run`, in code points (a module id, a slash, a command name). */
 export const MAX_COMMAND_ID_CHARS = 200;
+/** A MIME type in `media.offer`, in characters (the store accepts only short, known ones). */
+export const MAX_OFFER_MIME_CHARS = 128;
+/** The `sha256` of `media.offer`, in characters (the store accepts exactly 64 hex digits). */
+export const MAX_OFFER_HASH_CHARS = 128;
 
 export interface SessionDeps {
   readonly keystore: Keystore;
@@ -46,11 +55,27 @@ function isStringList(value: unknown, max: number): value is string[] {
   return Array.isArray(value) && value.length <= max && value.every((item) => typeof item === "string");
 }
 
+/**
+ * `media.offer`'s params, when their shapes are right; whether the offer is ACCEPTABLE (type,
+ * size, hash format, quota, rate) is the media store's to say, with its own codes.
+ */
+function readOffer(params: Record<string, unknown>): UploadOffer | null {
+  const { name, mime, size, sha256 } = params;
+  const purpose = params.purpose ?? "share";
+  if (typeof name !== "string" || charCount(name) > MAX_OFFER_NAME_CHARS) return null;
+  if (typeof mime !== "string" || mime.length > MAX_OFFER_MIME_CHARS) return null;
+  if (typeof sha256 !== "string" || sha256.length > MAX_OFFER_HASH_CHARS) return null;
+  if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) return null;
+  if (typeof purpose !== "string" || !(UPLOAD_PURPOSES as readonly string[]).includes(purpose)) return null;
+  return { name, mime, size, sha256, purpose: purpose as UploadPurpose };
+}
+
 export class Session {
   readonly #deps: SessionDeps;
   readonly #connection: Connection;
   #locale = "en";
   #joined: { room: Room; member: Member } | null = null;
+  #ended = false;
 
   constructor(deps: SessionDeps, connection: Connection) {
     this.#deps = deps;
@@ -89,8 +114,19 @@ export class Session {
 
   /** The transport reports the connection gone. */
   closed(): void {
+    this.#ended = true;
     if (this.#joined) this.#joined.room.leave(this.#joined.member);
     this.#joined = null;
+  }
+
+  /** The language this connection is answered in. */
+  get locale(): string {
+    return this.#locale;
+  }
+
+  /** Who may use the byte channel on this connection: the joined member, only while the session lasts. */
+  byteAccess(): ByteAccess | null {
+    return this.#ended ? null : this.#joined;
   }
 
   #hello(frame: HelloFrame): void {
@@ -211,10 +247,15 @@ export class Session {
         this.#ok(frame.rid, { events });
         return;
       }
-      case "media.offer":
-        // The byte channel is not built yet: nothing can be uploaded.
-        this.#refuse(frame.rid, "media_unavailable");
+      case "media.offer": {
+        const offer = readOffer(params);
+        if (offer === null) {
+          this.#refuse(frame.rid, "invalid_params");
+          return;
+        }
+        this.#replier(frame.rid)(room.offerUpload(member, offer));
         return;
+      }
       default:
         this.#refuse(frame.rid, "unknown_method");
     }
@@ -248,6 +289,9 @@ export class Session {
 
   #error(code: string, fatal: boolean, params: Record<string, string | number> = {}): void {
     this.#connection.send({ type: "error", code, message: t(this.#locale, `net.error.${code}`, params), fatal });
-    if (fatal) this.#connection.close();
+    if (fatal) {
+      this.#ended = true;
+      this.#connection.close();
+    }
   }
 }

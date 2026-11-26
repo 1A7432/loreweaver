@@ -15,16 +15,19 @@ import { ResolutionError } from "../../core/resolution/index.ts";
 import { commandWord, type RulePack } from "../../core/rulepacks/index.ts";
 import { foldCase } from "../../core/sheets/text.ts";
 import type { RoomContext } from "../../agent/context.ts";
+import type { RecallDeps } from "../../agent/recall.ts";
 import { translate } from "../../infra/i18n.ts";
 import { LifecycleError, StaleGeneration } from "../../infra/lifecycle/errors.ts";
 import { COMMANDS_CATALOG } from "./catalog.ts";
 import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCommands } from "./engine/checks.ts";
+import { importCommand, uploadsCommand } from "./engine/files.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
 import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, saveCommand, undoCommand } from "./engine/room.ts";
 import { pcCommand, renameCommand, sheetCommand } from "./engine/sheet.ts";
 import { chronicleCommand, habitsCommand, loreCommand, npcCommand, recapCommand, varCommand } from "./engine/world.ts";
 import { argumentTooLong, inlineRolls, MAX_COMMAND_ARG_CHARS, MAX_INLINE_ROLLS, splitCommand } from "./parse.ts";
 import { compact, validateArgs } from "./schema.ts";
+import type { Uploads } from "../uploads.ts";
 import {
   type Args,
   type CommandCall,
@@ -49,6 +52,10 @@ export interface RegistryOptions {
   readonly modules?: ModuleCommands | null;
   /** How long an armed reset waits for its confirmation. */
   readonly resetConfirmMs?: number;
+  /** Members' files (`uploads`, `import`); absent on a server without a media store. */
+  readonly uploads?: Uploads | null;
+  /** Recall by meaning, to index the lore a world import writes; absent when it is off. */
+  readonly recall?: RecallDeps | null;
 }
 
 /** What a line a player typed turned out to be. */
@@ -111,6 +118,8 @@ export class CommandRegistry {
       undoCommand,
       resetCommand(gate),
       saveCommand,
+      uploadsCommand(options.uploads ?? null),
+      importCommand(options.uploads ?? null, options.recall ?? null),
       jrrpCommand,
       drawCommand,
       helpCommand((call) => this.#entries(call.context, call.locale)),
@@ -261,7 +270,7 @@ export class CommandRegistry {
     // A writer of a generation that has since moved on can commit nothing, not even the
     // command's own events: the room was rewound, reset or replaced under the caller.
     if (spec.lifecycle !== true && !context.writer.current()) return this.#refusal(locale, "stale_generation");
-    const prepared = spec.prepare === undefined ? undefined : await spec.prepare(call);
+    const prepared = spec.prepare === undefined ? undefined : await spec.prepare(call, args);
     return this.#perform(call, spec, args, prepared);
   }
 
@@ -300,7 +309,15 @@ export class CommandRegistry {
   }
 
   #success(done: Done): CommandOutcome {
-    const outcome: { ok: true; text?: string; data?: unknown; events: readonly CommandEvent[]; signals: readonly CommandSignal[]; lifecycle?: LifecycleNotice } = {
+    const outcome: {
+      ok: true;
+      text?: string;
+      data?: unknown;
+      events: readonly CommandEvent[];
+      signals: readonly CommandSignal[];
+      lifecycle?: LifecycleNotice;
+      after?: () => Promise<readonly string[]>;
+    } = {
       ok: true,
       events: done.events ?? [],
       signals: done.signals ?? [],
@@ -308,6 +325,7 @@ export class CommandRegistry {
     if (done.text !== undefined && done.text !== "") outcome.text = done.text;
     if (done.data !== undefined) outcome.data = done.data;
     if (done.lifecycle !== undefined) outcome.lifecycle = done.lifecycle;
+    if (done.after !== undefined) outcome.after = done.after;
     return outcome;
   }
 

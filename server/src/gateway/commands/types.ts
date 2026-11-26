@@ -43,6 +43,8 @@ export interface CommandSuccess {
   readonly events: readonly CommandEvent[];
   readonly signals: readonly CommandSignal[];
   readonly lifecycle?: LifecycleNotice;
+  /** See `Done.after`. */
+  readonly after?: () => Promise<readonly string[]>;
 }
 
 export interface CommandRefusal {
@@ -76,6 +78,13 @@ export interface Done {
   readonly events?: readonly CommandEvent[];
   readonly signals?: readonly CommandSignal[];
   readonly lifecycle?: LifecycleNotice;
+  /**
+   * What can only be finished by waiting, once the command's writes committed and its events
+   * went out (indexing new lore for recall: outbound network). The gateway awaits it before
+   * answering; the lines it resolves to, in the caller's language, join the answer. It never
+   * fails the command: it reports its own problems.
+   */
+  readonly after?: () => Promise<readonly string[]>;
 }
 
 /** One command invocation, as a handler sees it. */
@@ -136,7 +145,7 @@ export interface CommandSpec {
    * Gathers, before `run`, what can only be had by waiting (the module commands a help
    * text lists). Read-only; its result is `run`'s third argument.
    */
-  prepare?(call: CommandCall): Promise<unknown>;
+  prepare?(call: CommandCall, args: Args): Promise<unknown>;
   /** Synchronous: the store is, and a command never calls a model. */
   run(call: CommandCall, args: Args, prepared?: unknown): Done | Refused;
 }

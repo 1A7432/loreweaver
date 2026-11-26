@@ -24,7 +24,7 @@
 // the Scribe pass is scheduled on the room's ordered chain with the turn's own context; and
 // when a module asked for narration now (decision 35), ONE facts turn runs before the lock
 // is released. Nothing under the lock ever waits for the chain.
-import type { EventKind, EventPayloads, EventFrame, Role, ServerFrame, SignalFrame, SignalKind, SignalPayloads, ViewFrame, ViewListing } from "loreweaver-protocol/v3";
+import type { EventKind, EventPayloads, EventFrame, MediaData, Role, ServerFrame, SignalFrame, SignalKind, SignalPayloads, ViewFrame, ViewListing } from "loreweaver-protocol/v3";
 import type { Who } from "loreweaver/module";
 
 import type { RoomContext, Services } from "../agent/context.ts";
@@ -40,6 +40,7 @@ import type { RulePack } from "../core/rulepacks/index.ts";
 import { liftsOutputFilter, readEnabledSkills } from "../core/skills/index.ts";
 import { t, translate } from "../infra/i18n.ts";
 import { StaleGeneration } from "../infra/lifecycle/errors.ts";
+import type { MediaRecord } from "../infra/media/index.ts";
 import { Mutex } from "../infra/mutex.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
 import type { RoomMeta, RoomWriter, StoredEvent } from "../infra/store.ts";
@@ -67,6 +68,7 @@ import { type LaneSettings, runLanePass } from "./lanes.ts";
 import { eventIdOf, moduleRoom } from "./module_commands.ts";
 import type { RateLimiter } from "./rate_limit.ts";
 import { type ReviewFilter, reviewFact, reviewNarrative } from "./review.ts";
+import { mediaData, type UploadOffer, type Uploads } from "./uploads.ts";
 import {
   BUILT_IN_VIEWS,
   type Delivery,
@@ -124,6 +126,8 @@ export interface RoomHost {
   readonly images: DirectorImageDeps | null;
   readonly limiter: RateLimiter;
   readonly chains: OrderedChains;
+  /** Members' files (the byte channel's gateway side); null on a server without a media store. */
+  readonly uploads: Uploads | null;
   kitFor(room: string): RoomKit | null;
   /** The room's worker when it has modules; null otherwise. */
   moduleWorker(room: string): RoomWorker | null;
@@ -372,7 +376,10 @@ export class Room {
       return;
     }
     const published = this.#publishOutcome(writer, outcome);
-    reply(this.#answer(outcome));
+    // What the command could only finish by waiting (indexing new lore for recall), after its
+    // writes committed and its events went out; its lines join the caller's answer.
+    const more = published && outcome.after !== undefined ? await this.#after(id, outcome.after) : [];
+    reply(this.#answer(outcome, more));
     if (published && outcome.events.length > 0) {
       try {
         const recorded = this.#host.recordPlayerAction(context, { actor: actorName(context), action: input.id ?? id, text: tableText(outcome.events) });
@@ -398,9 +405,19 @@ export class Room {
     return true;
   }
 
-  #answer(outcome: Extract<CommandOutcome, { ok: true }>): Answer {
+  async #after(id: string, after: () => Promise<readonly string[]>): Promise<readonly string[]> {
+    try {
+      return await after();
+    } catch (error) {
+      this.#report(`command ${id}: the step after it failed: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+  }
+
+  #answer(outcome: Extract<CommandOutcome, { ok: true }>, more: readonly string[] = []): Answer {
     const answer: { ok: true; text?: string; data?: unknown } = { ok: true };
-    if (outcome.text !== undefined) answer.text = outcome.text;
+    const lines = [...(outcome.text === undefined ? [] : [outcome.text]), ...more];
+    if (lines.length > 0) answer.text = lines.join("\n");
     if (outcome.data !== undefined) answer.data = outcome.data;
     return answer;
   }
@@ -540,6 +557,64 @@ export class Room {
     });
   }
 
+  // --- files (the byte channel) ------------------------------------------------------
+  //
+  // A transfer never takes the room's lock and runs no content code. A finished share is
+  // published at once, turn-less, the way a command's events are: its place in the log is
+  // decided when it is appended, like every other event's.
+
+  /** `media.offer`: the call's answer. A share of bytes the room already holds is announced again. */
+  offerUpload(member: Member, offer: UploadOffer): Answer {
+    const uploads = this.#host.uploads;
+    if (uploads === null) return { ok: false, code: "media_unavailable" };
+    const outcome = uploads.offer(this.id, { id: member.id, role: member.role }, offer);
+    if (!outcome.ok) return { ok: false, code: outcome.code };
+    if (outcome.kind === "upload") return { ok: true, data: { upload_id: outcome.uploadId } };
+    if (outcome.share) this.#shareMedia(member, outcome.record);
+    return { ok: true, data: { existing: mediaData(outcome.record) } };
+  }
+
+  /** The size `member`'s accepted offer promised, or undefined when `uploadId` is not theirs and waiting. */
+  uploadSize(member: Member, uploadId: string): number | undefined {
+    return this.#host.uploads?.pendingSize(member, uploadId);
+  }
+
+  /** The bytes of `uploadId` did not arrive whole: the offer is used up. */
+  abandonUpload(member: Member, uploadId: string): void {
+    this.#host.uploads?.abandon(member, uploadId);
+  }
+
+  /** The bytes of an accepted offer: stored by the media store, then announced when it is a share. */
+  async receiveUpload(member: Member, uploadId: string, bytes: Uint8Array): Promise<{ readonly ok: true; readonly record: MediaRecord } | { readonly ok: false; readonly code: string }> {
+    const uploads = this.#host.uploads;
+    if (uploads === null) return { ok: false, code: "media_unavailable" };
+    const received = await uploads.receive(this.id, member, uploadId, bytes);
+    if (!received.ok) return received;
+    if (received.share) this.#shareMedia(member, received.record);
+    return { ok: true, record: received.record };
+  }
+
+  /** A fetch by `member`: only what the room holds under an audience their role may see. */
+  async fetchMedia(member: Member, hash: string): Promise<{ readonly record: MediaRecord; readonly bytes: Uint8Array } | undefined> {
+    return (await this.#host.uploads?.read(this.id, member.role, hash)) ?? undefined;
+  }
+
+  /** The table sees a member's file arrive: a turn-less `media` event, and the Keeper hears of it. */
+  #shareMedia(member: Member, record: MediaRecord): void {
+    const { store, clock } = this.#host.services;
+    const writer = store.writer(this.id);
+    const data: MediaData = { ...mediaData(record), from: member.id };
+    try {
+      this.#publish(writer, "media", clock.id(), data, false);
+      const context = this.#context(member, writer, `media:${record.hash}`);
+      const recorded = this.#host.recordPlayerAction(context, { actor: actorName(context), action: "media", text: tableText([{ kind: "media", data }]) });
+      if (!recorded.ok) this.#report(`shared file not recorded: ${recorded.code}`);
+    } catch (error) {
+      // The room moved to another generation meanwhile: the share is stored, the table was cleared.
+      if (!(error instanceof StaleGeneration)) throw error;
+    }
+  }
+
   // --- views --------------------------------------------------------------------------
 
   /** `view.list` for `member`. */
@@ -616,6 +691,7 @@ export class Room {
       online: this.#online(),
       commands: { registry: host.registry, contextFor: (who) => this.#contextFor(who, host.services.store.writer(this.id), "view") },
       moduleClock: this.#moduleClock,
+      uploads: host.uploads?.enabled(this.id) ?? false,
     };
     return { source, modules: await this.#modules(), at: this.meta.head };
   }

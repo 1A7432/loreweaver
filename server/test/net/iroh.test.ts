@@ -15,6 +15,8 @@ test("one turn end to end: iroh in, database on disk, a module in a room worker,
       module_loaded_and_injected: true,
       module_state_stored: true,
       log_stored: true,
+      media_uploaded: true,
+      media_fetched: true,
       no_problems: true,
     },
   });

@@ -1,6 +1,11 @@
 // A room to run commands in: an in-memory store, every document type registered, the three
 // built-in rule packs, and a context per member.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { RoomContext, Services } from "../../../src/agent/context.ts";
+import type { RecallDeps } from "../../../src/agent/recall.ts";
 import { characterDocumentType, claimableDocument, seatingDocument } from "../../../src/core/characters/index.ts";
 import { campaignSummaryDocumentType, chronicleRecordDocumentType, plotThreadDocumentType } from "../../../src/core/chronicle/index.ts";
 import { clockOwnerDocument, gameClockDocument, initiativeDocument } from "../../../src/core/clock/index.ts";
@@ -15,7 +20,9 @@ import { relationshipsDocumentType } from "../../../src/core/relationships/index
 import { builtInPacks, RulePackRegistry } from "../../../src/core/rulepacks/index.ts";
 import { moduleVariablesDocument, variableTreeDocument } from "../../../src/core/variables/index.ts";
 import { CommandRegistry, type CommandOutcome, type CommandSuccess, type ModuleCommands, ROOM_RULE_VARIANT, whoIn } from "../../../src/gateway/commands/index.ts";
+import { Uploads } from "../../../src/gateway/uploads.ts";
 import type { Clock } from "../../../src/infra/ids.ts";
+import { type MediaLimits, MediaStore } from "../../../src/infra/media/index.ts";
 import { ScriptedLLM } from "../../../src/infra/llm/index.ts";
 import { openDatabase } from "../../../src/infra/runtime/sqlite.ts";
 import { Store } from "../../../src/infra/store.ts";
@@ -44,6 +51,8 @@ export interface Bench {
   readonly store: Store;
   readonly registry: CommandRegistry;
   readonly reports: string[];
+  /** Members' files, when the bench was made with `media`. */
+  readonly uploads: Uploads | null;
   /** The room's rule system for the next context; null for none. */
   system: string | null;
   /** A context for `member`, on a fresh turn unless `turn` says otherwise. */
@@ -54,8 +63,25 @@ export interface Bench {
   run(member: Member, id: string, args: unknown, locale?: string): Promise<CommandOutcome>;
 }
 
-export function bench(options: { readonly system?: string | null; readonly modules?: ModuleCommands; readonly seed?: string; readonly resetConfirmMs?: number } = {}): Bench {
-  const store = new Store(openDatabase(":memory:"));
+/** Blob directories of benches made with `media`, removed when the test process ends. */
+const mediaDirs: string[] = [];
+process.on("exit", () => {
+  for (const dir of mediaDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+export interface BenchOptions {
+  readonly system?: string | null;
+  readonly modules?: ModuleCommands;
+  readonly seed?: string;
+  readonly resetConfirmMs?: number;
+  /** A media store (in a temporary directory) behind `uploads` and `import`; with these limits when given. */
+  readonly media?: boolean | MediaLimits;
+  readonly recall?: RecallDeps;
+}
+
+export function bench(options: BenchOptions = {}): Bench {
+  const db = openDatabase(":memory:");
+  const store = new Store(db);
   const packs = new RulePackRegistry(builtInPacks());
   const types = new DocumentTypes()
     .register(characterDocumentType((id) => packs.get(id)?.sheet ?? null))
@@ -92,13 +118,25 @@ export function bench(options: { readonly system?: string | null; readonly modul
       reports.push(text);
     },
   };
-  const registry = new CommandRegistry({ modules: options.modules ?? null, ...(options.resetConfirmMs === undefined ? {} : { resetConfirmMs: options.resetConfirmMs }) });
+  let uploads: Uploads | null = null;
+  if (options.media !== undefined && options.media !== false) {
+    const dir = mkdtempSync(join(tmpdir(), "loreweaver-bench-media-"));
+    mediaDirs.push(dir);
+    uploads = new Uploads(new MediaStore(dir, db, { clock: fixedClock(), ...(options.media === true ? {} : { limits: options.media }) }));
+  }
+  const registry = new CommandRegistry({
+    modules: options.modules ?? null,
+    uploads,
+    recall: options.recall ?? null,
+    ...(options.resetConfirmMs === undefined ? {} : { resetConfirmMs: options.resetConfirmMs }),
+  });
   let seeds = 0;
   const self: Bench = {
     services,
     store,
     registry,
     reports,
+    uploads,
     system: options.system === undefined ? "coc7" : options.system,
     context(member, contextOptions = {}) {
       const writer = contextOptions.newTurn === false ? store.writer(ROOM) : store.beginTurn(ROOM);

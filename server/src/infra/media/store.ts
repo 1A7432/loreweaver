@@ -18,7 +18,9 @@ import type { Clock } from "../ids.ts";
 import type { Database, Statement } from "../runtime/sqlite.ts";
 import { BlobDir } from "./blobs.ts";
 import {
+  AUDIENCES,
   audiencesFor,
+  CARD_JSON_MIME,
   checkLimits,
   DEFAULT_MEDIA_LIMITS,
   HASH_RE,
@@ -31,9 +33,9 @@ import {
   type Audience,
   type MediaCode,
   type MediaLimits,
+  type MemberMime,
   type QuotaFamily,
   type StoredMime,
-  type UploadMime,
 } from "./policy.ts";
 import { RateLimiter } from "./rate_limit.ts";
 import { matchesSignature } from "./signatures.ts";
@@ -60,6 +62,12 @@ export interface MediaOffer {
   readonly mime: string;
   readonly size: number;
   readonly sha256: string;
+  /**
+   * Who may fetch the stored file; `room` (listed room media) unless said otherwise. An
+   * unlisted upload is never answered with an `existing` record (that would confirm a hidden
+   * blob from its hash), and only it may be a card file (`CARD_JSON_MIME`).
+   */
+  readonly audience?: Audience;
 }
 
 export type Refusal = { readonly ok: false; readonly code: MediaCode };
@@ -94,7 +102,8 @@ interface Pending {
   readonly room: string;
   readonly uploader: string;
   readonly name: string;
-  readonly mime: UploadMime;
+  readonly mime: MemberMime;
+  readonly audience: Audience;
   readonly size: number;
   readonly hash: string;
   readonly expiresAt: number;
@@ -241,18 +250,23 @@ export class MediaStore {
     if (typeof room !== "string" || !ID_RE.test(room) || typeof uploader !== "string" || !ID_RE.test(uploader)) {
       return refuse("media_bad_offer");
     }
+    const audience = offer.audience ?? "room";
+    if (!AUDIENCES.includes(audience)) return refuse("media_bad_offer");
     if (!this.uploadsEnabled(room)) return refuse("media_disabled");
     if (!this.#rate.take(`${room}\u0000${uploader}`)) return refuse("media_rate_limited");
-    if (typeof mime !== "string" || !(isImageMime(mime) || isAudioMime(mime))) return refuse("media_bad_mime");
+    if (typeof mime !== "string" || !(isImageMime(mime) || isAudioMime(mime) || (mime === CARD_JSON_MIME && audience !== "room"))) {
+      return refuse("media_bad_mime");
+    }
     if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) return refuse("media_bad_offer");
     if (typeof offer.name !== "string") return refuse("media_bad_offer");
     const family = quotaFamily(mime);
     if (size > this.#limits[family].maxFileBytes) return refuse("media_too_large");
     if (typeof hash !== "string" || !HASH_RE.test(hash)) return refuse("media_bad_hash");
 
-    // Only listed media counts as "already here": an unlisted copy must not be
-    // republished as room media, nor may its existence be confirmed from a hash.
-    const existing = this.#find(room, hash, ["room"]);
+    // Only listed media counts as "already here", and only for a listed upload: an unlisted
+    // copy must not be republished as room media, nor may its existence be confirmed from a
+    // hash.
+    const existing = audience === "room" ? this.#find(room, hash, ["room"]) : undefined;
     if (existing !== undefined) return { ok: true, kind: "existing", record: existing };
     // Advisory: several offers may be pending at once, so completion checks again.
     if (this.#used.get(room, family)!.total + size > this.#limits[family].roomQuotaBytes) {
@@ -268,6 +282,7 @@ export class MediaStore {
       uploader,
       name: safeName(offer.name),
       mime,
+      audience,
       size,
       hash,
       expiresAt: now + this.#limits.pendingUploadTtlMs,
@@ -295,11 +310,28 @@ export class MediaStore {
       mime: pending.mime,
       name: pending.name,
       uploader: pending.uploader,
-      audience: "room",
+      audience: pending.audience,
       bytes,
       generation: pending.generation,
       byMember: true,
     });
+  }
+
+  /**
+   * The size an accepted offer promised, while it waits for its bytes; undefined for an id
+   * that is not `uploader`'s accepted, unexpired offer. A transport reads at most this many
+   * bytes for it.
+   */
+  pendingSize(uploadId: string, uploader: string): number | undefined {
+    const pending = typeof uploadId === "string" ? this.#pending.get(uploadId) : undefined;
+    if (pending === undefined || pending.uploader !== uploader || pending.expiresAt <= this.#clock.now()) return undefined;
+    return pending.size;
+  }
+
+  /** Forget `uploader`'s accepted offer whose bytes did not arrive whole: it is used up, as a refused completion is. */
+  abandonUpload(uploadId: string, uploader: string): void {
+    const pending = typeof uploadId === "string" ? this.#pending.get(uploadId) : undefined;
+    if (pending !== undefined && pending.uploader === uploader) this.#pending.delete(uploadId);
   }
 
   /**

@@ -1,10 +1,15 @@
 // A server for the room's tests: a real store, registry, views and session, a scripted Keeper
 // turn (each test decides what a turn does, and may hold one open), scripted Scribe and
 // Director models, and an optional real module worker.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { EventFrame, ResultFrame, ServerFrame, SignalFrame, ViewFrame } from "loreweaver-protocol/v3";
 
 import type { RoomContext } from "../../src/agent/context.ts";
 import type { DirectorImageDeps } from "../../src/agent/lanes/director.ts";
+import type { RecallDeps } from "../../src/agent/recall.ts";
 import { type InstalledKit, mergeRoomKit, parsePresentationKit, type RoomKit } from "../../src/agent/lanes/presentation.ts";
 import { servicesOn } from "../../src/agent/services.ts";
 import type { TurnInput, TurnPorts, TurnResult } from "../../src/agent/turn/types.ts";
@@ -16,7 +21,9 @@ import type { PlayerActionEntry } from "../../src/gateway/keeper.ts";
 import { type LaneSettings, LANES_OFF } from "../../src/gateway/lanes.ts";
 import type { RateLimitSettings } from "../../src/gateway/rate_limit.ts";
 import { REVIEW_OFF } from "../../src/gateway/review.ts";
+import { Uploads } from "../../src/gateway/uploads.ts";
 import { type Responder, type ScriptedReply, ScriptedLLM } from "../../src/infra/llm/index.ts";
+import { DEFAULT_MEDIA_LIMITS, type MediaLimits, MediaStore } from "../../src/infra/media/index.ts";
 import { openDatabase } from "../../src/infra/runtime/sqlite.ts";
 import { spawnWorker, type WorkerHandle } from "../../src/infra/runtime/worker.ts";
 import { Store } from "../../src/infra/store.ts";
@@ -108,6 +115,10 @@ export interface BenchOptions {
   readonly images?: DirectorImageDeps;
   /** Told every op posted to the room worker, as it is posted. */
   readonly onPost?: (op: string) => void;
+  /** A media store (in a temporary directory) behind the byte channel, `uploads` and `import`; these limits when given. */
+  readonly media?: boolean | Partial<MediaLimits>;
+  /** Recall by meaning, for the lore a world import writes. */
+  readonly recall?: RecallDeps;
 }
 
 export const LANES_ON: LaneSettings = { scribe: true, director: true, directorSettings: { imagesEnabled: false, maxImages: 0, pregenPerBeat: 0 } };
@@ -121,9 +132,19 @@ export class RoomBench {
   readonly scribe: ScriptedLLM;
   readonly director: ScriptedLLM;
   readonly keystore = new Keystore();
+  /** Members' files, when the bench was made with `media`. */
+  readonly uploads: Uploads | null = null;
+  readonly #mediaDir: string | null = null;
 
   constructor(options: BenchOptions = {}) {
-    this.store = new Store(openDatabase(":memory:"));
+    const db = openDatabase(":memory:");
+    this.store = new Store(db);
+    if (options.media !== undefined && options.media !== false) {
+      this.#mediaDir = mkdtempSync(join(tmpdir(), "loreweaver-room-media-"));
+      const limits = options.media === true ? DEFAULT_MEDIA_LIMITS : { ...DEFAULT_MEDIA_LIMITS, ...options.media };
+      this.uploads = new Uploads(new MediaStore(this.#mediaDir, db, { clock: testClock(), limits }));
+    }
+    const uploads = this.uploads;
     this.scribe = new ScriptedLLM(options.scribe ?? (() => "{}"));
     this.director = new ScriptedLLM(options.director ?? (() => "{}"));
     const unused = new ScriptedLLM([]);
@@ -153,7 +174,7 @@ export class RoomBench {
     this.hub = new Hub({
       services,
       env: selftestEnvironment(),
-      commands: (seam) => new CommandRegistry({ modules: seam }),
+      commands: (seam) => new CommandRegistry({ modules: seam, uploads, recall: options.recall ?? null }),
       runTurn: this.keeper.run,
       recordPlayerAction: (_context, entry) => {
         this.actions.push(entry);
@@ -169,6 +190,7 @@ export class RoomBench {
       spawnWorker: spawn,
       modulesFor: () => modules,
       workerTimeoutMs: 5000,
+      ...(uploads === null ? {} : { uploads }),
     });
     this.keystore.add(KEYS.ada, { room: ROOM, name: "Ada", role: "player" });
     this.keystore.add(KEYS.bao, { room: ROOM, name: "Bao", role: "player" });
@@ -195,6 +217,7 @@ export class RoomBench {
     await this.settled();
     await this.hub.close();
     this.store.close();
+    if (this.#mediaDir !== null) rmSync(this.#mediaDir, { recursive: true, force: true });
   }
 }
 

@@ -143,6 +143,8 @@ export interface RoomView {
   /** The house-rule variant within that system; null for its default. */
   variant: string | null;
   keeperMuted: boolean;
+  /** Whether members may upload files to the room (the admin's upload switch). */
+  uploads: boolean;
 }
 
 /** `usage`: the token figures of the room's last Keeper turn. */
@@ -286,6 +288,7 @@ export const ROOM_VIEW_SCHEMA: ViewSchema = record({
   system: nullable(record({ id: STRING, label: STRING })),
   variant: NULLABLE_STRING,
   keeperMuted: BOOLEAN,
+  uploads: BOOLEAN,
 });
 
 export const USAGE_VIEW_SCHEMA: ViewSchema = record({

@@ -7,7 +7,7 @@
 // practical: WAV, FLAC, Ogg and MP4 have fixed magic; MP3 and AAC are raw frame streams,
 // so they are recognised by an ID3 tag or a frame-sync header whose layer bits match
 // the format (MPEG audio layers 1–3 for MP3, layer 0 — the ADTS marker — for AAC).
-import type { UploadMime } from "./policy.ts";
+import { CARD_JSON_MIME, type MemberMime } from "./policy.ts";
 import { isSafeSvg, SVG_MIME } from "./svg.ts";
 
 function startsWith(bytes: Uint8Array, offset: number, expected: readonly number[]): boolean {
@@ -35,9 +35,18 @@ function frameSync(bytes: Uint8Array): { layer: number } | undefined {
   return { layer: (b1 >> 1) & 0x03 };
 }
 
+/** A JSON object's start: an optional byte-order mark and whitespace, then `{`. */
+function startsJsonObject(bytes: Uint8Array): boolean {
+  let at = startsWith(bytes, 0, [0xef, 0xbb, 0xbf]) ? 3 : 0;
+  while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0a || bytes[at] === 0x0d)) at += 1;
+  return bytes[at] === 0x7b;
+}
+
 /** Whether `bytes` match the signature of `mime`. SVG is checked by its validator instead. */
-export function matchesSignature(mime: UploadMime, bytes: Uint8Array): boolean {
+export function matchesSignature(mime: MemberMime, bytes: Uint8Array): boolean {
   switch (mime) {
+    case CARD_JSON_MIME:
+      return startsJsonObject(bytes);
     case "image/png":
       return startsWith(bytes, 0, PNG);
     case "image/jpeg":

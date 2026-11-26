@@ -4,7 +4,8 @@
 // the line and the call end with identical outcomes.
 import { describe, expect, test } from "bun:test";
 
-import { ADA, ADMIN, bench, type Bench, type Member, ok } from "./bench.ts";
+import { jsonFile, plainCard, sha256, upload } from "../card_files.ts";
+import { ADA, ADMIN, bench, type Bench, type Member, ok, ROOM } from "./bench.ts";
 import { seedChronicle, seedHabits, seedLore, seedNpc, seedRoster, seedVariables } from "./seed.ts";
 
 interface Case {
@@ -13,6 +14,14 @@ interface Case {
   readonly args: Record<string, unknown>;
   readonly member?: Member;
   readonly setup?: (bench: Bench) => Promise<void> | void;
+  /** The bench keeps files (`uploads`, `import`). */
+  readonly media?: boolean;
+}
+
+const CARD = jsonFile(plainCard("Mira"));
+
+async function withCard(b: Bench): Promise<void> {
+  if (typeof (await upload(b.uploads!, ROOM, ADA, CARD, "application/json")) === "string") throw new Error("card not uploaded");
 }
 
 async function withCharacter(b: Bench): Promise<void> {
@@ -42,6 +51,8 @@ const CASES: readonly Case[] = [
   { line: ".undo 1", id: "undo", args: { turns: 1 }, member: ADMIN, setup: withCharacter },
   { line: ".reset chars", id: "reset", args: { scope: "chars" }, member: ADMIN },
   { line: ".save", id: "save", args: { op: "export" }, member: ADMIN, setup: withCharacter },
+  { line: ".uploads off", id: "uploads", args: { on: false }, member: ADMIN, media: true },
+  { line: `.import character ${sha256(CARD)} Mirabel`, id: "import", args: { file: sha256(CARD), as: "character", name: "Mirabel" }, media: true, setup: withCard },
   { line: ".jrrp", id: "jrrp", args: {} },
   { line: ".draw", id: "draw", args: {} },
   { line: ".help r", id: "help", args: { id: "r" } },
@@ -54,8 +65,8 @@ describe("text form and structured form", () => {
   for (const item of CASES) {
     test(`${item.id}: ${item.line}`, async () => {
       const member = item.member ?? ADA;
-      const text = bench({ seed: item.id });
-      const call = bench({ seed: item.id });
+      const text = bench({ seed: item.id, media: item.media === true });
+      const call = bench({ seed: item.id, media: item.media === true });
       await item.setup?.(text);
       await item.setup?.(call);
       expect(text.registry.textCommand(text.context(member, { newTurn: false }), item.line, "en")).toEqual({ id: item.id, args: item.args });

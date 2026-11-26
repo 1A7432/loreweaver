@@ -1,5 +1,8 @@
 // The iroh carrier: peer-to-peer QUIC, dialled by ticket. Control frames are
-// newline-delimited JSON on one long-lived bidirectional stream per connection.
+// newline-delimited JSON on one long-lived bidirectional stream per connection — the first
+// one the client opens. Every further bidirectional stream on the connection is one
+// operation of the byte channel (`bytes.ts`), served beside the control stream, never in
+// its way.
 import {
   Endpoint,
   EndpointAddr,
@@ -11,8 +14,18 @@ import {
   type RecvStream,
   type SendStream,
 } from "@number0/iroh";
-import { PROTOCOL_MAJOR, type ClientFrame, type ServerFrame } from "loreweaver-protocol/v3";
+import {
+  type ByteFile,
+  decodeByteReply,
+  encodeByteLine,
+  HeaderReader,
+  MAX_BYTE_HEADER_BYTES,
+  PROTOCOL_MAJOR,
+  type ClientFrame,
+  type ServerFrame,
+} from "loreweaver-protocol/v3";
 
+import { BYTE_CHUNK, ByteChannel, type ByteSink, type ByteSource } from "./bytes.ts";
 import { encodeLine, LineReader } from "./lines.ts";
 import { Session, type SessionDeps } from "./session.ts";
 
@@ -29,6 +42,8 @@ export interface IrohOptions {
   /** `n0`: the public relays, for real use. `local`: loopback only, no relay — tests. */
   readonly mode: "n0" | "local";
   readonly secretKey?: Uint8Array;
+  /** A server's byte-stream stall timeout (default the protocol's `BYTE_STALL_MS`); tests shorten it. */
+  readonly byteStallMs?: number;
 }
 
 async function bind(options: IrohOptions, accept: boolean): Promise<Endpoint> {
@@ -63,6 +78,30 @@ class Writer {
     await this.#tail;
     await this.#send.finish().catch(() => undefined);
   }
+}
+
+/** One iroh stream as the byte channel reads and writes it. */
+function byteSource(recv: RecvStream): ByteSource {
+  return {
+    read: async (max) => {
+      try {
+        const chunk = await recv.read(max);
+        return chunk.length === 0 ? null : Uint8Array.from(chunk);
+      } catch {
+        return null;
+      }
+    },
+    stop: () => {
+      void recv.stop(0n).catch(() => undefined);
+    },
+  };
+}
+
+function byteSink(send: SendStream): ByteSink {
+  return {
+    write: (bytes) => send.writeAll(Array.from(bytes)),
+    finish: () => send.finish(),
+  };
 }
 
 async function pump(recv: RecvStream, reader: LineReader): Promise<void> {
@@ -148,6 +187,12 @@ export class IrohServer {
           session.receive(null);
         },
       );
+      const channel = new ByteChannel(
+        () => session.byteAccess(),
+        () => session.locale,
+        this.#options.byteStallMs === undefined ? {} : { stallMs: this.#options.byteStallMs },
+      );
+      void this.#acceptBytes(connection, channel);
       await pump(stream.recv, reader);
       open = false;
       session.closed();
@@ -156,6 +201,33 @@ export class IrohServer {
       connection.close(0n, bytes("closed"));
     }
   }
+
+  /** Every further stream of the connection is a byte-channel operation, served on its own. */
+  async #acceptBytes(connection: IrohConnection, channel: ByteChannel): Promise<void> {
+    for (;;) {
+      let stream: Awaited<ReturnType<IrohConnection["acceptBi"]>>;
+      try {
+        stream = await connection.acceptBi();
+      } catch {
+        return;
+      }
+      void channel.serve(byteSource(stream.recv), byteSink(stream.send));
+    }
+  }
+}
+
+/** What one byte stream answered: the reply header and, for a GET, the body. */
+export type ByteAnswer =
+  | { readonly ok: true; readonly file: ByteFile; readonly bytes: Uint8Array }
+  | { readonly ok: false; readonly code: string; readonly message: string };
+
+/** One raw byte stream of a dialled connection (tests drive misbehaving peers with it). */
+export interface RawByteStream {
+  write(bytes: Uint8Array): Promise<void>;
+  /** Finish the client's side: the server sees the end of the body. */
+  finish(): Promise<void>;
+  /** The server's answer: one header line, and for a GET exactly `size` bytes after it. */
+  answer(): Promise<ByteAnswer>;
 }
 
 /** A dialled connection: the client half, used by tests and the self-test. */
@@ -163,7 +235,42 @@ export interface IrohLink {
   send(frame: ClientFrame): void;
   /** Resolves with the next frame; rejects if the stream ends first. */
   next(): Promise<ServerFrame>;
+  /** Open a byte stream of this connection. */
+  stream(): Promise<RawByteStream>;
+  /** GET a file by its content hash. */
+  get(hash: string): Promise<ByteAnswer>;
+  /** PUT the bytes of an accepted offer. */
+  put(uploadId: string, bytes: Uint8Array): Promise<ByteAnswer>;
   close(): Promise<void>;
+}
+
+/** Read a byte stream's answer as a client does: the header line, then the GET body, bounded by its size. */
+async function readAnswer(recv: RecvStream): Promise<ByteAnswer> {
+  const reader = new HeaderReader(MAX_BYTE_HEADER_BYTES);
+  let header: { value: unknown; rest: Uint8Array } | null = null;
+  while (header === null) {
+    const chunk = await recv.read(BYTE_CHUNK);
+    if (chunk.length === 0) throw new Error("the stream ended before its answer");
+    const step = reader.push(Uint8Array.from(chunk));
+    if (step.state === "too_long") throw new Error("the answer's header is too long");
+    if (step.state === "line") header = step;
+  }
+  const reply = decodeByteReply(header.value);
+  if (reply === null) throw new Error("the answer could not be read");
+  if (!reply.ok) return reply;
+  const { op: _op, ok: _ok, ...file } = reply;
+  if (reply.op === "put") return { ok: true, file, bytes: new Uint8Array(0) };
+  const body = new Uint8Array(file.size);
+  if (header.rest.length > file.size) throw new Error("the server sent more than it announced");
+  body.set(header.rest);
+  let filled = header.rest.length;
+  while (filled < file.size) {
+    const chunk = await recv.read(Math.min(BYTE_CHUNK, file.size - filled));
+    if (chunk.length === 0) throw new Error("the stream ended before the body did");
+    body.set(chunk, filled);
+    filled += chunk.length;
+  }
+  return { ok: true, file, bytes: body };
 }
 
 export async function dial(ticket: string, options: IrohOptions): Promise<IrohLink> {
@@ -186,7 +293,32 @@ export async function dial(ticket: string, options: IrohOptions): Promise<IrohLi
     ended = true;
     for (const waiter of waiters.splice(0)) waiter.reject(new Error("the connection ended"));
   });
+  const openStream = async (): Promise<RawByteStream> => {
+    const bi = await connection.openBi();
+    return {
+      write: (bytes) => bi.send.writeAll(Array.from(bytes)),
+      finish: () => bi.send.finish(),
+      answer: () => readAnswer(bi.recv),
+    };
+  };
+  const writeChunked = async (raw: RawByteStream, bytes: Uint8Array): Promise<void> => {
+    for (let at = 0; at < bytes.length; at += BYTE_CHUNK) await raw.write(bytes.subarray(at, at + BYTE_CHUNK));
+  };
   return {
+    stream: openStream,
+    get: async (hash) => {
+      const raw = await openStream();
+      await raw.write(encodeByteLine({ op: "get", hash }));
+      await raw.finish();
+      return raw.answer();
+    },
+    put: async (uploadId, bytes) => {
+      const raw = await openStream();
+      await raw.write(encodeByteLine({ op: "put", upload_id: uploadId }));
+      await writeChunked(raw, bytes);
+      await raw.finish();
+      return raw.answer();
+    },
     send: (frame) => {
       writer.write(frame);
     },

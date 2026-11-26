@@ -456,3 +456,41 @@ test("limits a store could not enforce are refused at construction", () => {
     () => new MediaStore(dataDir, db, { clock: clock(), limits: { ...DEFAULT_MEDIA_LIMITS, image: { maxFileBytes: 1.5, roomQuotaBytes: 10 } } }),
   ).toThrow(RangeError);
 });
+
+test("an unlisted upload: stored under its audience, never answered as existing, and the only way a card file gets in", async () => {
+  const { media } = bench();
+  const card = new TextEncoder().encode('﻿  {"spec":"chara_card_v2"}');
+  // A card file as room media is refused; as an admin-audience upload it is stored.
+  expect(code(media.beginUpload(offer(card, { mime: "application/json", name: "card.json" })))).toBe("media_bad_mime");
+  const stored = await upload(media, card, { mime: "application/json", name: "card.json", audience: "admin" });
+  expect(stored).toMatchObject({ ok: true, record: { audience: "admin", mime: "application/json" } });
+  expect(media.list("table")).toEqual([]);
+  expect(media.find("table", sha(card), "player")).toBeUndefined();
+  expect(media.find("table", sha(card), "admin")).toMatchObject({ uploader: "m:ada" });
+  // Its bytes must look like a JSON object.
+  const notJson = new TextEncoder().encode("[1,2]");
+  expect(code(await upload(media, notJson, { mime: "application/json", audience: "admin" }))).toBe("media_bad_signature");
+  // An unlisted offer of bytes the room lists is not answered `existing`: nothing is confirmed from a hash.
+  const listed = png("listed");
+  expect(code(await upload(media, listed))).toBe("ok");
+  expect(media.beginUpload(offer(listed))).toMatchObject({ ok: true, kind: "existing" });
+  expect(media.beginUpload(offer(listed, { audience: "admin" }))).toMatchObject({ ok: true, kind: "upload" });
+  expect(code(media.beginUpload(offer(listed, { audience: "everyone" as never })))).toBe("media_bad_offer");
+});
+
+test("a pending offer's size is told to its uploader alone, and an abandoned offer is used up", async () => {
+  const { media, clock: c } = bench({ pendingUploadTtlMs: 1000 });
+  const bytes = png("pending");
+  const id = uploadId(media.beginUpload(offer(bytes)));
+  expect(media.pendingSize(id, "m:ada")).toBe(bytes.length);
+  expect(media.pendingSize(id, "m:bao")).toBeUndefined();
+  expect(media.pendingSize("nope", "m:ada")).toBeUndefined();
+  media.abandonUpload(id, "m:bao");
+  expect(media.pendingSize(id, "m:ada")).toBe(bytes.length);
+  media.abandonUpload(id, "m:ada");
+  expect(media.pendingSize(id, "m:ada")).toBeUndefined();
+  expect(code(await media.completeUpload(id, "m:ada", bytes))).toBe("media_unknown_upload");
+  const late = uploadId(media.beginUpload(offer(bytes)));
+  c.advance(1000);
+  expect(media.pendingSize(late, "m:ada")).toBeUndefined();
+});

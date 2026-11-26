@@ -13,11 +13,19 @@ export const AUDIO_MIMES = ["audio/mpeg", "audio/ogg", "audio/wav", "audio/flac"
  * audience.
  */
 export const REPORT_MIME = "text/html";
+/**
+ * A card file brought for import (a SillyTavern card or a native lorecard as JSON). Accepted
+ * from a member only as an UNLISTED upload (`MediaOffer.audience` other than `room`): it is
+ * read by the server, never shown to the table as room media.
+ */
+export const CARD_JSON_MIME = "application/json";
 
 export type ImageMime = (typeof IMAGE_MIMES)[number];
 export type AudioMime = (typeof AUDIO_MIMES)[number];
 export type UploadMime = ImageMime | AudioMime;
-export type StoredMime = UploadMime | typeof REPORT_MIME;
+/** What a member may send: the room-media types, and a card file when the upload is unlisted. */
+export type MemberMime = UploadMime | typeof CARD_JSON_MIME;
+export type StoredMime = MemberMime | typeof REPORT_MIME;
 
 /**
  * The budget a blob counts against. Reports share the image budget: they are small

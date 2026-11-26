@@ -22,6 +22,7 @@ import { RoomModuleCommands } from "./module_commands.ts";
 import { DEFAULT_RATE_LIMIT, RateLimiter, type RateLimitSettings } from "./rate_limit.ts";
 import { type ReviewFilter } from "./review.ts";
 import { Room, type RoomHost } from "./room.ts";
+import type { Uploads } from "./uploads.ts";
 
 export interface HubDeps {
   readonly services: Services;
@@ -49,6 +50,11 @@ export interface HubDeps {
   readonly kitFor: (room: string) => RoomKit | null;
   /** The image client and media store for the Stage Director; absent: no new pictures. */
   readonly images?: DirectorImageDeps;
+  /**
+   * Members' files over the byte channel, on the server's media store (the same object the
+   * command table's `uploads` and `import` are given). Absent: no uploads, no fetches.
+   */
+  readonly uploads?: Uploads;
   /** Per-member input rate (default: a burst of 5, one every 2 s). */
   readonly rateLimit?: RateLimitSettings;
   /** Start a room worker thread. */
@@ -105,6 +111,7 @@ export class Hub {
       images: deps.images ?? null,
       limiter: this.#limiter,
       chains: this.#chains,
+      uploads: deps.uploads ?? null,
       kitFor: (room) => deps.kitFor(room),
       moduleWorker: (room) => this.moduleWorker(room),
       loreWorker: (room) => this.workerForLore(room),

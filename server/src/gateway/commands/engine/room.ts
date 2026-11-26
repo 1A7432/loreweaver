@@ -327,8 +327,8 @@ export const ruleCommand: CommandSpec = {
   },
 };
 
-const ON_WORDS: ReadonlySet<string> = new Set(["on", "开", "開"]);
-const OFF_WORDS: ReadonlySet<string> = new Set(["off", "关", "關"]);
+export const ON_WORDS: ReadonlySet<string> = new Set(["on", "开", "開"]);
+export const OFF_WORDS: ReadonlySet<string> = new Set(["off", "关", "關"]);
 
 export const botCommand: CommandSpec = {
   id: "bot",

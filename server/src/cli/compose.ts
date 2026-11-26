@@ -18,6 +18,7 @@ import { builtInSkillRegistry } from "../core/skills/index.ts";
 import { CommandRegistry } from "../gateway/commands/index.ts";
 import { Hub } from "../gateway/hub.ts";
 import { parseReviewList, REVIEW_OFF, type ReviewFilter } from "../gateway/review.ts";
+import { Uploads } from "../gateway/uploads.ts";
 import type { Settings } from "../infra/config.ts";
 import { type Clock, systemClock } from "../infra/ids.ts";
 import { ImageGenError, OpenAICompatibleImageGen } from "../infra/imagegen/index.ts";
@@ -72,10 +73,15 @@ export interface HubParts {
   readonly generateImage?: GenerateImage;
   readonly packs?: RulePackRegistry;
   readonly defaultRulePack?: string | null;
+  /** The media store: members' uploads and fetches over the byte channel, `uploads` and `import`. Absent: none. */
+  readonly media?: MediaStore;
 }
 
 export function composeHub(parts: HubParts): { readonly hub: Hub; readonly services: Services } {
   const { settings } = parts;
+  // One object for members' files, shared by the rooms (the byte channel) and the command
+  // table (`uploads`, `import`), so both see the same offers and import files.
+  const uploads = parts.media === undefined ? null : new Uploads(parts.media);
   const services = servicesOn({
     store: parts.store,
     packs: parts.packs ?? new RulePackRegistry(builtInPacks()),
@@ -102,7 +108,7 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
         },
       },
     },
-    commands: (modules) => new CommandRegistry({ modules }),
+    commands: (modules) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null }),
     runTurn: runKeeperTurn,
     recordPlayerAction,
     defaultLocale: settings.locale,
@@ -122,6 +128,7 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
     spawnWorker: parts.spawnWorker,
     modulesFor: parts.modulesFor,
     workerTimeoutMs: settings.modules.callTimeoutMs,
+    ...(uploads === null ? {} : { uploads }),
   });
   return { hub, services };
 }
@@ -288,6 +295,7 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     // Modules reach a room through an installed pack; until packs install, no room has one.
     modulesFor: () => [],
     review,
+    media,
     ...(recall === undefined ? {} : { recall }),
     ...(generateImage === undefined ? {} : { generateImage }),
   });
