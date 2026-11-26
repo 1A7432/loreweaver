@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import type { ServerFrame } from "loreweaver-protocol/v3";
 
+import { builtInPacks } from "../core/rulepacks/index.ts";
 import { Hub } from "../gateway/hub.ts";
 import { systemClock } from "../infra/ids.ts";
 import { ScriptedLLM } from "../infra/llm/index.ts";
@@ -41,6 +42,13 @@ export interface SelftestReport {
 export async function selftest(workerEntry: string): Promise<SelftestReport> {
   const started = performance.now();
   const steps: Record<string, boolean> = {};
+  // The built-in rule packs are text embedded at build time; compiling them here is what
+  // shows a binary still carries them.
+  try {
+    steps.rule_packs_embedded = builtInPacks().length >= 3;
+  } catch {
+    steps.rule_packs_embedded = false;
+  }
   const dir = mkdtempSync(join(tmpdir(), "loreweaver-selftest-"));
   const modulePath = join(dir, "module.ts");
   writeFileSync(modulePath, MODULE_SOURCE);

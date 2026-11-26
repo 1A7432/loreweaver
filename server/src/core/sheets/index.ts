@@ -9,7 +9,7 @@
  * data (`SheetViolation`, `FormulaIssue`, a refused write); only a malformed pack throws
  * (`SheetSpecError`, at compile time).
  *
- * Not here: rolling a new character's attributes (needs the dice engine), resolving a
+ * Rolling a new character is `generateCharacter` (`generate.ts`). Not here: resolving a
  * system name to its pack (the rule-pack loader), storage.
  */
 
@@ -45,6 +45,7 @@ export {
   type SheetEvaluation,
 } from "./evaluate.ts";
 export { type DerivedValue, FORMULA_FUNCTIONS, type FormulaIssue, type FormulaIssueCode, type FormulaKind } from "./formulas.ts";
+export { type AttributeRoll, creationRolls, type GenerateOptions, type GeneratedCharacter, generateCharacter } from "./generate.ts";
 export { newSheet, type RefreshOptions, type Refreshed, refreshSheet } from "./refresh.ts";
 export {
   type HitPoints,

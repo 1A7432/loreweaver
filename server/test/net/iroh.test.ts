@@ -8,6 +8,7 @@ test("one turn end to end: iroh in, database on disk, a module in a room worker,
   expect(report).toMatchObject({
     ok: true,
     steps: {
+      rule_packs_embedded: true,
       transport_bound: true,
       welcomed: true,
       turn_answered: true,
