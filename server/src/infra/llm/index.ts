@@ -1,17 +1,19 @@
-// The model lanes: the interface the server programs against, the two wires, the retry
+// The model lanes: the interface the server programs against, the three wires, the retry
 // layer, error classification and per-call accounting. `createLLM` turns plain settings
 // (filled from the environment elsewhere — nothing here reads it) into a ready client.
 import { AnthropicLLM } from "./anthropic.ts";
 import { OpenAICompatibleLLM } from "./openai.ts";
 import { contextWindowFor, PRESETS } from "./presets.ts";
+import { OpenAIResponsesLLM } from "./responses.ts";
 import { type RetryPolicy, RetryingLLM, type Sleep } from "./retry.ts";
 import type { ChatMessage, ChatOptions, ChatResult, LLMClient, ReasoningEffort, Wire } from "./types.ts";
 
 export * from "./types.ts";
 export { type CallRecord, type CallSink, currentLane, installCallSink, type LaneFields, type LaneScope, withLane } from "./accounting.ts";
 export { AnthropicLLM, type AnthropicLaneSettings, DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS } from "./anthropic.ts";
-export { fromAnthropicError, fromOpenAIError, LLMError, type LLMErrorCode } from "./errors.ts";
+export { fromAnthropicError, fromOpenAIError, fromResponsesError, LLMError, type LLMErrorCode } from "./errors.ts";
 export { OpenAICompatibleLLM, type OpenAILaneSettings } from "./openai.ts";
+export { OpenAIResponsesLLM, type ResponsesLaneSettings } from "./responses.ts";
 export { contextWindowFor, type Preset, PRESETS } from "./presets.ts";
 export { DEFAULT_RETRY_POLICY, realSleep, type RetryOptions, type RetryPolicy, RetryingLLM, retryDelayMs, type Sleep } from "./retry.ts";
 export { type Responder, type ScriptedReply, type ScriptedRequest, type ScriptedTurn, ScriptedLLM, toolCall } from "./scripted.ts";
@@ -30,7 +32,7 @@ export interface LLMSettings {
   /** Overrides the verified table; required for a model the table does not know. */
   readonly contextWindow?: number;
   readonly timeoutMs?: number;
-  /** False: the OpenAI-compatible wire never sends `prompt_cache_key` (see `openai.ts`). Default: sent. */
+  /** False: neither OpenAI wire sends `prompt_cache_key` (see `openai.ts`). Default: sent. */
   readonly promptCacheKey?: boolean;
   readonly retry?: Partial<RetryPolicy>;
 }
@@ -72,10 +74,30 @@ export function resolveEndpoint(settings: Pick<LLMSettings, "preset" | "wire" | 
     if (settings.wire !== undefined && settings.wire !== preset.wire) throw new LLMConfigError("wire_mismatch");
     return preset;
   }
-  // A wire alone means that wire's own vendor, at its SDK's default address.
-  if (settings.wire === "anthropic") return PRESETS.anthropic ?? missing();
-  if (settings.wire === "openai-compatible") return PRESETS.openai ?? missing();
-  throw new LLMConfigError("no_endpoint");
+  // A wire alone means that wire's own vendor, at its SDK's default address. The Responses
+  // API is OpenAI's, at the same address as its Chat Completions (`POST /responses` under
+  // it; node_modules/openai/resources/responses/responses.js).
+  switch (settings.wire) {
+    case "anthropic":
+      return PRESETS.anthropic ?? missing();
+    case "openai-compatible":
+      return PRESETS.openai ?? missing();
+    case "openai-responses":
+      return { wire: "openai-responses", baseUrl: (PRESETS.openai ?? missing()).baseUrl };
+    case undefined:
+      throw new LLMConfigError("no_endpoint");
+  }
+}
+
+function laneFor(wire: Wire, lane: ConstructorParameters<typeof OpenAICompatibleLLM>[0]): LLMClient {
+  switch (wire) {
+    case "anthropic":
+      return new AnthropicLLM(lane);
+    case "openai-compatible":
+      return new OpenAICompatibleLLM(lane);
+    case "openai-responses":
+      return new OpenAIResponsesLLM(lane);
+  }
 }
 
 function missing(): never {
@@ -107,7 +129,7 @@ export class ConfiguredLLM implements LLMClient {
       ...(settings.promptCacheKey === undefined ? {} : { promptCacheKey: settings.promptCacheKey }),
       ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
     };
-    const inner = endpoint.wire === "anthropic" ? new AnthropicLLM(lane) : new OpenAICompatibleLLM(lane);
+    const inner = laneFor(endpoint.wire, lane);
     this.#client = new RetryingLLM(inner, {
       wire: endpoint.wire,
       model: settings.model,

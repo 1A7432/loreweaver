@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { contextWindowFor, createLLM, LLMConfigError, resolveEndpoint, ScriptedLLM, toolCall } from "../../../src/infra/llm/index.ts";
+import { event, FakeHttp } from "./fake_http.ts";
 
 test("an explicit base URL needs no preset and speaks the OpenAI-compatible wire by default", () => {
   expect(resolveEndpoint({ baseUrl: "http://10.0.0.5:8000/v1" })).toEqual({ wire: "openai-compatible", baseUrl: "http://10.0.0.5:8000/v1" });
@@ -23,6 +24,20 @@ test("presets and bare wires resolve; contradictions and gaps are refused with a
   expect(problem(() => resolveEndpoint({ preset: "nope" }))).toBe("unknown_preset");
   expect(problem(() => resolveEndpoint({ preset: "deepseek", wire: "anthropic" }))).toBe("wire_mismatch");
   expect(problem(() => resolveEndpoint({}))).toBe("no_endpoint");
+});
+
+test("the Responses wire: chosen with a base URL, or alone for OpenAI's own address, and never matched to a Chat Completions preset", async () => {
+  expect(resolveEndpoint({ baseUrl: "https://proxy.test/v1", wire: "openai-responses" })).toEqual({ wire: "openai-responses", baseUrl: "https://proxy.test/v1" });
+  expect(resolveEndpoint({ wire: "openai-responses" })).toEqual({ wire: "openai-responses", baseUrl: "https://api.openai.com/v1" });
+  expect(() => resolveEndpoint({ preset: "deepseek", wire: "openai-responses" })).toThrow(LLMConfigError);
+
+  const http = new FakeHttp([{ events: [event("response.completed", { type: "response.completed", sequence_number: 0, response: { id: "r", object: "response", status: "completed", output: [] } })] }]);
+  const llm = createLLM({ baseUrl: "https://proxy.test/v1", wire: "openai-responses", apiKey: "k", model: "grok-4.7" }, { fetch: http.fetch });
+  expect(llm.wire).toBe("openai-responses");
+  const result = await llm.chat([{ role: "user", content: "hi" }]);
+  expect(result.stopReason).toBe("finished");
+  expect(http.sent[0]?.url).toBe("https://proxy.test/v1/responses");
+  expect(http.sent[0]?.body).toMatchObject({ model: "grok-4.7", store: false, stream: true });
 });
 
 test("context windows: the override wins, known ids match exactly, unknown models stay unknown", () => {

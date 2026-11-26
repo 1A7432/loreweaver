@@ -1,8 +1,11 @@
 // The model interface every lane implements. It is the server's own vocabulary: each lane
 // translates it to one vendor's wire and back, so nothing above infra/ sees an SDK type.
 
-/** The two wires this server speaks. */
-export type Wire = "openai-compatible" | "anthropic";
+/**
+ * The wires this server speaks: Chat Completions (`openai-compatible`), the Anthropic
+ * Messages API, and the OpenAI Responses API (`openai-responses`, for OpenAI and xAI).
+ */
+export type Wire = "openai-compatible" | "anthropic" | "openai-responses";
 
 /**
  * Thinking depth. The levels both installed SDKs type for their effort parameter
@@ -41,16 +44,19 @@ export interface ToolCall {
  * tagged with the wire that produced it so the other lane ignores it. Anthropic: the
  * response's content blocks (signed thinking blocks must return unmodified). The
  * OpenAI-compatible wire: DeepSeek's `reasoning_content`, which its thinking-mode guide
- * requires back on every later request that carries tools.
+ * requires back on every later request that carries tools. The Responses API: every output
+ * item of the response, in order — the encrypted reasoning items with the message and
+ * function calls they belong to — opaque, to go back exactly as received.
  */
 export type ProviderState =
   | { readonly wire: "anthropic"; readonly blocks: readonly unknown[] }
-  | { readonly wire: "openai-compatible"; readonly reasoningContent: string };
+  | { readonly wire: "openai-compatible"; readonly reasoningContent: string }
+  | { readonly wire: "openai-responses"; readonly items: readonly unknown[] };
 
 /**
  * Marks the END of a cacheable prefix: everything up to and including this message.
- * Wire-only — the Anthropic lane turns it into `cache_control`, the OpenAI-compatible
- * lane (prefix caching is automatic there) drops it; it is never sent as content.
+ * Wire-only — the Anthropic lane turns it into `cache_control`, the two OpenAI lanes
+ * (prefix caching is automatic there) drop it; it is never sent as content.
  */
 interface Cacheable {
   readonly cacheBreakpoint?: true;

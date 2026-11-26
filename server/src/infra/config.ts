@@ -99,7 +99,7 @@ export class ConfigError extends Error {
 export type Environment = Readonly<Record<string, string | undefined>>;
 
 const EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"];
-const WIRES: readonly Wire[] = ["openai-compatible", "anthropic"];
+const WIRES: readonly Wire[] = ["openai-compatible", "anthropic", "openai-responses"];
 const DIALECTS = ["openai", "xai"] as const;
 
 /** One assembly of lore templates may take 3 s (`worker/templates`); a call must outlast it. */

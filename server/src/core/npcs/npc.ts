@@ -31,7 +31,8 @@ export const MAX_DISPOSITION_CHARS = 200;
 export const MAX_LOCATION_CHARS = 120;
 /** Facts one NPC knows; each is one bullet of its actor's prompt. */
 export const MAX_KNOWLEDGE_FACTS = 64;
-export const MAX_FACT_CHARS = 280;
+/** One fact, with the circumstance it was learned in: a live Keeper's facts ran 137-294 characters, and two were refused at 280. */
+export const MAX_FACT_CHARS = 400;
 
 export type Npc = {
   readonly name: string;

@@ -51,6 +51,7 @@ test("an unknown provider name with an explicit base URL is a label, not an erro
     locale: "zh",
     llm: { apiKey: "k", model: "grok", baseUrl: "https://example.test/grok/v1", contextWindow: 500000 },
   });
+  expect(loadSettings({ TRPG_LLM__BASE_URL: "https://example.test/grok/v1", TRPG_LLM__WIRE: "openai-responses", TRPG_LLM__API_KEY: "k", TRPG_LLM__CHAT_MODEL: "grok" }).llm?.wire).toBe("openai-responses");
 });
 
 test("every problem is reported at once", () => {

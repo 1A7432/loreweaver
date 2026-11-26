@@ -178,16 +178,88 @@ function openAIWireOverflow(error: InstanceType<typeof OpenAI.APIError>): boolea
 }
 
 export function fromOpenAIError(error: unknown, signal?: AbortSignal): LLMError {
+  return fromOpenAIWireError(error, signal, "openai-compatible");
+}
+
+/**
+ * The Responses API lane (responses.ts): the same SDK and HTTP statuses as Chat Completions,
+ * and the same overflow wordings — measured on this endpoint, both HTTP 400: OpenAI
+ * "Your input exceeds the context window of this model." with `code:
+ * "context_length_exceeded"`, xAI (whose Grok models answer only on /v1/responses there)
+ * "This model's maximum prompt length is 500000 but the request contains 700207 tokens."
+ * (https://github.com/sschatter/pi-jetbrains-junie-bridge/blob/main/JUNIE_INSIGHTS.md,
+ * "Context Overflow Errors", verified 2026-07-28; read 2026-11-27). Unlike Chat
+ * Completions this wire DOES document a failure inside the stream; see
+ * `responsesStreamFailure`.
+ */
+export function fromResponsesError(error: unknown, signal?: AbortSignal): LLMError {
   if (error instanceof LLMError) return error;
-  if (isAbort(error, signal)) return abortedError("openai-compatible", error);
+  // An SSE event named `error` is raised by the SDK as an APIError without a status
+  // (node_modules/openai/core/streaming.js), carrying the event's `code` and `message`.
+  // A connection failure is an APIError without a status too, and is not that.
+  if (error instanceof OpenAI.APIError && error.status === undefined && !(error instanceof OpenAI.APIConnectionError) && !isAbort(error, signal)) {
+    return responsesStreamFailure(typeof error.code === "string" ? error.code : undefined, error.message, error);
+  }
+  return fromOpenAIWireError(error, signal, "openai-responses");
+}
+
+/**
+ * A Responses API failure that arrives as a stream event rather than an HTTP status: a
+ * `response.failed` event (its `response.error`) or an `error` event. The codes are
+ * `ResponseError.code` in node_modules/openai/resources/responses/responses.d.ts (openai
+ * 7.65.0, read 2026-11-27): `server_error` and `rate_limit_exceeded` are the vendor saying
+ * "not now"; the rest describe the request (a policy block, a bad image, an invalid prompt)
+ * and are not retried. An overflow is recognised by the HTTP code OpenAI uses for it or by
+ * a known wording — but only when the code does not already say something else, so a
+ * rate-limit message quoting a token budget stays a rate limit.
+ */
+export function responsesStreamFailure(code: string | null | undefined, message: string, cause?: unknown): LLMError {
+  const base = { wire: "openai-responses" as const, providerMessage: message, ...(cause === undefined ? {} : { cause }) };
+  if (code === "server_error") return new LLMError({ ...base, code: "transient", retryable: true });
+  if (code === "rate_limit_exceeded") return new LLMError({ ...base, code: "rate_limited", retryable: true });
+  const saysOtherwise = typeof code === "string" && STREAM_CODES_WITH_MEANING.has(code);
+  if (code === "context_length_exceeded" || (!saysOtherwise && OPENAI_WIRE_OVERFLOW.some((pattern) => pattern.test(message)))) {
+    return new LLMError({ ...base, code: "context_overflow", retryable: false });
+  }
+  return new LLMError({ ...base, code: "unknown", retryable: false });
+}
+
+// The documented `ResponseError.code` values; one of these already says what went wrong.
+const STREAM_CODES_WITH_MEANING = new Set([
+  "server_error",
+  "rate_limit_exceeded",
+  "invalid_prompt",
+  "data_residency_mismatch",
+  "bio_policy",
+  "misalignment_policy_violation",
+  "vector_store_timeout",
+  "invalid_image",
+  "invalid_image_format",
+  "invalid_base64_image",
+  "invalid_image_url",
+  "image_too_large",
+  "image_too_small",
+  "image_parse_error",
+  "image_content_policy_violation",
+  "invalid_image_mode",
+  "image_file_too_large",
+  "unsupported_image_media_type",
+  "empty_image_file",
+  "failed_to_download_image",
+  "image_file_not_found",
+]);
+
+function fromOpenAIWireError(error: unknown, signal: AbortSignal | undefined, wire: "openai-compatible" | "openai-responses"): LLMError {
+  if (error instanceof LLMError) return error;
+  if (isAbort(error, signal)) return abortedError(wire, error);
   if (error instanceof OpenAI.APIConnectionError) {
-    return new LLMError({ code: "transient", wire: "openai-compatible", retryable: true, providerMessage: error.message, cause: error });
+    return new LLMError({ code: "transient", wire, retryable: true, providerMessage: error.message, cause: error });
   }
   if (!(error instanceof OpenAI.APIError)) {
-    return new LLMError({ code: "unknown", wire: "openai-compatible", retryable: false, providerMessage: messageOf(error), cause: error });
+    return new LLMError({ code: "unknown", wire, retryable: false, providerMessage: messageOf(error), cause: error });
   }
-  const base = { wire: "openai-compatible" as const, providerMessage: error.message, cause: error, retryAfterMs: retryAfterMs(error.headers) };
-  // A mid-stream error payload carries no status, and this wire documents no shape for it.
+  const base = { wire, providerMessage: error.message, cause: error, retryAfterMs: retryAfterMs(error.headers) };
+  // A mid-stream error payload carries no status, and Chat Completions documents no shape for it.
   if (error.status === undefined) return new LLMError({ ...base, code: "unknown", retryable: false });
   let { code, retryable } = byStatus(error.status);
   if (error.status === 400 && openAIWireOverflow(error)) code = "context_overflow";
