@@ -1,6 +1,22 @@
 import { expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { CATALOGS, catalogLocale, t } from "../../src/infra/i18n.ts";
+
+test("every catalog file exists in every locale with exactly the keys of en", () => {
+  // Read from disk, so a catalog added by any area is covered without registering it here.
+  const root = join(import.meta.dir, "..", "..", "locales");
+  const locales = readdirSync(root).sort();
+  expect(locales).toContain("en");
+  for (const file of readdirSync(join(root, "en")).sort()) {
+    const en = Object.keys(JSON.parse(readFileSync(join(root, "en", file), "utf8")) as object).sort();
+    for (const locale of locales) {
+      const keys = Object.keys(JSON.parse(readFileSync(join(root, locale, file), "utf8")) as object).sort();
+      expect([file, locale, keys]).toEqual([file, locale, en]);
+    }
+  }
+});
 
 test("every locale has exactly the keys of en", () => {
   const en = Object.keys(CATALOGS.en ?? {}).sort();
