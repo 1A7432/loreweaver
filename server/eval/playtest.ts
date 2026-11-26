@@ -28,11 +28,13 @@ import { join } from "node:path";
 import type { ServerFrame } from "loreweaver-protocol/v3";
 
 import { importWorld } from "../src/agent/card_import.ts";
+import { WHISPERS_KEY } from "../src/agent/lanes/scribe.ts";
 import { diceRolled, diceToolNames, replyStatesARoll } from "../src/agent/turn/checks.ts";
 import { composeHub } from "../src/cli/compose.ts";
 import { parseCard } from "../src/core/card/index.ts";
 import { CHRONICLE_RECORD_TYPE } from "../src/core/chronicle/index.ts";
 import { SeededRandom } from "../src/core/random.ts";
+import { builtInPacks } from "../src/core/rulepacks/index.ts";
 import { REVIEW_OFF } from "../src/gateway/review.ts";
 import type { Member, Room } from "../src/gateway/room.ts";
 import { loadSettings } from "../src/infra/config.ts";
@@ -41,6 +43,7 @@ import { type ChatMessage, type ChatOptions, type ChatResult, createLLM, current
 import { openDatabase } from "../src/infra/runtime/sqlite.ts";
 import { roomWorkerEntry, spawnWorker } from "../src/infra/runtime/worker.ts";
 import { Store } from "../src/infra/store.ts";
+import { type CheckEvidence, checkTerms, judgeCheckable } from "./checkable.ts";
 
 // ---------------------------------------------------------------- arguments
 
@@ -52,6 +55,8 @@ const TURNS = Number(argument("turns", "8"));
 const PLAYERS = Math.max(1, Math.min(4, Number(argument("players", "2"))));
 const PRESSURE = process.argv.includes("--pressure");
 const LOCALE = argument("locale", "en");
+/** Pretend the model's context window is this many tokens: a small one makes the chronicle fold within a session. */
+const WINDOW = Number(argument("window", "0"));
 const STAMP = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const OUT = argument("out", join(import.meta.dir, "../../playtest", `v3-${STAMP}`));
 const FIXTURE_DIR = join(import.meta.dir, "fixtures");
@@ -144,7 +149,7 @@ const { hub, services } = composeHub({
   settings,
   store,
   models: { keeper: probe, npc: probe, scribe: probe, director: probe, memory: probe },
-  contextWindow: configured.contextWindow ?? 32_000,
+  contextWindow: WINDOW > 0 ? WINDOW : (configured.contextWindow ?? 32_000),
   clock: systemClock,
   report: (room, text) => {
     reports.push(text);
@@ -365,6 +370,10 @@ let diceMisses = 0;
 let failedTurns = 0;
 const sentinelHits: { turn: number; sentinel: string; where: string }[] = [];
 const diceTools = diceToolNames(["sanity_check", "skill_growth", "spend_luck", "opposed_check", "random_madness"]);
+const terms = checkTerms(builtInPacks());
+let checkable = 0;
+let unrolledWhispers = 0;
+const seenWhispers = new Set<string>();
 
 for (let turn = 1; turn <= TURNS; turn++) {
   currentTurn = turn;
@@ -407,8 +416,21 @@ for (let turn = 1; turn <= TURNS; turn++) {
   const states = reply !== "" && replyStatesARoll(reply);
   const rolled = diceEvents > 0 || diceRolled({ calls: toolNames.map((name) => ({ name, args: null, suppressed: false, dice: [] })), diceTools });
   if (states) statedRolls++;
-  const miss = states && !rolled;
+  // Checkable: someone named a skill next to a request to check it (`checkable.ts`). A typed
+  // dice command is the roll itself, not a request for one.
+  const evidence: CheckEvidence | null = line.startsWith(".") ? null : judgeCheckable(line, reply, terms);
+  if (evidence !== null) checkable++;
+  const miss = (states || evidence !== null) && !rolled;
   if (miss) diceMisses++;
+  // The Scribe's own reading of the fiction: "this turn settled something uncertain without a roll".
+  for (const whisper of store.stateGet(ROOM, WHISPERS_KEY) ?? []) {
+    if (whisper.kind !== "unrolled_check") continue;
+    const key = `${whisper.skill}\u0000${whisper.quote}`;
+    if (seenWhispers.has(key)) continue;
+    seenWhispers.add(key);
+    unrolledWhispers++;
+    record("unrolled_check", { turn, skill: whisper.skill, quote: whisper.quote });
+  }
 
   let verdict: Verdict | null = null;
   if (keeperTexts.length > 0) {
@@ -421,7 +443,7 @@ for (let turn = 1; turn <= TURNS; turn++) {
 
   const lanes: Record<string, number> = {};
   for (const call of calls) lanes[call.lane] = (lanes[call.lane] ?? 0) + 1;
-  const entry = { turn, player: who.member.name, archetype: who.archetype[0], line, answer, ms, first_draft_ms: firstDraftMs, settled_ms: settledMs, reply_chars: reply.length, notices, dice_events: diceEvents, tools: toolNames, model_calls: lanes, states_roll: states, dice_miss: miss, verdict };
+  const entry = { turn, player: who.member.name, archetype: who.archetype[0], line, answer, ms, first_draft_ms: firstDraftMs, settled_ms: settledMs, reply_chars: reply.length, notices, dice_events: diceEvents, tools: toolNames, model_calls: lanes, states_roll: states, checkable: evidence, dice_miss: miss, verdict };
   turns.push(entry);
   record("turn", entry);
   console.error(`turn ${turn}/${TURNS} ${who.member.name}: ${ms} ms, keeper calls ${lanes.keeper ?? 0}, tools [${toolNames.join(", ")}]${notices.length > 0 ? `, NOTICE ${notices.map((notice) => notice.code).join(",")}` : ""}${verdict?.category === "truth" ? ", LEAK" : ""}${miss ? ", DICE-MISS" : ""}`);
@@ -450,7 +472,12 @@ const summary = {
   wall_seconds: Math.round((Date.now() - started) / 1000),
   failed_turns: failedTurns,
   secrecy: { leaks, pacing, judge_failures: judgeFailures, sentinel_hits: sentinelHits },
-  dice_first: { replies_stating_a_roll: statedRolls, misses: diceMisses },
+  // Checkable: a skill named next to a request to check it, by the player or the Keeper. A miss: such a
+  // turn, or a reply stating a roll, with no dice rolled. `scribe_unrolled_checks` is the Scribe's own
+  // observation of an uncertain outcome settled without a roll — information, not part of the count.
+  dice_first: { checkable_turns: checkable, replies_stating_a_roll: statedRolls, misses: diceMisses, scribe_unrolled_checks: unrolledWhispers },
+  folds: { memory_calls: records.filter((entry) => entry.kind === "model_call" && entry.lane === "memory").length, window: WINDOW > 0 ? WINDOW : (configured.contextWindow ?? null) },
+  wire: configured.wire,
   // From the line going in to the Keeper's reply arriving (the Scribe's later pass is not in it).
   latency_ms: { median: latencies[Math.floor(latencies.length / 2)] ?? 0, max: latencies[latencies.length - 1] ?? 0 },
   keeper_calls_per_turn: { max: Math.max(0, ...perTurnKeeper), mean: perTurnKeeper.reduce((sum, value) => sum + value, 0) / Math.max(1, perTurnKeeper.length) },
