@@ -23,7 +23,8 @@ describe("undo", () => {
     const meta = b.store.room(ROOM);
     expect(meta.epoch).toBe(before.epoch + 1);
     expect(undone.lifecycle).toEqual({ kind: "rewind", epoch: meta.epoch, turn: draft.turn, modulesChanged: [] });
-    expect(undone.events).toEqual([{ kind: "rewind", data: { to: 1, epoch: meta.epoch } }]);
+    // Nothing of the undone turn was in the log past its first event: a plain cut, nothing kept.
+    expect(undone.events).toEqual([{ kind: "rewind", data: { from: 2, kept: [], epoch: meta.epoch } }]);
     expect(undone.text).toContain(`turn ${draft.turn}`);
   });
 

@@ -48,6 +48,8 @@ export const MAX_CHOICES = 64;
 export const MAX_SHORT_LIST = 256;
 /** Events in one `log.page` answer the client accepts. */
 export const MAX_PAGE_EVENTS = 1000;
+/** Surviving events an undo may name past its cut: bounded by the turns an undo can reach. */
+export const MAX_REWIND_KEPT = 4096;
 
 /** What decoding one value found. */
 export type ServerDecode =
@@ -247,7 +249,13 @@ function media(raw: Raw): MediaData | null {
 }
 
 function rewind(raw: Raw): RewindData | null {
-  return count(raw.to) && int(raw.epoch) ? { to: raw.to, epoch: raw.epoch } : null;
+  if (!count(raw.from) || !int(raw.epoch) || !Array.isArray(raw.kept) || raw.kept.length > MAX_REWIND_KEPT) return null;
+  const kept: number[] = [];
+  for (const seq of raw.kept) {
+    if (!count(seq)) return null;
+    kept.push(seq);
+  }
+  return { from: raw.from, kept, epoch: raw.epoch };
 }
 
 function reset(raw: Raw): ResetData | null {

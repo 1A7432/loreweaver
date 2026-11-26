@@ -65,11 +65,6 @@ function lifecycleRefusal(error: unknown, call: CommandCall): Refused {
   throw error;
 }
 
-/** The newest event the room's log still holds after a lifecycle operation. */
-function logHead(call: CommandCall): number {
-  return call.context.services.store.eventsBefore(call.context.room, Number.MAX_SAFE_INTEGER, 1)[0]?.seq ?? 0;
-}
-
 export const undoCommand: CommandSpec = {
   id: "undo",
   source: "engine",
@@ -99,7 +94,7 @@ export const undoCommand: CommandSpec = {
       text: call.say("undo.done", { turns, turn: result.turn }),
       data: { turn: result.turn, epoch: result.epoch, removedTurns: result.removedTurns },
       lifecycle: { kind: "rewind", epoch: result.epoch, turn: result.turn, modulesChanged: result.modulesChanged },
-      events: [{ kind: "rewind", data: { to: logHead(call), epoch: result.epoch } }],
+      events: [{ kind: "rewind", data: { from: result.cutFrom, kept: [...result.kept], epoch: result.epoch } }],
     };
   },
 };

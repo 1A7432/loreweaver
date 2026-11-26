@@ -70,9 +70,16 @@ export interface NarrativeData {
   format: "markdown" | "plain";
 }
 
+/**
+ * An undo: the log lost every event numbered `from` or higher, EXCEPT those in `kept`. An
+ * undo removes whole turns, and turns interleave in the log (a line is logged when it is
+ * accepted, its reply when the Keeper's turn ends), so what is removed is not always a
+ * suffix: `kept` lists the events of surviving turns that landed after the first removed one.
+ * It is empty in the common case.
+ */
 export interface RewindData {
-  /** Everything after this `seq` no longer happened. */
-  to: number;
+  from: number;
+  kept: number[];
   epoch: number;
 }
 
@@ -242,6 +249,16 @@ export type ServerFrame =
 // ---------------------------------------------------------------------------
 
 export const MAX_INPUT_CHARS = 8000;
+/**
+ * The limits of a reconnect and of history paging. They are the PROTOCOL's, not one side's:
+ * a client works out whether its log has a hole from them (the server replays the events
+ * after `resume.after`, but never more than the newest `RESUME_LIMIT`).
+ */
+export const RESUME_LIMIT = 200;
+/** Events in one `log.page`; asking for more is refused. */
+export const PAGE_LIMIT = 100;
+/** View names in one `view.subscribe` / `view.unsubscribe`. */
+export const MAX_VIEW_NAMES = 64;
 const MAX_ID_CHARS = 64;
 
 export type Decoded<T> = { ok: true; frame: T } | { ok: false; code: string; rid?: string };

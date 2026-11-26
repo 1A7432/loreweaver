@@ -32,7 +32,7 @@ test("every known frame decodes, and unknown fields are dropped", () => {
   const frames = [
     { type: "event", seq: 3, id: "e3", ts: 3, kind: "blocks", data: { blocks: [{ kind: "divider" }, { kind: "meter", label: "HP", value: 3, min: 0, max: 10 }], replace: true } },
     { type: "event", seq: 4, id: "e4", ts: 4, kind: "media", data: { hash: "ab", mime: "image/png", size: 3, name: "a.png", from: "m1" } },
-    { type: "event", seq: 5, id: "e5", ts: 5, kind: "rewind", data: { to: 2, epoch: 2 } },
+    { type: "event", seq: 5, id: "e5", ts: 5, kind: "rewind", data: { from: 3, kept: [4], epoch: 2 } },
     { type: "event", seq: 6, id: "e6", ts: 6, kind: "reset", data: { scope: "story", epoch: 3 } },
     { type: "signal", kind: "draft", data: { id: "d", text: "par" } },
     { type: "signal", kind: "draft", data: { id: "d", discard: true } },
@@ -97,7 +97,7 @@ test("every malformed shape is refused", () => {
     { type: "event", seq: 3, id: "e", ts: 1, kind: "blocks", data: { blocks: [], replace: "yes" } },
     { type: "event", seq: 4, id: "e", ts: 1, kind: "media", data: { hash: "", mime: "x", size: 1, name: "n", from: "f" } },
     { type: "event", seq: 4, id: "e", ts: 1, kind: "media", data: { hash: "h", mime: "x", size: -1, name: "n", from: "f" } },
-    { type: "event", seq: 5, id: "e", ts: 1, kind: "rewind", data: { to: "2", epoch: 2 } },
+    { type: "event", seq: 5, id: "e", ts: 1, kind: "rewind", data: { from: "3", kept: [], epoch: 2 } },
     { type: "event", seq: 6, id: "e", ts: 1, kind: "reset", data: { scope: "everything", epoch: 2 } },
     { type: "event", seq: 6, id: "x".repeat(MAX_SHORT_CHARS + 1), ts: 1, kind: "reset", data: { scope: "all", epoch: 2 } },
     { type: "signal", kind: "draft", data: { id: "d" } },

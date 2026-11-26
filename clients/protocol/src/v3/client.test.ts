@@ -230,12 +230,21 @@ test("events are kept in seq order without duplicates, and head follows the newe
 test("rewind cuts the log back and adopts the new epoch; the rewind itself stays in the log", () => {
   const { session } = online();
   for (const seq of [1, 2, 3, 4]) session.receive(narrative(seq));
-  session.receive({ type: "event", seq: 5, id: "rw", ts: 5, kind: "rewind", data: { to: 2, epoch: 2 } });
+  session.receive({ type: "event", seq: 5, id: "rw", ts: 5, kind: "rewind", data: { from: 3, kept: [], epoch: 2 } });
   expect(seqs(session)).toEqual([1, 2, 5]);
   expect(session.getSnapshot().epoch).toBe(2);
   // A replayed rewind of an older generation never moves the epoch back.
-  session.receive({ type: "event", seq: 6, id: "rw0", ts: 6, kind: "rewind", data: { to: 5, epoch: 1 } });
+  session.receive({ type: "event", seq: 6, id: "rw0", ts: 6, kind: "rewind", data: { from: 6, kept: [], epoch: 1 } });
   expect(session.getSnapshot().epoch).toBe(2);
+});
+
+test("a rewind of interleaved turns removes from the middle: what `kept` names survives", () => {
+  const { session } = online();
+  // Turn 1's line, turn 2's line (accepted while turn 1 ran), turn 1's reply, turn 2's reply.
+  for (const seq of [1, 2, 3, 4]) session.receive(narrative(seq));
+  // Undo turn 2: its line (2) and reply (4) go; turn 1's reply (3) landed after the cut began and stays.
+  session.receive({ type: "event", seq: 5, id: "rw", ts: 5, kind: "rewind", data: { from: 2, kept: [3], epoch: 2 } });
+  expect(seqs(session)).toEqual([1, 3, 5]);
 });
 
 test("reset clears the log and adopts the new epoch", () => {
@@ -318,7 +327,7 @@ test("a page that arrives after the log was cut is void", async () => {
   const { session, link } = online({}, 1, 300);
   for (let seq = 101; seq <= 300; seq++) session.receive(narrative(seq));
   const load = session.loadOlder();
-  session.receive({ type: "event", seq: 301, id: "rw", ts: 1, kind: "rewind", data: { to: 250, epoch: 2 } });
+  session.receive({ type: "event", seq: 301, id: "rw", ts: 1, kind: "rewind", data: { from: 251, kept: [], epoch: 2 } });
   session.receive({ type: "result", rid: link.last("call").rid, ok: true, data: { events: [narrative(99), narrative(100)] } });
   expect(await load).toBe(0);
   expect(seqs(session)[0]).toBe(101);

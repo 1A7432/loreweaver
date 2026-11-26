@@ -148,6 +148,10 @@ export interface UndoResult {
   readonly turn: number;
   /** The turns whose effects were removed, oldest first. */
   readonly removedTurns: readonly number[];
+  /** The first event number removed from the log (`head + 1` when the log lost nothing). */
+  readonly cutFrom: number;
+  /** Event numbers after `cutFrom` that survive: earlier turns' events that landed later. */
+  readonly kept: readonly number[];
   /** Modules whose checkpoint is now different: their worker must reload. */
   readonly modulesChanged: readonly string[];
 }
@@ -300,6 +304,7 @@ function prepare(db: Database) {
     firstLaterEvent: q<{ seq: number | null }>("SELECT MIN(seq) AS seq FROM events WHERE room = ? AND turn > ?"),
     cutLaterTurns: q("DELETE FROM events WHERE room = ? AND turn > ?"),
     cutTurnlessAfter: q("DELETE FROM events WHERE room = ? AND turn IS NULL AND seq > ?"),
+    seqsAfter: q<{ seq: number }>("SELECT seq FROM events WHERE room = ? AND seq > ? ORDER BY seq ASC"),
     eventsDeleteRoom: q("DELETE FROM events WHERE room = ?"),
     docGet: q<DocumentRow>(`SELECT ${docColumns} FROM documents WHERE room = ? AND type = ? AND id = ?`),
     docList: q<DocumentRow>(`SELECT ${docColumns} FROM documents WHERE room = ? ORDER BY type ASC, seq ASC`),
@@ -535,13 +540,18 @@ export class Store {
       const firstLater = this.#q.firstLaterEvent.get(room, to)?.seq ?? null;
       this.#q.cutLaterTurns.run(room, to);
       if (firstLater !== null) this.#q.cutTurnlessAfter.run(room, firstLater);
+      // What the cut left standing past its first removal: events of turns that stay which
+      // landed after a later turn had begun (a line accepted while a turn was running). The
+      // log is not always cut to a prefix, and whoever announces the undo must be able to say so.
+      const cutFrom = firstLater ?? record.head + 1;
+      const kept = firstLater === null ? [] : this.#q.seqsAfter.all(room, firstLater).map((row) => row.seq);
 
       const epoch = record.epoch + 1;
       // Re-read: re-applied creations moved the document position counter on.
       this.#saveRecord(room, { ...this.#record(room), epoch, turn: to });
       const removedTurns: number[] = [];
       for (let turn = to + 1; turn <= record.turn; turn++) removedTurns.push(turn);
-      return { epoch, head: record.head, turn: to, removedTurns, modulesChanged: modulesChanged.sort() };
+      return { epoch, head: record.head, turn: to, removedTurns, cutFrom, kept, modulesChanged: modulesChanged.sort() };
     });
   }
 

@@ -11,16 +11,19 @@
 // wants and reconciles what it holds. A FATAL `error` frame (a bad key, another protocol
 // major…) ends it for good: `status` becomes `"ended"` and `canRedial` false.
 import {
-  PROTOCOL_MAJOR,
-  PROTOCOL_VERSION,
-  protocolMajor,
   type BuiltInViewName,
   type BuiltInViews,
   type ClientFrame,
   type ErrorBody,
   type EventFrame,
   type HelloFrame,
+  MAX_VIEW_NAMES,
+  PAGE_LIMIT,
+  PROTOCOL_MAJOR,
+  PROTOCOL_VERSION,
+  protocolMajor,
   type ResultFrame,
+  RESUME_LIMIT,
   type SignalFrame,
   type SignalPayloads,
   type ViewFrame,
@@ -32,12 +35,6 @@ import { BUILT_IN_VIEW_SCHEMAS } from "./views.js";
 import { decodeEventFrame, inspectServerFrame, MAX_PAGE_EVENTS, MAX_SHORT_CHARS, MAX_TEXT_CHARS } from "./decode.js";
 import { matchesSchema } from "./schema.js";
 
-/** How many missed events the server replays on a resume (its `RESUME_LIMIT`); older ones are paged. */
-export const SERVER_RESUME_LIMIT = 200;
-/** The most events one `log.page` answer carries (the server's `PAGE_LIMIT`). */
-export const SERVER_PAGE_LIMIT = 100;
-/** View names the server takes in one `view.subscribe` / `view.unsubscribe` (its `MAX_VIEW_NAMES`). */
-export const SERVER_MAX_VIEW_NAMES = 64;
 /** The default size of the log window the session keeps; the oldest events beyond it are dropped. */
 export const DEFAULT_MAX_EVENTS = 2000;
 
@@ -440,7 +437,7 @@ export class Session {
     this.#viewProblems = problems;
     this.#changed();
     const removed: string[] = [];
-    for (const chunk of chunks([...new Set(names)], SERVER_MAX_VIEW_NAMES)) {
+    for (const chunk of chunks([...new Set(names)], MAX_VIEW_NAMES)) {
       const result = await this.call("view.unsubscribe", { names: chunk }, options);
       if (!result.ok) return result;
       const list = isRecord(result.data) ? result.data.removed : undefined;
@@ -463,7 +460,7 @@ export class Session {
   }
 
   /** `log.page {before, limit}`: a page of history, oldest first. It does not touch the window. */
-  async logPage(before: number, limit: number = SERVER_PAGE_LIMIT, options: RequestOptions = {}): Promise<Result<{ events: EventFrame[] }>> {
+  async logPage(before: number, limit: number = PAGE_LIMIT, options: RequestOptions = {}): Promise<Result<{ events: EventFrame[] }>> {
     const result = await this.call("log.page", { before, limit }, options);
     if (!result.ok) return result;
     const list = isRecord(result.data) ? result.data.events : undefined;
@@ -580,10 +577,10 @@ export class Session {
     // afresh. So is one that claims more than the room ever handed out.
     if (this.#epoch !== null && (frame.epoch !== this.#epoch || frame.head < this.#lastSeq)) this.#discardLog();
     if (this.#epoch === null || (this.#events.length === 0 && this.#lastSeq === 0)) {
-      this.#complete = frame.head <= SERVER_RESUME_LIMIT;
-    } else if (frame.head - this.#lastSeq > SERVER_RESUME_LIMIT) {
+      this.#complete = frame.head <= RESUME_LIMIT;
+    } else if (frame.head - this.#lastSeq > RESUME_LIMIT) {
       // Only the newest stretch is replayed: what lies between is missing.
-      const before = frame.head - SERVER_RESUME_LIMIT + 1;
+      const before = frame.head - RESUME_LIMIT + 1;
       this.#gap = this.#gap === null ? { after: this.#lastSeq, before } : { after: this.#gap.after, before };
     }
     this.#epoch = frame.epoch;
@@ -598,8 +595,9 @@ export class Session {
 
   #onEvent(frame: EventFrame): void {
     if (frame.kind === "rewind") {
-      // Everything after `to` no longer happened; the room moved to a new generation.
-      this.#cut(frame.data.to);
+      // Everything numbered `from` or higher no longer happened, except what `kept` names;
+      // the room moved to a new generation.
+      this.#cut(frame.data.from, frame.data.kept);
       this.#adoptEpoch(frame.data.epoch);
     } else if (frame.kind === "reset") {
       this.#events = [];
@@ -715,12 +713,17 @@ export class Session {
   }
 
   /** Drop every event after `to`. */
-  #cut(to: number): void {
-    const at = lowerBound(this.#events, to + 1);
-    if (at < this.#events.length) this.#events = this.#events.slice(0, at);
+  #cut(from: number, kept: readonly number[]): void {
+    const at = lowerBound(this.#events, from);
+    if (at < this.#events.length) {
+      const survivors = new Set(kept);
+      this.#events = [...this.#events.slice(0, at), ...this.#events.slice(at).filter((event) => survivors.has(event.seq))];
+    }
+    // A hole in what this client holds: past the cut there is nothing left to fetch but
+    // what `kept` names, and those are few; the hole is trimmed to the part before the cut.
     if (this.#gap !== null) {
-      if (this.#gap.after >= to) this.#gap = null;
-      else if (this.#gap.before > to + 1) this.#gap = { after: this.#gap.after, before: to + 1 };
+      if (this.#gap.after >= from - 1) this.#gap = null;
+      else if (this.#gap.before > from) this.#gap = { after: this.#gap.after, before: from };
     }
     this.#logVersion++;
   }
@@ -767,7 +770,7 @@ export class Session {
       if (this.#complete || this.#events.length >= this.#maxEvents) return 0;
       before = this.#events[0]?.seq ?? this.#lastSeq + 1;
     }
-    const page = await this.logPage(before, SERVER_PAGE_LIMIT, options);
+    const page = await this.logPage(before, PAGE_LIMIT, options);
     if (!page.ok) {
       this.#lastError = { code: page.error.code, message: page.error.message, fatal: false };
       this.#changed();
@@ -776,7 +779,7 @@ export class Session {
     // The log was cut, cleared or replaced while the page was on its way: it is void.
     if (version !== this.#logVersion || this.#gap !== gap) return 0;
     const events = page.data.events;
-    const exhausted = events.length < SERVER_PAGE_LIMIT;
+    const exhausted = events.length < PAGE_LIMIT;
     const oldest = events[0]?.seq;
     const before0 = this.#events.length;
     if (gap !== null) {
@@ -799,7 +802,7 @@ export class Session {
 
   async #subscribe(names: readonly string[], options: RequestOptions): Promise<Result<{ problems: { name: string; code: string }[] }>> {
     const problems: { name: string; code: string }[] = [];
-    for (const chunk of chunks(names, SERVER_MAX_VIEW_NAMES)) {
+    for (const chunk of chunks(names, MAX_VIEW_NAMES)) {
       const result = await this.call("view.subscribe", { names: chunk }, options);
       if (!result.ok) return result;
       const list = isRecord(result.data) ? result.data.problems : undefined;

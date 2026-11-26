@@ -197,7 +197,7 @@ describe("lifecycle", () => {
     await Bun.sleep(5);
     expect(resultFor(root.sent, "undo")?.ok).toBe(true);
     const rewind = events(ada.sent).find((event) => event.kind === "rewind");
-    expect(rewind).toMatchObject({ kind: "rewind", data: { to: 0, epoch: 2 } });
+    expect(rewind).toMatchObject({ kind: "rewind", data: { from: 1, kept: [], epoch: 2 } });
     hold.open();
     await b.settled();
     expect(refused).toBeInstanceOf(StaleGeneration);

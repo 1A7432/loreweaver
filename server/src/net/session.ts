@@ -5,14 +5,17 @@
 // the room's (`gateway/room.ts`); text a person reads here comes from this layer's catalog
 // (`locales/*/net.json`), in the MEMBER's language (decision 32).
 import {
+  type CallFrame,
+  charCount,
   decodeClientFrame,
+  type ErrorBody,
+  type HelloFrame,
+  MAX_VIEW_NAMES,
+  PAGE_LIMIT,
   PROTOCOL_MAJOR,
   PROTOCOL_VERSION,
   protocolMajor,
-  charCount,
-  type CallFrame,
-  type ErrorBody,
-  type HelloFrame,
+  RESUME_LIMIT,
   type ServerFrame,
 } from "loreweaver-protocol/v3";
 
@@ -22,15 +25,10 @@ import { catalogLocale, t } from "../infra/i18n.ts";
 import { SERVER_VERSION } from "../infra/version.ts";
 import { memberId, type Keystore } from "./keystore.ts";
 
-/** How many missed events a reconnect is sent at once; the rest is fetched by page. */
-export const RESUME_LIMIT = 200;
-export const PAGE_LIMIT = 100;
 /** A name a client gives itself in `hello`, in code points. */
 export const MAX_MEMBER_NAME_CHARS = 64;
 /** A command id in `command.run`, in code points (a module id, a slash, a command name). */
 export const MAX_COMMAND_ID_CHARS = 200;
-/** View names in one `view.subscribe` / `view.unsubscribe`. */
-export const MAX_VIEW_NAMES = 64;
 
 export interface SessionDeps {
   readonly keystore: Keystore;
@@ -203,11 +201,13 @@ export class Session {
       case "log.page": {
         const before = params.before;
         const limit = params.limit ?? PAGE_LIMIT;
-        if (!Number.isSafeInteger(before) || !Number.isSafeInteger(limit) || (limit as number) < 1) {
+        // Over the limit is refused, not cut to it: a client that asked for 500 and got 100
+        // would take the page for the whole of what there was.
+        if (!Number.isSafeInteger(before) || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > PAGE_LIMIT) {
           this.#refuse(frame.rid, "invalid_params");
           return;
         }
-        const events = room.eventsBefore(before as number, Math.min(limit as number, PAGE_LIMIT)).map(eventFrame);
+        const events = room.eventsBefore(before as number, limit as number).map(eventFrame);
         this.#ok(frame.rid, { events });
         return;
       }

@@ -12,8 +12,7 @@ import {
   type EventFrame,
   type Result,
   type ServerFrame,
-  type SessionOptions,
-} from "loreweaver-protocol/v3";
+  type SessionOptions, PAGE_LIMIT } from "loreweaver-protocol/v3";
 
 import { Session as ServerSession } from "../../src/net/session.ts";
 import { KEYS, ROOM, RoomBench } from "../gateway/room_bench.ts";
@@ -265,7 +264,7 @@ test("an admin's undo reaches every client as a rewind that cuts its log back to
     ["player", "one"],
     ["kp", "Reply 1"],
   ]);
-  expect(ada.session.getSnapshot().events.at(-1)).toMatchObject({ kind: "rewind", data: { to: 2, epoch: 2 } });
+  expect(ada.session.getSnapshot().events.at(-1)).toMatchObject({ kind: "rewind", data: { from: 3, kept: [], epoch: 2 } });
 
   // Typed, by a player: refused, as the caller's answer only.
   const refused = await done(b, ada.session.input(".undo"));
@@ -278,17 +277,12 @@ test("an admin's undo reaches every client as a rewind that cuts its log back to
   expect(narratives(ada).at(-1)).toEqual(["kp", "Reply 3"]);
 });
 
-// SERVER BUG — an undo can leave the client holding an event the server removed. `undoTo`
-// cuts the log BY TURN (it keeps every event of a turn ≤ M wherever it sits), but the
-// `rewind` event says only `{to}` = the newest event kept, which tells a client to drop
-// "everything after `to`". When lines are accepted while a turn is running, turns
-// interleave in the log (seq 1 = line of turn 1, 2 = line of turn 2, 3 = reply of turn 1,
-// 4 = reply of turn 2); undoing one turn removes 2 and 4 and keeps 1 and 3, so `to` = 3 and
-// the client keeps seq 2 — a line that, for the server, never happened. A resume does not
-// repair it (same generation-after-the-rewind, after = the rewind's seq). Fix belongs on
-// the server: either the rewind names what was removed (e.g. `{to, removed:[seq…]}` or the
-// removed turns, since every cut event carries a turn), or the cut keeps the log a prefix.
-test.todo("an undo of interleaved turns leaves the client's log equal to the server's", async () => {
+// Turns interleave in the log: a line is logged when it is accepted, its reply when the
+// Keeper's turn ends. Undoing the later turn then removes events from the MIDDLE, and the
+// rewind says so: everything from `from` on is gone except what `kept` names. (The first
+// form of the event, `rewind {to}` — "drop what follows `to`" — could not say it, and the
+// client kept a line the server had deleted; this test found that.)
+test("an undo of interleaved turns leaves the client's log equal to the server's", async () => {
   const b = setup();
   const ada = await join(b, KEYS.ada);
   const root = await join(b, KEYS.root);
@@ -305,6 +299,8 @@ test.todo("an undo of interleaved turns leaves the client's log equal to the ser
   await done(b, root.session.runCommand("undo", {}));
   expect(serverSeqs(b)).toEqual([1, 3, 5]);
   expect(ada.seqs()).toEqual(serverSeqs(b));
+  expect(ada.session.getSnapshot().events.at(-1)).toMatchObject({ kind: "rewind", data: { from: 2, kept: [3], epoch: 2 } });
+  expect(ada.session.getSnapshot().events as unknown[]).toEqual(serverLog(b));
 });
 
 test("drop the link and reattach: the resume fills exactly what was missed, views come back, and requests in flight were rejected", async () => {
@@ -434,4 +430,14 @@ test("ping: only the client pings, and the pong measures the round trip", async 
   const rtt = await done(b, ada.session.ping());
   expect(rtt).toBeGreaterThanOrEqual(0);
   expect(ada.session.getSnapshot().rtt).toBe(rtt);
+});
+
+test("a page over the protocol's limit is refused, not cut to it", async () => {
+  const b = setup();
+  const ada = await join(b, KEYS.ada);
+  await done(b, ada.session.input("one"));
+  const over = await done(b, ada.session.call("log.page", { before: 10, limit: PAGE_LIMIT + 1 }));
+  expect(over).toMatchObject({ ok: false, error: { code: "invalid_params" } });
+  const within = await done(b, ada.session.call("log.page", { before: 10, limit: PAGE_LIMIT }));
+  expect(within.ok).toBe(true);
 });
