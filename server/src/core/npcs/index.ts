@@ -1,0 +1,35 @@
+/**
+ * Non-player characters: the `npc` document type, the pure changes the Keeper's tools
+ * make to a record, and the projection that scopes each NPC actor to its own record.
+ */
+export {
+  createNpc,
+  learn,
+  MAX_DISPOSITION_CHARS,
+  MAX_FACT_CHARS,
+  MAX_KNOWLEDGE_FACTS,
+  MAX_LOCATION_CHARS,
+  MAX_NPC_ID_CHARS,
+  MAX_NPC_NAME_CHARS,
+  MAX_PERSONA_CHARS,
+  MAX_PUBLIC_DESCRIPTION_CHARS,
+  MAX_SECRET_AGENDA_CHARS,
+  MAX_STYLE_CHARS,
+  moveNpc,
+  type Npc,
+  type NpcChange,
+  npcData,
+  npcDocument,
+  type NpcDraft,
+  type NpcFullView,
+  type NpcRefusal,
+  npcSlug,
+  type NpcTableView,
+  type NpcView,
+  NPC_TYPE,
+  readNpc,
+  reviseNpc,
+  setDisposition,
+  setKnowledge,
+  sketchNpc,
+} from "./npc.ts";

@@ -1,0 +1,72 @@
+/**
+ * Game time and turn order.
+ *
+ * `game_clock` (the time — every viewer — and scheduled events — Keeper only),
+ * `clock_owner` (the Keeper or one module; `keeperMayAdvance` decides whether the Keeper's
+ * clock tool is offered), `initiative` (the fight's order, round and acting combatant —
+ * every viewer). `time.ts` moves clock text in the family it is written in. Every function
+ * returns new data and never mutates; refusals are codes.
+ */
+export {
+  advanceClock,
+  cancelEvent,
+  type ClockAdvance,
+  type ClockAdvanceResult,
+  type ClockChange,
+  type ClockOwner,
+  type ClockOwnerView,
+  type ClockOwnership,
+  clockOwnerDocument,
+  clockOwnershipData,
+  type ClockRefusal,
+  CLOCK_OWNER_ID,
+  CLOCK_OWNER_TYPE,
+  type GameClock,
+  gameClockData,
+  gameClockDocument,
+  type GameClockKeeperView,
+  type GameClockTableView,
+  type GameClockView,
+  GAME_CLOCK_ID,
+  GAME_CLOCK_TYPE,
+  keeperMayAdvance,
+  KEEPER_OWNS_CLOCK,
+  MAX_CLOCK_TEXT_CHARS,
+  MAX_EVENT_CHARS,
+  MAX_MODULE_ID_CHARS,
+  MAX_SCHEDULED_EVENTS,
+  mayChangeClock,
+  moduleReleasesClock,
+  moduleTakesClock,
+  type OwnershipChange,
+  type OwnershipRefusal,
+  readClockOwnership,
+  readGameClock,
+  type ScheduledEvent,
+  scheduleEvent,
+  setTime,
+  UNSET_CLOCK,
+} from "./clock.ts";
+export {
+  actingCombatant,
+  addCombatant,
+  clearInitiative,
+  type Combatant,
+  type Initiative,
+  type InitiativeChange,
+  initiativeData,
+  initiativeDocument,
+  type InitiativeRefusal,
+  type InitiativeRoll,
+  type InitiativeView,
+  INITIATIVE_ID,
+  INITIATIVE_TYPE,
+  MAX_COMBATANT_NAME_CHARS,
+  MAX_COMBATANTS,
+  nextTurn,
+  NO_FIGHT,
+  readInitiative,
+  removeCombatant,
+  rollInitiative,
+} from "./initiative.ts";
+export { advanceTime, isReadableClock, MAX_ADVANCE_MINUTES, MAX_FACE_DAY, parseDelta, type TimeAdvance } from "./time.ts";

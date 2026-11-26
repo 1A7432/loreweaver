@@ -1,0 +1,71 @@
+/**
+ * The Keeper's notebook and the table's scene card.
+ *
+ * `keeper_notes` (Keeper only: nobody else sees that it exists), `scene` (the scene's name,
+ * its focus and the facts established for the table — every viewer), `npc_intents` (what
+ * NPC actors said they intend; Keeper only, never quotable). Every function returns new
+ * data and never mutates; refusals are codes.
+ */
+export {
+  intentLogData,
+  type IntentChange,
+  type IntentLog,
+  type IntentLogView,
+  type IntentRefusal,
+  intentsOf,
+  EMPTY_INTENTS,
+  MAX_INTENT_CHARS,
+  MAX_INTENT_LOG,
+  MAX_INTENT_NPC_ID_CHARS,
+  type NpcIntent,
+  npcIntentsDocument,
+  NPC_INTENTS_ID,
+  NPC_INTENTS_TYPE,
+  readIntentLog,
+  recordIntent,
+} from "./intents.ts";
+export {
+  addNote,
+  dropCategory,
+  EMPTY_NOTES,
+  type KeeperNotes,
+  keeperNotesData,
+  keeperNotesDocument,
+  type KeeperNotesView,
+  KEEPER_NOTES_ID,
+  KEEPER_NOTES_TYPE,
+  MAX_CATEGORY_CHARS,
+  MAX_NOTE_AT_CHARS,
+  MAX_NOTE_CATEGORIES,
+  MAX_NOTE_CHARS,
+  MAX_NOTES_PER_CATEGORY,
+  type Note,
+  type NoteCategory,
+  notesIn,
+  type NotesChange,
+  type NotesRefusal,
+  readKeeperNotes,
+  reviseLastNote,
+  setNote,
+} from "./keeper_notes.ts";
+export {
+  EMPTY_SCENE,
+  establishFact,
+  type EstablishedFact,
+  MAX_ESTABLISHED_FACT_CHARS,
+  MAX_ESTABLISHED_FACTS,
+  MAX_SCENE_FOCUS_CHARS,
+  MAX_SCENE_NAME_CHARS,
+  readScene,
+  retractFact,
+  type Scene,
+  type SceneChange,
+  sceneData,
+  sceneDocument,
+  type SceneRefusal,
+  type SceneView,
+  SCENE_ID,
+  SCENE_TYPE,
+  setSceneFocus,
+  setSceneName,
+} from "./scene.ts";
