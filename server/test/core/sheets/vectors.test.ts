@@ -15,6 +15,7 @@ import {
   newSheet,
   parseSheet,
   refreshSheet,
+  normalizeAlias,
   resolveName,
   resourceLabels,
   type Sheet,
@@ -104,6 +105,18 @@ function objectOf(values: ReadonlyMap<string, DerivedValue>): Record<string, Jso
   return Object.fromEntries(values);
 }
 
+/**
+ * RULING (2026-11-27, from a live run): a name the pack DERIVES, and the label a pack
+ * displays a stat under, are names of that stat. The old engine resolved neither — coc7
+ * derives Dodge from DEX and shows it as "Dodge" but lists no alias for it — so a check on
+ * Dodge was refused as an unknown skill. Cells where the old answer was "no such name" and
+ * the name is one of these are skipped under this reason.
+ */
+const NAMED_BY_PACK = "ruling: a derived stat and a display label are names";
+function namedByPack(sheetSpec: ReturnType<typeof spec>, name: string): boolean {
+  return !sheetSpec.aliases.has(normalizeAlias(name)) && resolveName(sheetSpec, name) !== null;
+}
+
 /** Every comparison matched, and the coverage is what it was: `compared` cells, and
  * `skipped` cells per reason (each reason is explained in adapter.ts or at its skip). */
 function pin(t: Tally, compared: number, skipped: Record<string, number> = {}): void {
@@ -116,9 +129,12 @@ describe("sheets_cases", () => {
     const t = tally();
     for (const probe of probes.values()) {
       const sheetSpec = spec(probe.pack);
-      probe.names.forEach((name, i) => check(t, `${probe.pack} resolve ${JSON.stringify(name)}`, resolveName(sheetSpec, name), probe.resolved[i]));
+      probe.names.forEach((name, i) => {
+        if (probe.resolved[i] === null && namedByPack(sheetSpec, name)) skip(t, NAMED_BY_PACK);
+        else check(t, `${probe.pack} resolve ${JSON.stringify(name)}`, resolveName(sheetSpec, name), probe.resolved[i]);
+      });
     }
-    pin(t, 297);
+    pin(t, 274, { [NAMED_BY_PACK]: 23 });
   });
 
   test("loaded sheets, canonical values, derived values and hit points", () => {
@@ -223,10 +239,11 @@ describe("sheets_cases", () => {
         else if (rawUnderCanonical(target)) skip(t, "skill stored under its canonical name");
         else check(t, `${label} check value`, readNumber(checkValue(sheetSpec, sheet, canonical)), row.probe.check_value[i]);
         if (namesStaleSlot(name)) skip(t, "stale derived slot (loaded)");
+        else if (row.probe.has_check[i] === false && namedByPack(sheetSpec, name)) skip(t, NAMED_BY_PACK);
         else check(t, `${label} has check`, hasCheckValue(sheetSpec, sheet, name), row.probe.has_check[i]);
       });
     }
-    pin(t, 23590, { "stale derived slot (loaded)": 167, "see loaded": 3555, "skill stored under its canonical name": 6 });
+    pin(t, 23071, { "stale derived slot (loaded)": 167, "see loaded": 3555, "skill stored under its canonical name": 6, [NAMED_BY_PACK]: 519 });
   });
 
   test("wire resources, loaded and refreshed, every locale", () => {
@@ -358,9 +375,10 @@ describe("sheets_aliases", () => {
   test("resolve_skill", () => {
     const t = tally();
     for (const row of rows.filter((r) => r.kind === "resolve_skill")) {
-      check(t, `${row.pack} ${JSON.stringify(row.name)}`, resolveName(spec(row.pack as string), row.name as string), row.canonical);
+      if (row.canonical === null && namedByPack(spec(row.pack as string), row.name as string)) skip(t, NAMED_BY_PACK);
+      else check(t, `${row.pack} ${JSON.stringify(row.name)}`, resolveName(spec(row.pack as string), row.name as string), row.canonical);
     }
-    pin(t, 2473);
+    pin(t, 2436, { [NAMED_BY_PACK]: 37 });
   });
 
   test("resource_label_map", () => {

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { Services } from "../../../src/agent/context.ts";
 import {
   FoldBudget,
+  SUMMARY_TARGET_RATIO,
   type FoldOutcome,
   type FoldRequest,
   type FoldSource,
@@ -91,7 +92,8 @@ describe("the prompt", () => {
     const outcome = await routineFold(models(llm), { ...base(new FoldBudget(), { records: sources(10) }), reading: reading(2_000) });
     expect(outcome.calls).toBe(1);
     const [system, user] = llm.calls[0] ?? [];
-    expect(system?.content).toContain("write an UPDATED summary of at most 4000 characters");
+    // The model is asked for less than is accepted (85% of the cap): it does not count characters.
+    expect(system?.content).toContain("write an UPDATED summary of at most 3400 characters");
     expect(user?.content).toStartWith("Previous summary (carry its pivotal facts forward):\nSo far: the party met Martha.\n\nChronicle records to fold in (oldest first):\n- [turn 1] line 1\n- [turn 2] line 2\n");
     expect(user?.content).toEndWith("- [turn 10] line 10\n\nUpdated campaign summary:");
     expect(prompt(llm)).not.toContain("KEEPER-ANNOTATION-MARKER");
@@ -179,7 +181,7 @@ describe("an over-long summary", () => {
     expect(outcome.summary?.text).toBe("Short summary.");
     const retry = llm.calls[1] ?? [];
     expect(retry.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
-    expect(retry[3]?.content).toContain("4010 characters, 10 over the limit of 4000");
+    expect(retry[3]?.content).toContain("4010 characters, 610 over the limit of 3400");
   });
 
   test("twice too long: folding stops for this turn, nothing lands, the routine stamp is still written", async () => {
@@ -288,4 +290,18 @@ test("isContextOverflow: the provider's refusal or the window, never the output 
   expect(isContextOverflow({ content: "", toolCalls: [], stopReason: "context_window" })).toBe(true);
   expect(isContextOverflow({ content: "", toolCalls: [], stopReason: "output_cap" })).toBe(false);
   expect(isContextOverflow(new Error("x"))).toBe(false);
+});
+
+describe("the target and the cap", () => {
+  test("a summary over what was asked for but within the cap lands without a re-ask", async () => {
+    // What a live model did, turn after turn: asked for N it wrote a little more. Refusing at
+    // the number it was told meant the fold stopped landing; the cap is the refusal line.
+    const llm = new ScriptedLLM(["s".repeat(3_950)]);
+    const budget = new FoldBudget();
+    const outcome = await routineFold(models(llm), { ...base(budget, { records: sources(10) }), reading: reading(2_000) });
+    expect(outcome.stopped).toBeNull();
+    expect(outcome.calls).toBe(1);
+    expect(outcome.summary?.text.length).toBe(3_950);
+    expect(SUMMARY_TARGET_RATIO).toBeLessThan(1);
+  });
 });

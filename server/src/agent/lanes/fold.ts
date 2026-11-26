@@ -188,6 +188,9 @@ function sameStamp(left: FoldMeterStamp | null, right: FoldMeterStamp | null): b
   return left.tokens === right.tokens && left.estimated === right.estimated;
 }
 
+/** The share of the summary cap the model is asked to stay within; the cap itself is what is refused. */
+export const SUMMARY_TARGET_RATIO = 0.85;
+
 /** The re-ask after an over-long summary. Text for the model: English, kept with the code. */
 function tooLongMessage(length: number, limit: number): string {
   return (
@@ -240,7 +243,12 @@ async function foldBatch(
   counter: { calls: number },
 ): Promise<BatchResult> {
   const limit = Math.min(request.settings.summaryMaxChars, MAX_SUMMARY_CHARS);
-  const messages = foldMessages(request.locale, previous, batch, limit);
+  // The model is ASKED for less than is accepted. A model does not count characters; told
+  // "at most 4,000" a live one wrote 4,060-4,550, and re-asked it landed on 4,002 and 4,031
+  // - refused by a hair, turn after turn, so the fold stopped landing and the context grew
+  // again. Asking for the target and accepting up to the cap gives it room to miss.
+  const target = Math.max(1, Math.floor(limit * SUMMARY_TARGET_RATIO));
+  const messages = foldMessages(request.locale, previous, batch, target);
   let asked = false;
   for (;;) {
     if (!request.budget.take()) return { ok: false, stop: { code: "budget_spent" } };
@@ -253,7 +261,7 @@ async function foldBatch(
     const length = codePoints(reply.result.content.trim());
     if (asked || request.budget.remaining <= 0) return { ok: false, stop: { code: "too_long", length, limit } };
     asked = true;
-    messages.push({ role: "assistant", content: reply.result.content }, { role: "user", content: tooLongMessage(length, limit) });
+    messages.push({ role: "assistant", content: reply.result.content }, { role: "user", content: tooLongMessage(length, target) });
   }
 }
 

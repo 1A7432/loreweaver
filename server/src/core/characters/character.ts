@@ -52,7 +52,7 @@ export const MAX_MEMBER_ID_CHARS = 128;
 /** Status effects on one character: they share a line on the party panel. */
 export const MAX_STATUS_EFFECTS = 12;
 /** One status effect, in code points. */
-export const MAX_STATUS_CHARS = 40;
+export const MAX_STATUS_CHARS = 80;
 
 export interface Character {
   readonly pack: string;

@@ -12,7 +12,19 @@ import { normalizeAlias, normalizeLocale, pickLabel } from "./text.ts";
 
 /** The canonical name a typed stat name stands for, by the pack's alias table, or null. */
 export function resolveName(spec: SheetSpec, name: string): string | null {
-  return spec.aliases.get(normalizeAlias(name)) ?? null;
+  const alias = spec.aliases.get(normalizeAlias(name));
+  if (alias !== undefined) return alias;
+  // A name the pack DERIVES is a name too, though no alias row lists it, and so is the label
+  // the pack displays a stat under. Without these a CoC room refused a check on Dodge — the
+  // pack derives it from DEX, shows it as "Dodge", and listed neither as an alias — and a
+  // live Keeper was told the skill does not exist. Aliases come first; this only answers
+  // names that resolved to nothing.
+  const typed = normalizeAlias(name);
+  for (const rule of spec.derived) if (normalizeAlias(rule.name) === typed) return rule.name;
+  for (const table of spec.displayNames.values()) {
+    for (const [canonical, label] of table) if (normalizeAlias(label) === typed) return canonical;
+  }
+  return null;
 }
 
 /**

@@ -134,7 +134,7 @@ describe("the Keeper's NPC changes", () => {
     const npc = ok(createNpc({ name: "Tom", secretAgenda: "keep the ledger hidden" }));
     const moved = ok(moveNpc(npc, "the mill", true));
     expect([moved.location, moved.locationKnown, moved.secretAgenda]).toEqual(["the mill", true, "keep the ledger hidden"]);
-    expect(moveNpc(npc, "l".repeat(121), true)).toEqual({ ok: false, code: "bad_location" });
+    expect(moveNpc(npc, "l".repeat(241), true)).toEqual({ ok: false, code: "bad_location" });
     expect(ok(setDisposition(npc, "wary")).disposition).toBe("wary");
     // An attitude with its reason fits; only a wall of text is refused.
     expect(ok(setDisposition(npc, "d".repeat(MAX_DISPOSITION_CHARS))).disposition.length).toBe(MAX_DISPOSITION_CHARS);

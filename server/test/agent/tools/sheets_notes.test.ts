@@ -60,7 +60,7 @@ describe("character sheets", () => {
     expect(done.text).toBe("Character status updated: Poisoned, Afraid");
     expect(stored(room, CHARACTER_TYPE, "ada")?.status).toEqual(["Poisoned", "Afraid"]);
     expect((await room.call(catalog, "update_character_status", { status_effects: "Poisoned" })).code).toBe("invalid_status");
-    expect((await room.call(catalog, "update_character_status", { status_effects: JSON.stringify(["x".repeat(41)]) })).code).toBe("bad_status");
+    expect((await room.call(catalog, "update_character_status", { status_effects: JSON.stringify(["x".repeat(81)]) })).code).toBe("bad_status");
   });
 });
 
