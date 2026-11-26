@@ -14,12 +14,27 @@
 // - OpenAI status table (401/403/429/500/503, Retry-After):
 //   https://developers.openai.com/api/docs/guides/error-codes
 //
-// Deliberately NOT classified as `context_overflow`: the OpenAI-compatible wire. OpenAI's
-// error-code guide does not list a context-length error for chat completions; the
-// `context_length_exceeded` code is documented only for the Agents API (as a turn error
-// without an HTTP status), and the "maximum context length is N tokens" message only for
-// the embeddings endpoint. The check is per endpoint, so that lane's overflow arrives as
-// `bad_request` until a vendor documents it.
+// Context overflow on the OpenAI-compatible wire (looked up 2026-11-26). No two vendors
+// report it the same way, and most do not list it on their error page at all, so the
+// evidence is what the endpoints actually return: every one answers HTTP 400, and the
+// only signal that holds across them is the wording of the message.
+// - OpenAI chat completions: `code: "context_length_exceeded"`, `param: "messages"`,
+//   "This model's maximum context length is N tokens. However, …"; the newer wording is
+//   "Your input exceeds the context window of this model". Its error-code guide lists
+//   neither; captured bodies: https://community.openai.com/t/681792
+// - xAI: NO such code. "This model's maximum prompt length is N but the request
+//   contains M tokens." Its debugging page lists only a generic 400; the wording is from
+//   live provider tests (https://github.com/badlogic/pi-mono/issues/129) and a
+//   verification against grok-4.5 dated 2026-07-28 quoting the same sentence.
+// - DeepSeek: the OpenAI sentence, but `code: "invalid_request_error"` — the code alone
+//   would miss it (captured body: https://community.n8n.io/t/85711).
+// - OpenRouter: documented. `error.metadata.error_type: "context_length_exceeded"`, and
+//   "This endpoint's maximum context length is N tokens"
+//   (https://openrouter.ai/docs/api_reference/errors-and-debugging).
+// - Groq: "Please reduce the length of the messages or completion" (pi-mono, as above).
+// The old server matched the code and the OpenAI sentence only, so it never recognised
+// an overflow from xAI. A wording not listed here stays `bad_request`: add it with its
+// source when it is seen.
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
@@ -141,6 +156,27 @@ export function fromAnthropicError(error: unknown, signal?: AbortSignal): LLMErr
   return new LLMError({ ...base, code, status: error.status, retryable });
 }
 
+/** Each wording, with the vendor it was captured from (sources in the header). */
+const OPENAI_WIRE_OVERFLOW: readonly RegExp[] = [
+  /maximum context length is [\d,]+ tokens/i, // OpenAI, DeepSeek, OpenRouter
+  /exceeds the context window/i, // OpenAI, newer wording
+  /maximum prompt length is [\d,]+/i, // xAI
+  /reduce the length of the messages/i, // Groq
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether a 400 from an OpenAI-compatible endpoint says the prompt does not fit the window. */
+function openAIWireOverflow(error: InstanceType<typeof OpenAI.APIError>): boolean {
+  if (error.code === "context_length_exceeded") return true;
+  const body: unknown = error.error;
+  const metadata = isRecord(body) ? body.metadata : undefined;
+  if (isRecord(metadata) && metadata.error_type === "context_length_exceeded") return true;
+  return OPENAI_WIRE_OVERFLOW.some((pattern) => pattern.test(error.message));
+}
+
 export function fromOpenAIError(error: unknown, signal?: AbortSignal): LLMError {
   if (error instanceof LLMError) return error;
   if (isAbort(error, signal)) return abortedError("openai-compatible", error);
@@ -154,6 +190,7 @@ export function fromOpenAIError(error: unknown, signal?: AbortSignal): LLMError 
   // A mid-stream error payload carries no status, and this wire documents no shape for it.
   if (error.status === undefined) return new LLMError({ ...base, code: "unknown", retryable: false });
   let { code, retryable } = byStatus(error.status);
+  if (error.status === 400 && openAIWireOverflow(error)) code = "context_overflow";
   // The SDK obeys this header in its own retry decision (node_modules/openai/client.js, `shouldRetry`).
   const shouldRetry = error.headers?.get("x-should-retry");
   if (shouldRetry === "false") retryable = false;

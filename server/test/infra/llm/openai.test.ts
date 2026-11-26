@@ -202,12 +202,30 @@ test("errors are classified by status, carrying the status and the provider's ow
   expect([network.code, network.retryable]).toEqual(["transient", true]);
 });
 
-test("a context overflow on this wire stays a bad request: chat completions documents no overflow error", async () => {
-  const overflow = await failure({
-    status: 400,
-    json: { error: { message: "This model's maximum context length is 128000 tokens.", type: "invalid_request_error", param: "messages", code: "context_length_exceeded" } },
-  });
-  expect(overflow.code).toBe("bad_request");
+test("a context overflow is recognised in each vendor's own wording, and is never retried", async () => {
+  const bodies: [string, Record<string, unknown>][] = [
+    ["OpenAI", { message: "This model's maximum context length is 128000 tokens. However, your messages resulted in 134521 tokens. Please reduce the length of the messages.", type: "invalid_request_error", param: "messages", code: "context_length_exceeded" }],
+    ["OpenAI, code only", { message: "Request rejected.", code: "context_length_exceeded" }],
+    ["OpenAI, newer wording", { message: "Your input exceeds the context window of this model. Please adjust your input and try again." }],
+    ["xAI", { message: "This model's maximum prompt length is 500000 but the request contains 700207 tokens." }],
+    ["DeepSeek", { message: "This model's maximum context length is 65536 tokens. However, you requested 73149 tokens (73149 in the messages, 0 in the completion).", type: "invalid_request_error", param: null, code: "invalid_request_error" }],
+    ["OpenRouter", { message: "This endpoint's maximum context length is 200,000 tokens. However, you requested about 250,000 tokens", code: 400, metadata: { error_type: "context_length_exceeded" } }],
+    ["OpenRouter, type only", { message: "Provider returned error", code: 400, metadata: { error_type: "context_length_exceeded" } }],
+    ["Groq", { message: "Please reduce the length of the messages or completion." }],
+  ];
+  for (const [vendor, error] of bodies) {
+    const overflow = await failure({ status: 400, json: { error } });
+    expect([vendor, overflow.code, overflow.retryable, overflow.status]).toEqual([vendor, "context_overflow", false, 400]);
+  }
+});
+
+test("an ordinary bad request, or overflow wording on another status, is not an overflow", async () => {
+  const plain = await failure({ status: 400, json: { error: { message: "Invalid value for max_tokens: must be at most 8192", code: "invalid_request_error" } } });
+  expect(plain.code).toBe("bad_request");
+  const capped = await failure({ status: 400, json: { error: { message: "max_tokens is too large: 200000. This model supports at most 32768 completion tokens." } } });
+  expect(capped.code).toBe("bad_request");
+  const limited = await failure({ status: 429, json: { error: { message: "Rate limit: maximum context length is 128000 tokens per minute" } } });
+  expect(limited.code).toBe("rate_limited");
 });
 
 test("aborting mid-stream throws instead of returning the partial reply as if complete", async () => {
