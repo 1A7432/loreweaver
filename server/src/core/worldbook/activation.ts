@@ -21,11 +21,22 @@
  *     member outright, else the highest-priority `groupOverride` member, else a
  *     weighted draw (`filterByInclusionGroups`: groups are comma-separated names, the
  *     winner keeps its place in the list, losers are removed);
- *  7. order — stable sort by placement bucket (`before`, everything else, `after`), then
- *     priority descending, then stored order;
+ *  7. selection order — stable sort by placement bucket (`before`, everything else,
+ *     `after`), then priority descending, then stored order: when the count limit or the
+ *     budget cannot take everything, the larger order numbers are kept;
  *  8. count limit, then the character budget: an entry that would overflow the budget is
  *     skipped and a later smaller one may still fit; the budget counts raw content code
- *     points.
+ *     points;
+ *  9. placement — what was selected is laid out, within its bucket, by priority ASCENDING
+ *     (ties in stored order). An entry's priority is a card's Insertion Order, and
+ *     SillyTavern places by it this way: "Entries with larger order numbers will be
+ *     inserted closer to the end of the context as they will have more impact on the
+ *     output. For example, an entry with Order number 100 will appear in the context
+ *     before an entry with Order number 250" — and selects the other way: "Constant
+ *     entries will be inserted first. Then entries with larger order numbers."
+ *     (https://docs.sillytavern.app/usage/core-concepts/worldinfo/, read 2026-11-27.)
+ *     The 2.6 engine laid entries out in SELECTION order, so a card written 10, 20, 30
+ *     reached the model as 30, 20, 10.
  *
  * Steps 4-6 keep this engine's recorded order (probability before conditions before
  * groups), where ST runs groups before probability and has no conditions; and timers
@@ -253,16 +264,21 @@ export function activate(input: ActivationInput): Activation {
         PLACEMENT_RANK[a.entry.placement] - PLACEMENT_RANK[b.entry.placement] || b.entry.priority - a.entry.priority || a.index - b.index,
     )
     .map(({ entry }) => entry);
-  const selected: LoreEntry[] = [];
+  const kept: LoreEntry[] = [];
   let used = 0;
   if (budget > 0) {
     for (const entry of ordered.slice(0, maxEntries)) {
       const size = codePoints(entry.content);
       if (used + size > budget) continue;
-      selected.push(entry);
+      kept.push(entry);
       used += size;
     }
   }
+  // Step 9: placement. `grouped` is in stored order, so its index is the tie-break.
+  const stored = new Map(grouped.map((entry, index) => [entry, index] as const));
+  const selected = [...kept].sort(
+    (a, b) => PLACEMENT_RANK[a.placement] - PLACEMENT_RANK[b.placement] || a.priority - b.priority || (stored.get(a) ?? 0) - (stored.get(b) ?? 0),
+  );
 
   return { selected, visible, timers: nextTimers(input, pool, selected, stickyIds, turn), turn };
 }

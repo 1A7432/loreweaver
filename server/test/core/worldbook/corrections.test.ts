@@ -46,6 +46,35 @@ function run(book: LoreEntry[], context: string, draws: { lo: number; hi: number
   return result.selected.map((entry) => entry.title);
 }
 
+describe("placement follows SillyTavern's Insertion Order (docs: World Info, Insertion Order / Budget)", () => {
+  const book = (): LoreEntry[] =>
+    entries([
+      { comment: "thirty", content: "c", constant: true, insertion_order: 30 },
+      { comment: "ten", content: "a", constant: true, insertion_order: 10 },
+      { comment: "after", content: "z", constant: true, insertion_order: 5, position: "after_char" },
+      { comment: "twenty", content: "b", constant: true, insertion_order: 20 },
+      { comment: "twenty-again", content: "b2", constant: true, insertion_order: 20 },
+    ]);
+
+  test("larger order numbers sit closer to the end; equal ones keep their stored order; the placement bucket comes first", () => {
+    expect(run(book(), "")).toEqual(["ten", "twenty", "twenty-again", "thirty", "after"]);
+  });
+
+  test("a limit keeps the LARGER order numbers, and what is kept is still laid out ascending", () => {
+    const selected = activate({
+      entries: book().filter((entry) => entry.title !== "after"),
+      viewer: "keeper",
+      transcript: [],
+      timers: EMPTY_TIMERS,
+      advanceTimers: true,
+      random: new SeededRandom("order"),
+      conditionHolds: () => true,
+      maxEntries: 2,
+    }).selected.map((entry) => entry.title);
+    expect(selected).toEqual(["twenty", "thirty"]);
+  });
+});
+
 describe("import follows SillyTavern's field sources (world-info.js)", () => {
   test("native `disable: true` imports disabled", () => {
     expect(importOne({ disable: true }).enabled).toBe(false);

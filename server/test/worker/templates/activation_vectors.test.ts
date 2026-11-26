@@ -69,6 +69,9 @@ const SKIPPED: Readonly<Record<string, string>> = {
   render_full_ejs_error_falls_back: "a failed template renders as nothing; there is no subset fallback in 3.0",
   whole_word_non_word_key: "a one-word key with a hyphen is boundary-checked as in ST (only a key with whitespace is a plain substring): `dark-elf` is not in `dark-elfling`",
   condition_js_only_no_engine: "there is no engine-less mode in 3.0: the JavaScript condition is evaluated (and holds)",
+  ordering_position_priority: "selected entries are laid out by Insertion Order ascending within a placement (ST: larger order numbers closer to the end of the context); the old engine laid them out largest first",
+  limit_truncates: "same: the limit still keeps the larger order numbers, the layout is ascending",
+  budget_skips_and_continues: "same: the budget still fills from the larger order numbers, the layout is ascending",
   whole_word_unicode_neighbor:"whole-word boundaries are ASCII as in ST's non-`u` `\\W`: `gun` is found in `他拿起gun了`",
 };
 
