@@ -321,3 +321,6 @@ export function decodeClientFrame(raw: unknown): Decoded<ClientFrame> {
       return { ok: false, code: "bad_frame" };
   }
 }
+
+// The built-in views' types and schemas, on the same entry (`loreweaver-protocol/v3`).
+export * from "./views.js";
