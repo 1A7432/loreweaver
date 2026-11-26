@@ -39,21 +39,9 @@ export class Hub {
   room(id: string): Room {
     const existing = this.#rooms.get(id);
     if (existing) return existing;
-    const paths = this.#deps.modulesFor(id);
-    // A room with no content code has no worker at all.
-    let worker: RoomWorker | null = null;
-    if (paths.length > 0) {
-      worker = new RoomWorker(this.#deps.spawnWorker, paths, {
-        timeoutMs: this.#deps.workerTimeoutMs,
-        coldStart: this.#deps.workerColdStart?.(id) ?? false,
-        now: () => this.#deps.clock.now(),
-        checkpoints: this.#deps.store.moduleStates(id) as Map<string, Json>,
-        onCheckpoint: (module, snapshot) => {
-          this.#deps.store.writer(id).setModuleState(module, snapshot);
-        },
-      });
-      this.#workers.set(id, worker);
-    }
+    // A room with content code gets its worker now; one without has none until its lore
+    // needs one (`workerForLore`).
+    const worker = this.#deps.modulesFor(id).length > 0 ? (this.#workers.get(id) ?? this.#worker(id)) : null;
     const room = new Room(
       id,
       this.#deps.store,
@@ -63,6 +51,35 @@ export class Hub {
     );
     this.#rooms.set(id, room);
     return room;
+  }
+
+  /**
+   * The room's worker for the lore exchange, started on demand.
+   *
+   * Which rooms need a worker: a room with modules (known when the room is first used,
+   * from `modulesFor`), and a room whose lore assembly has at least one enabled entry to
+   * scan. The second test costs nothing extra: the lore step reads the room's entries to
+   * build its request anyway, and calls this only when one is enabled (a room with no lore
+   * never starts a thread). A room that has both shares ONE worker — one thread per room,
+   * one queue (decision 21). The worker is kept like any other: idle eviction and `close`
+   * stop it, and the next call starts a fresh one.
+   */
+  workerForLore(id: string): RoomWorker {
+    return this.#workers.get(id) ?? this.#worker(id);
+  }
+
+  #worker(id: string): RoomWorker {
+    const worker = new RoomWorker(this.#deps.spawnWorker, this.#deps.modulesFor(id), {
+      timeoutMs: this.#deps.workerTimeoutMs,
+      coldStart: this.#deps.workerColdStart?.(id) ?? false,
+      now: () => this.#deps.clock.now(),
+      checkpoints: this.#deps.store.moduleStates(id) as Map<string, Json>,
+      onCheckpoint: (module, snapshot) => {
+        this.#deps.store.writer(id).setModuleState(module, snapshot);
+      },
+    });
+    this.#workers.set(id, worker);
+    return worker;
   }
 
   /**

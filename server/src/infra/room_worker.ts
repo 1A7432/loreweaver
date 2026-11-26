@@ -15,6 +15,7 @@ import type {
   CommandRequest,
   CommandValue,
   LoadValue,
+  LoreRequest,
   ModuleDescription,
   RenderValue,
   TurnStartValue,
@@ -163,6 +164,19 @@ export class RoomWorker {
   }
 
   /**
+   * The lore exchange: the worldbook scan with its template rendering, run as one job in
+   * the worker. Read-only for modules — it touches no module state and returns no
+   * checkpoint — and asked of every room that has lore, whether or not any module is
+   * loaded: the worker is started for it when it is not running. Same queue and the same
+   * timeout as every other call: a template that hangs the thread past `timeoutMs` ends
+   * the worker, this call rejects with `WorkerTimeout`, and the next call starts a fresh
+   * one from the checkpoints. The answer is unchecked; the caller validates it.
+   */
+  assembleLore(request: LoreRequest): Promise<unknown> {
+    return this.#enqueue(() => this.#exchange({ op: "lore", request }));
+  }
+
+  /**
    * Stop the worker if no call has run for more than `maxIdleMs`. Queued behind any call
    * in flight, so it never cuts one short. Resolves whether it stopped a worker.
    */
@@ -185,7 +199,7 @@ export class RoomWorker {
     await this.#terminate();
   }
 
-  #call<Op extends Exclude<WorkerOp, "load">>(
+  #call<Op extends Exclude<WorkerOp, "load" | "lore">>(
     request: Extract<Request, { op: Op }>,
     handles: (module: ModuleDescription) => boolean,
     empty: () => WorkerValues[Op],

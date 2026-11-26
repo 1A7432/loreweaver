@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { ServerFrame } from "loreweaver-protocol/v3";
 
 import { builtInPacks } from "../core/rulepacks/index.ts";
+import { builtInSkills } from "../core/skills/index.ts";
 import { Hub } from "../gateway/hub.ts";
 import { systemClock } from "../infra/ids.ts";
 import { ScriptedLLM } from "../infra/llm/index.ts";
@@ -48,6 +49,13 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
     steps.rule_packs_embedded = builtInPacks().length >= 3;
   } catch {
     steps.rule_packs_embedded = false;
+  }
+  // The built-in skills are `.md` text embedded the same way; parsing them proves the text
+  // loader kept them (a bundler that dropped the attribute would hand over something else).
+  try {
+    steps.skills_embedded = builtInSkills().every((skill) => skill.body.length > 0) && builtInSkills().length === 3;
+  } catch {
+    steps.skills_embedded = false;
   }
   const dir = mkdtempSync(join(tmpdir(), "loreweaver-selftest-"));
   const modulePath = join(dir, "module.ts");

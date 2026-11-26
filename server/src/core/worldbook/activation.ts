@@ -8,7 +8,11 @@
  *  2. timers — a sticky-active entry is selected without its keys; an entry still in its
  *     delay or cooldown is skipped;
  *  3. triggers — constant entries, then primary keys and the secondary-key logic
- *     (`checkWorldInfo` in SillyTavern `public/scripts/world-info.js`);
+ *     (`checkWorldInfo` in SillyTavern `public/scripts/world-info.js`), then the
+ *     caller's semantic hits: an entry vector recall found triggers as if a key had
+ *     matched (the reference's `match` / `_semantic_hits`). A hit still passes every
+ *     other step — visibility first, so a hit can never admit a disabled or (for a
+ *     player) secret entry, nor one in its delay or cooldown;
  *  4. probability — one `nextInt(1, 100)` draw per triggered entry with
  *     0 < probability < 100 that is not sticky-active; it survives when the draw is
  *     <= its probability;
@@ -63,6 +67,12 @@ export interface ActivationInput {
   readonly budgetChars?: number;
   /** false: constant entries select only through their keys (a browse/search posture). */
   readonly includeConstant?: boolean;
+  /**
+   * Entry ids a semantic (vector) recall found for this transcript, computed by the
+   * caller on the main thread. Ids of entries that do not exist or are not visible are
+   * ignored. Absent: lexical triggers only.
+   */
+  readonly semanticHits?: readonly string[];
   /** Whether a non-empty condition holds; called at most once per distinct condition. */
   readonly conditionHolds: (condition: string) => boolean;
 }
@@ -203,6 +213,7 @@ export function activate(input: ActivationInput): Activation {
     return window;
   };
   const stickyIds = new Set<string>();
+  const semantic = new Set((input.semanticHits ?? []).slice(0, MAX_ACTIVATION_ENTRIES));
   const triggered: LoreEntry[] = [];
   for (const entry of visible) {
     if (stickyActive(entry)) {
@@ -211,7 +222,7 @@ export function activate(input: ActivationInput): Activation {
       continue;
     }
     if (!eligible(entry)) continue;
-    if ((entry.constant && includeConstant) || keywordHit(entry, windowFor(entry.scanDepth))) triggered.push(entry);
+    if ((entry.constant && includeConstant) || keywordHit(entry, windowFor(entry.scanDepth)) || semantic.has(entry.id)) triggered.push(entry);
   }
 
   // Step 4: sticky-active entries already paid their roll when they fired.

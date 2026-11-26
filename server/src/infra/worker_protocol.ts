@@ -18,6 +18,14 @@ export type {
   TurnStartValue,
 } from "loreweaver/runner";
 
+/**
+ * The lore exchange's request: plain data shaped as `worker/templates`' `LoreAssemblyRequest`.
+ * This layer cannot name that type (it sits below `core`), and nothing needs it to: the
+ * worker reads the request as that shape, and its answer is checked by the engine as
+ * untrusted data (`agent/lore_step.ts`), so the answer is typed `unknown` here.
+ */
+export type LoreRequest = Readonly<Record<string, unknown>>;
+
 export type WorkerRequest =
   | {
       readonly id: number;
@@ -31,7 +39,9 @@ export type WorkerRequest =
   | { readonly id: number; readonly op: "toolUse"; readonly event: ToolUseEvent }
   | { readonly id: number; readonly op: "replyPhase"; readonly event: ReplyPhaseEvent }
   | { readonly id: number; readonly op: "command"; readonly request: CommandRequest }
-  | { readonly id: number; readonly op: "render"; readonly request: RenderRequest };
+  | { readonly id: number; readonly op: "render"; readonly request: RenderRequest }
+  /** Read-only: the worldbook scan and template rendering of one prompt assembly. */
+  | { readonly id: number; readonly op: "lore"; readonly request: LoreRequest };
 
 /** The value each op answers with. */
 export interface WorkerValues {
@@ -41,6 +51,8 @@ export interface WorkerValues {
   readonly replyPhase: CallValue;
   readonly command: CommandValue;
   readonly render: RenderValue;
+  /** A `LoreAssemblyResult`, unchecked: the engine validates it. */
+  readonly lore: unknown;
 }
 
 export type WorkerOp = WorkerRequest["op"];

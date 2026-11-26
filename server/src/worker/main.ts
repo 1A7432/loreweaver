@@ -11,6 +11,7 @@ import { SeededRandom } from "../core/random.ts";
 import { importModule } from "../infra/runtime/module_loader.ts";
 import { onHostMessage, postToHost } from "../infra/runtime/worker.ts";
 import type { WorkerRequest, WorkerResponse, WorkerValues } from "../infra/worker_protocol.ts";
+import { assembleLore, type LoreAssemblyRequest } from "./templates/index.ts";
 
 // Engine dice: the runner derives one seed per roll from the call's seed, the module and
 // an ordinal, so a replayed call rolls the same faces.
@@ -41,6 +42,10 @@ function perform(request: WorkerRequest): Promise<WorkerValues[WorkerRequest["op
       return runner.command(request.request);
     case "render":
       return runner.render(request.request);
+    case "lore":
+      // Pure and synchronous: a fresh template context per call, nothing kept after it.
+      // It touches no module, so it returns no checkpoints.
+      return Promise.resolve(assembleLore(request.request as unknown as LoreAssemblyRequest));
   }
 }
 

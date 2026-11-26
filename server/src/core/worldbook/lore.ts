@@ -50,6 +50,8 @@ export interface LoreStepInput {
   readonly maxEntries?: number;
   readonly budgetChars?: number;
   readonly includeConstant?: boolean;
+  /** Entry ids a semantic recall found (see `ActivationInput.semanticHits`). */
+  readonly semanticHits?: readonly string[];
 }
 
 export interface InjectedEntry {
@@ -118,6 +120,7 @@ export function runLoreStep(input: LoreStepInput, renderer: TemplateRenderer): L
     ...(input.maxEntries === undefined ? {} : { maxEntries: input.maxEntries }),
     ...(input.budgetChars === undefined ? {} : { budgetChars: input.budgetChars }),
     ...(input.includeConstant === undefined ? {} : { includeConstant: input.includeConstant }),
+    ...(input.semanticHits === undefined ? {} : { semanticHits: input.semanticHits }),
     conditionHolds: conditionJudge(input.variables, renderer),
   });
   const macros: MacroContext = {

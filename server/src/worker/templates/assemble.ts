@@ -53,6 +53,8 @@ export interface LoreAssemblyRequest {
   readonly maxEntries?: number;
   readonly budgetChars?: number;
   readonly includeConstant?: boolean;
+  /** Entry ids a semantic recall found on the main thread (`ActivationInput.semanticHits`). */
+  readonly semanticHits?: readonly string[];
   readonly limits?: Partial<TemplateLimits>;
 }
 
@@ -161,6 +163,7 @@ export function assembleLoreWith(request: LoreAssemblyRequest, overrides: Assemb
       ...(request.maxEntries === undefined ? {} : { maxEntries: request.maxEntries }),
       ...(request.budgetChars === undefined ? {} : { budgetChars: request.budgetChars }),
       ...(request.includeConstant === undefined ? {} : { includeConstant: request.includeConstant }),
+      ...(request.semanticHits === undefined ? {} : { semanticHits: request.semanticHits }),
     },
     renderer,
   );
