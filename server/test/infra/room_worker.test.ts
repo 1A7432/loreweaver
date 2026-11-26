@@ -1,3 +1,5 @@
+import { relative as nodeRelative } from "node:path";
+
 import { afterEach, expect, test } from "bun:test";
 
 import { RoomWorker, WorkerTimeout } from "../../src/infra/room_worker.ts";
@@ -72,8 +74,29 @@ test("a worker started with stored checkpoints restores them", async () => {
   expect((await w.turnStart(event(1, "x"))).checkpoints).toEqual({ counter: { turns: 42 } });
 });
 
-test("a module file that does not export a definition fails the load, by name", async () => {
+test("a module file that does not export a definition is left out, by name, and the worker still runs", async () => {
   const w = new RoomWorker(() => spawnWorker(WORKER_ENTRY), [new URL("../helpers.ts", import.meta.url).pathname], { timeoutMs: 2000 });
   workers.push(w);
-  await expect(w.turnStart(event(1, "x"))).rejects.toThrow(/not a module definition/);
+  // Nothing was loaded, so nobody hears the turn — but the worker answers, as the room's lore needs it to.
+  expect((await w.turnStart(event(1, "x"))).effects).toEqual([]);
+  expect(w.loaded).toEqual([]);
+  expect(w.loadProblems.join("\n")).toMatch(/not a module definition/);
+});
+
+test("a module that cannot be imported is left out; a relative path means a file, not a package", async () => {
+  const missing = new RoomWorker(() => spawnWorker(WORKER_ENTRY), ["/no/such/module.ts"], { timeoutMs: 2000 });
+  workers.push(missing);
+  expect(await missing.describe()).toEqual([]);
+  expect(missing.loadProblems.length).toBe(1);
+  expect(missing.loadProblems[0]).toContain("/no/such/module.ts");
+
+  // `data/packs/…/entry.js` — the shape of an entry under the DEFAULT data directory `./data` —
+  // was once imported as a package named `data`, so no installed module of a default server loaded.
+  const absolute = new URL("../fixtures/sample_modules/counter.ts", import.meta.url).pathname;
+  const relative = nodeRelative(process.cwd(), absolute);
+  expect(relative.startsWith("/") || relative.startsWith(".")).toBe(false);
+  const w = new RoomWorker(() => spawnWorker(WORKER_ENTRY), [relative], { timeoutMs: 2000 });
+  workers.push(w);
+  expect((await w.describe()).map((module) => module.id)).toEqual(["counter"]);
+  expect(w.loadProblems).toEqual([]);
 });

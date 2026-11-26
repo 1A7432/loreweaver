@@ -195,12 +195,13 @@ test("cold start: every mutating call ends the worker, which shows a save() that
   expect(stats.spawns).toBe(2);
 });
 
-test("two modules claiming the clock is a load error naming both", async () => {
+test("two modules claiming the clock: the set is refused, naming both, and the worker runs with none of them", async () => {
   const w = worker(["kitchen", "ticker"]);
-  await expect(w.turnStart(turn(1, "x"))).rejects.toThrow('modules "kitchen" and "ticker" both claim the room\'s clock');
-  // The next call tries again on a new worker (a dev room may have fixed the file).
-  await expect(w.describe()).rejects.toThrow(/both claim/);
-  expect(w.running).toBe(false);
+  expect((await w.turnStart(turn(1, "x"))).effects).toEqual([]);
+  expect(await w.describe()).toEqual([]);
+  expect(w.loadProblems.join("\n")).toContain('modules "kitchen" and "ticker" both claim the room\'s clock');
+  // The worker is alive: the room's lore is assembled in it whatever became of its modules.
+  expect(w.running).toBe(true);
 });
 
 test("commands under prototype names are described but never dispatched; argument keys are data", async () => {

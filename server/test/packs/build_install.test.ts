@@ -11,6 +11,7 @@ import { openServer } from "../../src/cli/compose.ts";
 import { assemblePacks } from "../../src/gateway/packs.ts";
 import { loadSettings } from "../../src/infra/config.ts";
 import type { FetchLike } from "../../src/infra/packs/fetch.ts";
+import { PackDirectory } from "../../src/infra/packs/files.ts";
 import { readZip, writeZip } from "../../src/infra/zip.ts";
 import { jsonFile, worldCard } from "../gateway/card_files.ts";
 import { WORKER_ENTRY } from "../helpers.ts";
@@ -225,4 +226,12 @@ test("build: a pack's panels files travel with their pages and pictures", async 
   if (!read.ok) throw new Error(read.code);
   expect(read.entries.map((entry) => entry.path)).toEqual(expect.arrayContaining(["ui/panels.yaml", "ui/chart.html", "art/chart.png"]));
   expect(built.trust.panels.map((panel) => panel.id)).toEqual(["tide", "ledger", "chart", "notes"]);
+});
+
+test("a pack directory is absolute whatever the data directory was written as", () => {
+  // `./data` is the default data directory; the entry files under it are handed to a worker
+  // thread and to the module loader, and must name the same file there.
+  const root = new PackDirectory("data").root;
+  expect(root.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(root)).toBe(true);
+  expect(root.endsWith("packs")).toBe(true);
 });

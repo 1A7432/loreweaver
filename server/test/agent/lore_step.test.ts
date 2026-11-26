@@ -147,10 +147,29 @@ describe("without the worker", () => {
 
   test("a failing exchange yields no lore and a problem, never a failed turn", async () => {
     const { services, context } = lit();
-    const broken = new RoomWorker(() => spawnWorker(WORKER_ENTRY), ["/no/such/module.ts"], { timeoutMs: 3000 });
+    const broken = new RoomWorker(
+      () => {
+        throw new Error("no thread to be had");
+      },
+      [],
+      { timeoutMs: 3000 },
+    );
     workers.push(broken);
     const outcome = await runLoreStep(context, input(services), { worker: () => broken });
     expect(outcome).toMatchObject({ ran: false, text: "", problems: [{ code: "lore_failed" }] });
+  });
+
+  test("a module that cannot be loaded does not take the room's lore with it", async () => {
+    // Found live: a pack whose module failed to load left its room with no lore in the prompt,
+    // because the worker that assembles lore refused to start without its modules.
+    const { services, context } = lit();
+    const lame = new RoomWorker(() => spawnWorker(WORKER_ENTRY), ["/no/such/module.ts"], { timeoutMs: 3000 });
+    workers.push(lame);
+    const outcome = await runLoreStep(context, input(services), { worker: () => lame });
+    expect(outcome.ran).toBe(true);
+    expect(outcome.problems).toEqual([]);
+    expect(outcome.text).not.toBe("");
+    expect(lame.loadProblems.length).toBe(1);
   });
 
   test("the answer is checked as untrusted data", () => {

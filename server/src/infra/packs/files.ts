@@ -8,7 +8,7 @@
 // in a sibling directory and renamed into place, so a failure part-way never leaves a half
 // pack where a whole one is expected.
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import { ensurePrivateDir, writePrivateFile } from "../private_files.ts";
 import { checkEntryPath, MAX_ENTRIES, MAX_TOTAL_BYTES, type ZipEntry } from "../zip.ts";
@@ -118,7 +118,9 @@ export class PackDirectory {
   readonly root: string;
 
   constructor(dataDir: string) {
-    this.root = join(dataDir, PACKS_DIR);
+    // Absolute: these paths are handed to a worker thread and to the module loader, and
+    // must mean the same file whatever the process's working directory is by then.
+    this.root = resolve(dataDir, PACKS_DIR);
   }
 
   /** The index, in install order. A missing index is an empty one; a damaged one is a refusal. */

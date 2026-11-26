@@ -45,7 +45,8 @@ export type WorkerRequest =
 
 /** The value each op answers with. */
 export interface WorkerValues {
-  readonly load: LoadValue;
+  /** `failed`: modules left out because they could not be imported or were refused, one line each. */
+  readonly load: LoadValue & { readonly failed?: readonly string[] };
   readonly turnStart: TurnStartValue;
   readonly toolUse: CallValue;
   readonly replyPhase: CallValue;

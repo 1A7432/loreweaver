@@ -22,10 +22,29 @@ const runner = new ModuleRunner({
   },
 });
 
+/**
+ * Load the room's modules. A module that cannot be imported, or a set the runner refuses
+ * (not a definition, two with one id, two claiming the clock), is LEFT OUT and named in
+ * `failed` — it is not a reason for the worker to have nothing: the same worker assembles
+ * the room's lore, and a broken pack must not take the world's lore away with it.
+ */
 async function load(request: Extract<WorkerRequest, { op: "load" }>): Promise<WorkerValues["load"]> {
+  const snapshots = request.snapshots as Readonly<Record<string, Json>>;
   const entries = [];
-  for (const path of request.paths) entries.push({ path, definition: await importModule(path) });
-  return runner.load(entries, request.snapshots as Readonly<Record<string, Json>>);
+  const failed: string[] = [];
+  for (const path of request.paths) {
+    try {
+      entries.push({ path, definition: await importModule(path) });
+    } catch (error) {
+      failed.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  try {
+    return { ...runner.load(entries, snapshots), failed };
+  } catch (error) {
+    failed.push(error instanceof Error ? error.message : String(error));
+    return { ...runner.load([], snapshots), failed };
+  }
 }
 
 function perform(request: WorkerRequest): Promise<WorkerValues[WorkerRequest["op"]]> {

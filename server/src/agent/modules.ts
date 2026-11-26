@@ -839,7 +839,9 @@ function acceptedModules(worker: RoomWorker, caps: ModuleCaps): { modules: Modul
   if (cached && cached.source === source) return { modules: cached.modules, problems: [] };
   const validated = validateLoad({ modules: source ?? [] }, caps);
   if (source !== null) accepted.set(worker, { source, modules: validated.modules });
-  return validated;
+  // Reported with the load they belong to, once: a module that cannot be loaded stays
+  // unloadable on every later turn, and saying so each time buries the operator's log.
+  return { modules: validated.modules, problems: [...(worker.loadProblems ?? []).map((line) => `a module was not loaded — ${line}`), ...validated.problems] };
 }
 
 /**

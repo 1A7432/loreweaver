@@ -88,6 +88,7 @@ export class RoomWorker {
   readonly #coldStart: boolean;
   readonly #now: () => number;
   #descriptions: readonly ModuleDescription[] | null = null;
+  #loadProblems: readonly string[] = [];
   #running: Running | null = null;
   #queue: Promise<unknown> = Promise.resolve();
   #nextId = 0;
@@ -120,6 +121,11 @@ export class RoomWorker {
   /** The modules' static descriptions, as the worker reported them; null before the first load. */
   get descriptions(): readonly ModuleDescription[] | null {
     return this.#descriptions;
+  }
+
+  /** What the latest load left out — a module that could not be imported, a refused set — one line each. */
+  get loadProblems(): readonly string[] {
+    return this.#loadProblems;
   }
 
   /** Whether a worker thread is alive right now. */
@@ -306,8 +312,9 @@ export class RoomWorker {
     const snapshots = Object.fromEntries(this.#checkpoints);
     running.ready = this.#send(running, { op: "load", paths: this.#paths, snapshots }).then(
       (value) => {
-        const loaded = value as LoadValue;
+        const loaded = value as LoadValue & { readonly failed?: readonly string[] };
         this.#descriptions = loaded.modules;
+        this.#loadProblems = (loaded.failed ?? []).filter((line): line is string => typeof line === "string").slice(0, 32);
         this.#absorb(loaded.checkpoints, token);
       },
       async (error: unknown) => {
