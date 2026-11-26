@@ -42,6 +42,7 @@ export interface DiceOp {
   readonly selectors: readonly Selector[];
 }
 
+export type PoolComparison = ">" | ">=" | "<" | "<=";
 export type ComparisonOp = "==" | "!=" | "<" | ">" | "<=" | ">=";
 export type BinaryOp = "+" | "-" | "*" | "/" | "//" | "%" | ComparisonOp;
 
@@ -55,8 +56,8 @@ export type Expr =
   | { readonly kind: "group"; readonly inner: Expr; readonly ops: readonly DiceOp[]; readonly labels: readonly string[] }
   | { readonly kind: "unary"; readonly op: "+" | "-"; readonly operand: Expr }
   | { readonly kind: "binary"; readonly op: BinaryOp; readonly left: Expr; readonly right: Expr }
-  /** A success pool: the whole notation is `[N]dM>=K` or `[N]dM<=K` with a bare dice group. */
-  | { readonly kind: "pool"; readonly dice: DiceExpr; readonly comparison: ">=" | "<="; readonly threshold: IntTerm };
+  /** A success pool: `>`, `>=`, `<` or `<=` straight after a dice group counts its kept dice meeting the threshold. */
+  | { readonly kind: "pool"; readonly dice: DiceExpr; readonly comparison: PoolComparison; readonly threshold: Expr };
 
 export interface DiceExpr {
   readonly kind: "dice";
@@ -120,11 +121,12 @@ export type RollNode =
   | (RollNodeBase & {
       readonly kind: "pool";
       readonly dice: DiceRoll;
-      readonly comparison: ">=" | "<=";
+      readonly comparison: PoolComparison;
+      /** The threshold's value. */
       readonly threshold: number;
-      /** Dice meeting the threshold; also the node's value. */
+      /** Kept dice meeting the threshold; also the node's value. */
       readonly successes: number;
-      /** Dice showing a natural 1, for packs whose ladder counts botches. */
+      /** Kept dice showing a natural 1, for packs whose ladder counts botches. */
       readonly ones: number;
     });
 

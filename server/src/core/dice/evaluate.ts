@@ -15,7 +15,7 @@
 import type { RandomSource } from "../random.ts";
 import { DiceError, LIMITS } from "./errors.ts";
 import { formatOps } from "./parse.ts";
-import type { BinaryOp, DiceExpr, DiceExpression, DiceOp, DieSides, Expr, IntTerm, Roll, RollNode, Selector } from "./types.ts";
+import type { BinaryOp, DiceExpr, DiceExpression, DiceOp, DieSides, Expr, IntTerm, PoolComparison, Roll, RollNode, Selector } from "./types.ts";
 
 export interface RollOptions {
   /** Values for `{name}` slots. Each must be a safe integer. */
@@ -253,18 +253,33 @@ class BinaryNode extends Node {
   }
 }
 
+function meets(face: number, comparison: PoolComparison, threshold: number): boolean {
+  switch (comparison) {
+    case ">":
+      return face > threshold;
+    case ">=":
+      return face >= threshold;
+    case "<":
+      return face < threshold;
+    case "<=":
+      return face <= threshold;
+  }
+}
+
 class PoolNode extends Node {
   readonly dice: DiceNode;
-  readonly comparison: ">=" | "<=";
-  readonly threshold: number;
-  constructor(dice: DiceNode, comparison: ">=" | "<=", threshold: number) {
+  readonly comparison: PoolComparison;
+  readonly threshold: Node;
+  constructor(dice: DiceNode, comparison: PoolComparison, threshold: Node) {
     super();
     this.dice = dice;
     this.comparison = comparison;
     this.threshold = threshold;
   }
+  // Dice dropped by the group's own operators (`6d10kh3>7`) are not in the pool.
   get value(): number {
-    return this.dice.dice.filter((die) => (this.comparison === ">=" ? die.face >= this.threshold : die.face <= this.threshold)).length;
+    const threshold = this.threshold.counted;
+    return this.dice.dice.filter((die) => die.kept && meets(die.face, this.comparison, threshold)).length;
   }
   freeze(): RollNode {
     const successes = this.value;
@@ -274,9 +289,9 @@ class PoolNode extends Node {
       kept: this.kept,
       dice: this.dice.freeze(),
       comparison: this.comparison,
-      threshold: this.threshold,
+      threshold: this.threshold.counted,
       successes,
-      ones: this.dice.dice.filter((die) => die.face === 1).length,
+      ones: this.dice.dice.filter((die) => die.kept && die.face === 1).length,
     };
   }
 }
@@ -472,13 +487,58 @@ function evaluate(ctx: Context, expr: Expr): Node {
       return new BinaryNode(expr.op, left, evaluate(ctx, expr.right));
     }
     case "pool": {
+      // A pool needs dice that can differ: at least one, of at least two faces (Fate dice qualify).
       const count = expr.dice.count === null ? 1 : countValue(ctx, expr.dice.count);
-      const sides = expr.dice.sides.kind === "int" || expr.dice.sides.kind === "slot" ? countValue(ctx, expr.dice.sides) : 0;
+      const sides = expr.dice.sides.kind === "fate" ? 3 : countValue(ctx, expr.dice.sides);
       if (count < 1 || sides < 2) throw new DiceError("BAD_POOL");
-      const threshold = intValue(ctx, expr.threshold);
-      return new PoolNode(newDiceNode(ctx, expr.dice), expr.comparison, threshold);
+      const dice = newDiceNode(ctx, expr.dice);
+      withOps(ctx, dice, expr.dice.ops);
+      // The threshold is evaluated after the dice, in reading order.
+      return new PoolNode(dice, expr.comparison, evaluate(ctx, expr.threshold));
     }
   }
+}
+
+/** Every slot name in reading order, so missing or bad values fail before any die is drawn. */
+function slotNames(expr: Expr, out: string[]): string[] {
+  const term = (t: IntTerm | { kind: string } | null): void => {
+    if (t !== null && t.kind === "slot") out.push((t as { name: string }).name);
+  };
+  const ops = (list: readonly DiceOp[]): void => {
+    for (const op of list) for (const selector of op.selectors) term(selector.count);
+  };
+  switch (expr.kind) {
+    case "number":
+      break;
+    case "slot":
+      out.push(expr.name);
+      break;
+    case "dice":
+      term(expr.count);
+      term(expr.sides);
+      ops(expr.ops);
+      break;
+    case "set":
+      for (const item of expr.items) slotNames(item, out);
+      ops(expr.ops);
+      break;
+    case "group":
+      slotNames(expr.inner, out);
+      ops(expr.ops);
+      break;
+    case "unary":
+      slotNames(expr.operand, out);
+      break;
+    case "binary":
+      slotNames(expr.left, out);
+      slotNames(expr.right, out);
+      break;
+    case "pool":
+      slotNames(expr.dice, out);
+      slotNames(expr.threshold, out);
+      break;
+  }
+  return out;
 }
 
 /** Rolls a parsed expression. Throws `DiceError` for what only rolling can find out. */
@@ -486,6 +546,7 @@ export function rollExpression(expression: DiceExpression, random: RandomSource,
   const budget = options.maxDice === undefined ? LIMITS.maxDice : Math.min(LIMITS.maxDice, options.maxDice);
   if (!Number.isSafeInteger(budget) || budget < 0) throw new DiceError("BAD_COUNT");
   const ctx: Context = { random, params: options.params, budget, rolled: 0 };
+  for (const name of slotNames(expression.root, [])) param(ctx, name);
   const root = evaluate(ctx, expression.root);
   const frozen = root.freeze();
   return { notation: expression.notation, total: Math.trunc(checked(root.value)) + 0, root: frozen };

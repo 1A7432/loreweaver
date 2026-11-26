@@ -17,10 +17,16 @@
  *   label       := "[" text "]"
  *
  * Decisions carried by this grammar:
- * - A whole notation of the form `[N]dM>=K` / `[N]dM<=K` (a bare dice group against a
- *   bare integer or slot) is a SUCCESS POOL: it counts the dice meeting the threshold.
- *   Any other comparison compares totals, so `(1d20)>=10`, `1d20>10` and `1d20>=10+0`
- *   are comparisons yielding 1 or 0.
+ * - SUCCESS POOLS. A `>`, `>=`, `<` or `<=` whose left operand is a dice group (its
+ *   operators and labels included: `5d10!>7`, `6d10kh3>=8`) COUNTS the kept dice
+ *   meeting the condition; the right operand, any expression, is the threshold
+ *   (`5d10>{difficulty}`, `4dF>-1`). The line is the left operand itself: anything
+ *   else there compares VALUES and yields 1 or 0. So `(5d10)>6` compares the sum (the
+ *   parentheses make it a group, not a dice group), and so do `2d6+3>8` and
+ *   `1d20+5>=15` (comparison binds loosest, so the `+3` / `+5` makes the left operand an
+ *   arithmetic expression), and `3+5d10>6`. A pool is an ordinary value inside larger
+ *   notation: `(5d10>6)+1` adds one to the count. `==` and `!=` always compare values,
+ *   after a dice group too: `3d6==10` is 1 when the sum is 10.
  * - A bare `k` keeps the highest (`4d6k3` is `4d6kh3`), the common table meaning; a bare
  *   `p` and the other operators select dice EQUAL to the number.
  * - `x`, `X` and `×` multiply (`3d6x5`), as character-creation formulas write it.
@@ -36,10 +42,10 @@
  */
 
 import { DiceError, LIMITS } from "./errors.ts";
-import type { BinaryOp, DiceExpr, DiceExpression, DiceOp, DiceOpName, Expr, IntTerm, Selector, SelectorCategory, SidesTerm } from "./types.ts";
+import type { BinaryOp, ComparisonOp, DiceExpr, DiceExpression, DiceOp, DiceOpName, Expr, IntTerm, Selector, SelectorCategory, SidesTerm } from "./types.ts";
 
 const WHITESPACE = new Set([" ", "\t", "\n", "\r", "\f"]);
-const COMPARISONS: readonly BinaryOp[] = ["==", "!=", ">=", "<=", ">", "<"];
+const COMPARISONS: readonly ComparisonOp[] = ["==", "!=", ">=", "<=", ">", "<"];
 const SLOT_NAME_START = /^[\p{L}_]$/u;
 const SLOT_NAME_PART = /^[\p{L}\p{N}_]$/u;
 
@@ -70,7 +76,7 @@ class Parser {
     const root = this.#comparison();
     this.#ws();
     if (this.#pos < this.#src.length) this.#fail();
-    return asPool(root) ?? root;
+    return root;
   }
 
   #fail(): never {
@@ -102,7 +108,9 @@ class Parser {
       const op = COMPARISONS.find((candidate) => this.#eat(candidate));
       if (op === undefined) return left;
       this.#ws();
-      left = { kind: "binary", op, left, right: this.#additive() };
+      const right = this.#additive();
+      if (left.kind === "dice" && op !== "==" && op !== "!=") left = { kind: "pool", dice: left, comparison: op, threshold: right };
+      else left = { kind: "binary", op, left, right };
     }
   }
 
@@ -298,19 +306,6 @@ function isDigit(c: string): boolean {
   return c >= "0" && c <= "9" && c.length === 1;
 }
 
-/** The success-pool shape (see the module comment), or null. */
-function asPool(root: Expr): Expr | null {
-  if (root.kind !== "binary" || (root.op !== ">=" && root.op !== "<=")) return null;
-  const { left, right } = root;
-  if (left.kind !== "dice" || left.ops.length > 0 || left.labels.length > 0) return null;
-  if (left.sides.kind !== "int" && left.sides.kind !== "slot") return null;
-  let threshold: IntTerm;
-  if (right.kind === "slot" && right.labels.length === 0) threshold = { kind: "slot", name: right.name };
-  else if (right.kind === "number" && right.labels.length === 0 && Number.isInteger(right.value)) threshold = { kind: "int", value: right.value };
-  else return null;
-  return { kind: "pool", dice: left, comparison: root.op, threshold };
-}
-
 /** Parses dice notation. Throws `DiceError` (`EMPTY`, `SYNTAX`, `TOO_LONG`, `TOO_DEEP`, `VALUE_TOO_LARGE`). */
 export function parseDice(notation: string): DiceExpression {
   const root = new Parser(notation).parse();
@@ -373,6 +368,6 @@ export function formatExpr(expr: Expr): string {
     case "binary":
       return `${formatExpr(expr.left)} ${expr.op} ${formatExpr(expr.right)}`;
     case "pool":
-      return `${formatExpr(expr.dice)} ${expr.comparison} ${formatIntTerm(expr.threshold)}`;
+      return `${formatExpr(expr.dice)} ${expr.comparison} ${formatExpr(expr.threshold)}`;
   }
 }

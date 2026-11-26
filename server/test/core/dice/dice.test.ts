@@ -190,23 +190,67 @@ describe("ruling 4: one error type with a code per failure", () => {
 });
 
 describe("ruling 5: one meaning per notation", () => {
-  test("a whole `NdM>=K` / `NdM<=K` is a success pool", () => {
-    const r = roll("5d10>=6", faces(10, 1, 6, 5, 1, 7));
+  test("`>=`, `>`, `<=` and `<` straight after a dice group count dice", () => {
+    const five = () => faces(10, 1, 6, 5, 1, 7);
+    const r = roll("5d10>=6", five());
     expect(r.root.kind).toBe("pool");
     expect(r.total).toBe(2);
     expect(r.root.kind === "pool" && [r.root.successes, r.root.ones]).toEqual([2, 2]);
-    expect(roll("5d10<=3", faces(10, 1, 2, 3, 4, 10)).total).toBe(3);
+    expect(roll("5d10>5", five()).total).toBe(2);
+    expect(roll("5d10<=5", five()).total).toBe(3);
+    expect(roll("5d10<5", five()).total).toBe(2);
+    // `>5` and `>=6` mean the same.
+    expect(dice(roll("5d10>5", five()))).toEqual(dice(roll("5d10>=6", five())));
     expect(parseDice("d10 >= 6").root.kind).toBe("pool");
-    expect(parseDice("{pool}d10>={difficulty}").root.kind).toBe("pool");
     expect(roll("{pool}d10>={difficulty}", faces(10, 6, 1, 9), { params: { pool: 3, difficulty: 7 } }).total).toBe(1);
   });
 
-  test("every other comparison compares totals and yields 1 or 0", () => {
-    for (const notation of ["(5d10)>=6", "5d10>=6+0", "1d20>10", "2d20kh1>=10", "5d10!>=8", "1d20>=10 [x]"]) {
+  test("operators and labels before the comparison: the kept dice are counted", () => {
+    expect(roll("3d10!>7", faces(10, 10, 2, 8, 9)).total).toBe(3);
+    expect(roll("6d10kh3>=8", faces(10, 9, 9, 9, 10, 1, 1)).total).toBe(3);
+    expect(roll("4d10kh2<5", faces(10, 1, 2, 3, 9)).total).toBe(1);
+    expect(parseDice("1d20 [atk] > 10").root.kind).toBe("pool");
+    expect(roll("4dF>0", new ScriptedRandom([1, 0, 1, -1].map((value) => ({ lo: -1, hi: 1, step: 1, value })))).total).toBe(2);
+  });
+
+  test("the threshold is any expression, read after the dice", () => {
+    expect(roll("3d6>2+1", faces(6, 1, 3, 6)).total).toBe(1);
+    expect(roll("2d6>1d6", faces(6, 2, 5, 3)).total).toBe(1);
+    expect(roll("4dF>-1", new ScriptedRandom([-1, -1, 0, 1].map((value) => ({ lo: -1, hi: 1, step: 1, value })))).total).toBe(2);
+  });
+
+  test("a parenthesised group or an arithmetic left side compares the value", () => {
+    for (const notation of ["(5d10)>6", "2d6+3>8", "1d20+5>=15", "3+5d10>6", "(2d20kh1)>=10"]) {
       expect(parseDice(notation).root.kind).toBe("binary");
     }
-    expect(roll("(3d6)>=10", faces(6, 1, 3, 6)).total).toBe(1);
-    expect(roll("3d6>=3", faces(6, 1, 3, 6)).total).toBe(2);
+    expect(roll("(3d6)>10", faces(6, 1, 4, 6)).total).toBe(1);
+    expect(roll("(3d6)<10", faces(6, 1, 4, 6)).total).toBe(0);
+    expect(roll("2d6+3>8", faces(6, 2, 4)).total).toBe(1);
+    expect(roll("1d20+5>=15", faces(20, 9)).total).toBe(0);
+  });
+
+  test("`==` and `!=` compare the value, after a dice group too", () => {
+    expect(parseDice("3d6==10").root.kind).toBe("binary");
+    expect(roll("3d6==10", faces(6, 1, 3, 6)).total).toBe(1);
+    expect(roll("3d6!=10", faces(6, 1, 3, 6)).total).toBe(0);
+  });
+
+  test("a pool is a value inside larger notation, and chains like any comparison", () => {
+    expect(roll("(5d10>6)+1", faces(10, 7, 8, 1, 2, 3)).total).toBe(3);
+    expect(roll("5d10>6>1", faces(10, 7, 8, 1, 2, 3)).total).toBe(1);
+  });
+
+  test("both forms round-trip distinctly", () => {
+    for (const notation of ["5d10>6", "(5d10)>6", "5d10!>=7", "3d6>2+1", "(5d10>6)+1", "2d6+3>8"]) {
+      const parsed = parseDice(notation);
+      expect(parseDice(parsed.notation).root).toEqual(parsed.root);
+    }
+    expect(parseDice("5d10>6").notation).toBe("5d10 > 6");
+    expect(parseDice("(5d10)>6").notation).toBe("(5d10) > 6");
+  });
+
+  test("missing slot values fail before any die is drawn", () => {
+    expect(codeOf(() => roll("{pool}d10>={difficulty}", undefined, { params: { pool: 5 } }))).toBe("MISSING_PARAM");
   });
 
   test("Fate dice and `!` read the same through every roller", () => {
@@ -449,6 +493,7 @@ describe("rendering", () => {
     ["3d6rr1", [1, 2, 5, 4], "3d6rr1 (1 -> 4, 2, 5) = 11"],
     ["1d6!", [6, 2], "1d6! (6!, 2) = 8"],
     ["5d10>=6", [1, 6, 5, 1, 7], "5d10 (1, 6, 5, 1, 7) >= 6 = 2"],
+    ["(3d6)>10", [1, 4, 6], "(3d6 (1, 4, 6)) > 10 = 1"],
     ["(1d6, 1d6)kh1", [2, 5], "(~~1d6 (2)~~, 1d6 (5))kh1 = 5"],
     ["d20", [7], "1d20 (7) = 7"],
   ];
