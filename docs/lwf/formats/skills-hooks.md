@@ -15,6 +15,11 @@ implementation: `core/skills.py`, `core/hooks.py`, `agent/hook_runtime.py`,
 `core/ejs_full.py`, `core/ejs_lite.py` and the hook phases in `agent/loop.py` in the
 Loreweaver engine.
 
+> **Pack 3.0.** Under [pack.md](pack.md) 3.0 a skill is `SKILL.md` alone. A `hooks.js` in
+> a 3.0 pack is not run: it is reported as ignored and not installed, and pack code
+> lives in modules ([pack.md](pack.md) §3). §2–§6 describe the 2.x hook API and apply
+> only to runtimes of the 2.x family; §1 and §7 still apply.
+
 ## 1. Skills
 
 A skill is a directory `skills/<id>/` whose name is the skill id (a slug inside a pack).

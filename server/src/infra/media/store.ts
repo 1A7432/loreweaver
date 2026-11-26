@@ -335,10 +335,11 @@ export class MediaStore {
   }
 
   /**
-   * Index bytes the server made: a generated picture (an image, any audience) or a
-   * session report (`text/html`, unlisted audiences only — HTML never becomes listed
-   * room media). They count against the image budget and limits. Not subject to the
-   * upload switch or the rate limit, which govern members.
+   * Index bytes the server made or carries: a generated picture (an image, any audience),
+   * a session report (`text/html`, unlisted audiences only — HTML never becomes listed
+   * room media), or an enabled pack's picture or sound (`gateway/packs.ts`). They count
+   * against their family's budget and limits. Not subject to the upload switch or the
+   * rate limit, which govern members.
    */
   async registerServerBlob(blob: ServerBlob): Promise<StoreResult> {
     const { room, bytes, mime, audience } = blob;
@@ -348,9 +349,9 @@ export class MediaStore {
     if (!(["room", "members", "admin"] as const).includes(audience)) return refuse("media_bad_offer");
     let stored: StoredMime;
     if (mime === REPORT_MIME && audience !== "room") stored = REPORT_MIME;
-    else if (typeof mime === "string" && isImageMime(mime)) stored = mime;
+    else if (typeof mime === "string" && (isImageMime(mime) || isAudioMime(mime))) stored = mime;
     else return refuse("media_bad_mime");
-    if (bytes.length > this.#limits.image.maxFileBytes) return refuse("media_too_large");
+    if (bytes.length > this.#limits[quotaFamily(stored)].maxFileBytes) return refuse("media_too_large");
     if (stored !== REPORT_MIME && !matchesSignature(stored, bytes)) {
       return refuse(stored === "image/svg+xml" ? "media_bad_svg" : "media_bad_signature");
     }

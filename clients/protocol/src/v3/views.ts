@@ -161,6 +161,22 @@ export interface UsageView {
   } | null;
 }
 
+/**
+ * `packs`: the content packs installed on the server and the card files they ship, by name.
+ * An admin sees every installed pack, each with whether this room enabled it; anyone else
+ * sees the packs this room enabled. A card is imported with `import {pack, card: file, as}`.
+ */
+export interface PacksView {
+  packs: {
+    id: string;
+    version: string;
+    /** In the viewer's language. */
+    name: string;
+    enabled: boolean;
+    cards: { file: string; name: string; kind: "world" | "character" }[];
+  }[];
+}
+
 /** Every built-in view by name. */
 export interface BuiltInViews {
   me: MeView;
@@ -171,6 +187,7 @@ export interface BuiltInViews {
   commands: CommandsViewData;
   room: RoomView;
   usage: UsageView;
+  packs: PacksView;
 }
 
 export type BuiltInViewName = keyof BuiltInViews;
@@ -305,6 +322,18 @@ export const USAGE_VIEW_SCHEMA: ViewSchema = record({
   ),
 });
 
+export const PACKS_VIEW_SCHEMA: ViewSchema = record({
+  packs: list(
+    record({
+      id: STRING,
+      version: STRING,
+      name: STRING,
+      enabled: BOOLEAN,
+      cards: list(record({ file: STRING, name: STRING, kind: { type: "string", enum: ["world", "character"] } })),
+    }),
+  ),
+});
+
 /** The schema of every built-in view, by name. */
 export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchema } = {
   me: ME_VIEW_SCHEMA,
@@ -315,6 +344,7 @@ export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchem
   commands: COMMANDS_VIEW_SCHEMA,
   room: ROOM_VIEW_SCHEMA,
   usage: USAGE_VIEW_SCHEMA,
+  packs: PACKS_VIEW_SCHEMA,
 };
 
 /** One entry of `view.list`. */

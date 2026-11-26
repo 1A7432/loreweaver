@@ -1,5 +1,6 @@
-// Files members bring: `uploads` (the room's upload switch) and `import` (a card file the
-// caller uploaded over the byte channel, made the room's world or the caller's character).
+// Files members bring: `uploads` (the room's upload switch) and `import` (a card file — one
+// the caller uploaded over the byte channel, or one an enabled pack ships — made the room's
+// world or the caller's character).
 //
 // `import` is iron rule 3's card split at the command layer: `as: "world"` is the admin's and
 // calls `importWorld`, the one path by which a card's world machinery reaches a room;
@@ -11,6 +12,7 @@ import { importCharacter, importWorld, type CardImportRefusal, type LeftBehind }
 import { forgetItems, indexLoreEntries, type RecallDeps } from "../../../agent/recall.ts";
 import { CardError, parseCard, type ImportedCard } from "../../../core/card/index.ts";
 import { MAX_CHARACTER_NAME_CHARS } from "../../../core/characters/index.ts";
+import type { RoomPacks } from "../../packs.ts";
 import type { Uploads } from "../../uploads.ts";
 import { firstWord } from "../parse.ts";
 import { BOOLEAN, compact, object, oneOf, text } from "../schema.ts";
@@ -84,31 +86,72 @@ interface Prepared {
   readonly card: ImportedCard;
 }
 
-/** `import`: a card file the caller uploaded (`purpose: "import"`), as the room's world (admin) or the caller's character. */
-export function importCommand(uploads: Uploads | null, recall: RecallDeps | null): CommandSpec {
+/** The first whitespace-separated word of `text`, case kept, and the rest. */
+function rawWord(text: string): readonly [string, string] {
+  const match = /^(\S+)(?:\s+([\s\S]*))?$/u.exec(text.trim());
+  return match === null ? ["", ""] : [match[1] as string, (match[2] ?? "").trim()];
+}
+
+/** A card an enabled pack ships, by pack id and the card's path in the pack. */
+async function packCard(packs: RoomPacks, call: CommandCall, packId: string, path: string): Promise<Prepared | Refused> {
+  const loaded = packs.get(packId);
+  if (loaded === null) return refuse("unknown_pack", { id: packId });
+  if (!packs.enabledIds(call.context.services.store, call.context.room).includes(packId)) return refuse("pack_not_enabled", { id: packId });
+  const card = loaded.pack.cards.find((item) => item.path === path);
+  if (card === undefined) return refuse("card_not_in_pack", { id: packId, card: path });
+  const bytes = await loaded.read(card.path);
+  if (bytes === null) return refuse("card_unreadable", { card: path });
+  try {
+    return { card: parseCard(bytes, card.path.split("/").at(-1) ?? "") };
+  } catch (error) {
+    if (error instanceof CardError) return refuse("not_a_card", { code: error.code });
+    throw error;
+  }
+}
+
+/**
+ * `import`: a card file — one the caller uploaded (`file`, `purpose: "import"`), or one a
+ * pack enabled in this room ships (`pack` and `card`, its path in the pack) — as the room's
+ * world (admin) or the caller's character.
+ */
+export function importCommand(uploads: Uploads | null, recall: RecallDeps | null, packs: RoomPacks | null = null): CommandSpec {
   return {
     id: "import",
     source: "engine",
     key: "import",
-    params: object({ file: text(64, 64), as: oneOf(["world", "character"]), name: text(MAX_CHARACTER_NAME_CHARS, 1) }, ["file", "as"]),
+    params: object({ file: text(64, 64), pack: text(64, 1), card: text(512, 1), as: oneOf(["world", "character"]), name: text(MAX_CHARACTER_NAME_CHARS, 1) }, ["as"]),
     text: { en: ["import"], zh: ["import", "导入"] },
     role: "player",
     adminWhen: (args) => args.as === "world",
-    available: () => (uploads === null ? NO_MEDIA : true),
+    available: () => (uploads === null && (packs === null || packs.installed().length === 0) ? NO_MEDIA : true),
     parseText(rest) {
       const [kind, after] = firstWord(rest);
       const as = WORLD_WORDS.has(kind) ? "world" : CHARACTER_WORDS.has(kind) ? "character" : null;
       if (as === null) return refuse("usage");
-      const [file, name] = firstWord(after);
-      if (file === "") return refuse("usage");
-      // A name is a character's; a world card keeps its own.
+      // Case kept: a card's path in its pack is case-sensitive. A character's name may have spaces.
+      const [first, afterFirst] = rawWord(after);
+      if (first === "") return refuse("usage");
+      if (HASH.test(first) || afterFirst === "") {
+        // A world card keeps its own name.
+        if (afterFirst !== "" && as === "world") return refuse("usage");
+        return compact({ file: first, as, name: afterFirst === "" ? undefined : afterFirst });
+      }
+      const [card, name] = rawWord(afterFirst);
       if (name !== "" && as === "world") return refuse("usage");
-      return compact({ file, as, name: name === "" ? undefined : name });
+      return compact({ pack: first.toLowerCase(), card, as, name: name === "" ? undefined : name });
     },
     async prepare(call, args): Promise<Prepared | Refused> {
       const member = call.context.who.member;
-      if (uploads === null) return refuse(NO_MEDIA);
       if (member === null) return refuse("no_member");
+      const fromPack = args.pack !== undefined || args.card !== undefined;
+      if (fromPack === (args.file !== undefined)) return refuse("usage");
+      if (fromPack) {
+        if (packs === null) return refuse("unknown_pack", { id: String(args.pack ?? "") });
+        if (args.pack === undefined) return refuse("missing_arg", { path: "pack" });
+        if (args.card === undefined) return refuse("missing_arg", { path: "card" });
+        return packCard(packs, call, args.pack as string, args.card as string);
+      }
+      if (uploads === null) return refuse(NO_MEDIA);
       const hash = args.file as string;
       if (!HASH.test(hash)) return refuse("invalid_arg", { path: "file" });
       const file = await uploads.importFile(call.context.room, member.id, hash);

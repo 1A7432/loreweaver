@@ -20,6 +20,7 @@ import { Hub } from "../../src/gateway/hub.ts";
 import type { PlayerActionEntry } from "../../src/gateway/keeper.ts";
 import { type LaneSettings, LANES_OFF } from "../../src/gateway/lanes.ts";
 import type { RateLimitSettings } from "../../src/gateway/rate_limit.ts";
+import { assemblePacks, type RoomPacks } from "../../src/gateway/packs.ts";
 import { REVIEW_OFF } from "../../src/gateway/review.ts";
 import { Uploads } from "../../src/gateway/uploads.ts";
 import { type Responder, type ScriptedReply, ScriptedLLM } from "../../src/infra/llm/index.ts";
@@ -119,6 +120,8 @@ export interface BenchOptions {
   readonly media?: boolean | Partial<MediaLimits>;
   /** Recall by meaning, for the lore a world import writes. */
   readonly recall?: RecallDeps;
+  /** Installed packs (given the bench's media store, when it has one): modules, kit, skills and cards come from the room's enabled packs. */
+  readonly packs?: (media: MediaStore | null) => RoomPacks;
 }
 
 export const LANES_ON: LaneSettings = { scribe: true, director: true, directorSettings: { imagesEnabled: false, maxImages: 0, pregenPerBeat: 0 } };
@@ -134,6 +137,8 @@ export class RoomBench {
   readonly keystore = new Keystore();
   /** Members' files, when the bench was made with `media`. */
   readonly uploads: Uploads | null = null;
+  readonly media: MediaStore | null = null;
+  readonly packs: RoomPacks | null = null;
   readonly #mediaDir: string | null = null;
 
   constructor(options: BenchOptions = {}) {
@@ -142,15 +147,19 @@ export class RoomBench {
     if (options.media !== undefined && options.media !== false) {
       this.#mediaDir = mkdtempSync(join(tmpdir(), "loreweaver-room-media-"));
       const limits = options.media === true ? DEFAULT_MEDIA_LIMITS : { ...DEFAULT_MEDIA_LIMITS, ...options.media };
-      this.uploads = new Uploads(new MediaStore(this.#mediaDir, db, { clock: testClock(), limits }));
+      this.media = new MediaStore(this.#mediaDir, db, { clock: testClock(), limits });
+      this.uploads = new Uploads(this.media);
     }
+    const packs = options.packs?.(this.media) ?? null;
+    this.packs = packs;
     const uploads = this.uploads;
     this.scribe = new ScriptedLLM(options.scribe ?? (() => "{}"));
     this.director = new ScriptedLLM(options.director ?? (() => "{}"));
     const unused = new ScriptedLLM([]);
     const services = servicesOn({
       store: this.store,
-      packs: new RulePackRegistry(builtInPacks()),
+      // With packs installed, their rule systems join the built-ins as the server's would.
+      packs: packs === null ? new RulePackRegistry(builtInPacks()) : assemblePacks(packs.installed()).ruleSystems,
       models: { keeper: unused, npc: unused, scribe: this.scribe, director: this.director, memory: unused },
       clock: testClock(),
       report: (_room, text) => {
@@ -171,10 +180,11 @@ export class RoomBench {
       };
     };
     const modules = (options.modules ?? []).map(fixtureModule);
+    const store = this.store;
     this.hub = new Hub({
       services,
-      env: selftestEnvironment(),
-      commands: (seam) => new CommandRegistry({ modules: seam, uploads, recall: options.recall ?? null }),
+      env: packs === null ? selftestEnvironment() : { ...selftestEnvironment(), skills: packs.skillRegistry },
+      commands: (seam) => new CommandRegistry({ modules: seam, uploads, recall: options.recall ?? null, packs }),
       runTurn: this.keeper.run,
       recordPlayerAction: (_context, entry) => {
         this.actions.push(entry);
@@ -184,11 +194,12 @@ export class RoomBench {
       defaultRulePack: options.system === undefined ? "coc7" : options.system,
       review: REVIEW_OFF,
       lanes: options.lanes ?? LANES_OFF,
-      kitFor: () => options.kit ?? null,
+      kitFor: (room) => (packs === null || options.kit !== undefined ? (options.kit ?? null) : packs.kitFor(store, room, "en")),
       ...(options.images === undefined ? {} : { images: options.images }),
       rateLimit: options.rateLimit ?? { capacity: 10_000, refillPerSecond: 10_000 },
       spawnWorker: spawn,
-      modulesFor: () => modules,
+      modulesFor: (room) => (packs === null || options.modules !== undefined ? modules : packs.modulesFor(store, room)),
+      ...(packs === null ? {} : { packs }),
       workerTimeoutMs: 5000,
       ...(uploads === null ? {} : { uploads }),
     });

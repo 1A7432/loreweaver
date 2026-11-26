@@ -43,6 +43,8 @@ export interface CommandSuccess {
   readonly events: readonly CommandEvent[];
   readonly signals: readonly CommandSignal[];
   readonly lifecycle?: LifecycleNotice;
+  /** See `Done.modulesChanged`. */
+  readonly modulesChanged?: boolean;
   /** See `Done.after`. */
   readonly after?: () => Promise<readonly string[]>;
 }
@@ -78,6 +80,11 @@ export interface Done {
   readonly events?: readonly CommandEvent[];
   readonly signals?: readonly CommandSignal[];
   readonly lifecycle?: LifecycleNotice;
+  /**
+   * The room's enabled packs changed (`pack enable|disable`): the gateway restarts the room's
+   * worker with the new module list and recomputes the module views.
+   */
+  readonly modulesChanged?: boolean;
   /**
    * What can only be finished by waiting, once the command's writes committed and its events
    * went out (indexing new lore for recall: outbound network). The gateway awaits it before

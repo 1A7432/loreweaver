@@ -14,9 +14,9 @@ import { servicesOn } from "../agent/services.ts";
 import type { GenerateImage } from "../agent/tools/index.ts";
 import { recordPlayerAction, runKeeperTurn } from "../agent/turn/index.ts";
 import { builtInPacks, RulePackRegistry } from "../core/rulepacks/index.ts";
-import { builtInSkillRegistry } from "../core/skills/index.ts";
-import { CommandRegistry } from "../gateway/commands/index.ts";
+import { CommandRegistry, ROOM_LOCALE } from "../gateway/commands/index.ts";
 import { Hub } from "../gateway/hub.ts";
+import { assemblePacks, RoomPacks } from "../gateway/packs.ts";
 import { parseReviewList, REVIEW_OFF, type ReviewFilter } from "../gateway/review.ts";
 import { Uploads } from "../gateway/uploads.ts";
 import type { Settings } from "../infra/config.ts";
@@ -32,6 +32,7 @@ import { spawnWorker, type WorkerHandle } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";
 import { IrohServer } from "../net/iroh.ts";
 import { Keystore } from "../net/keystore.ts";
+import { loadInstalledPacks } from "./packs.ts";
 
 /**
  * The window assumed for a model this server has no figure for. Deliberately small: a
@@ -66,8 +67,13 @@ export interface HubParts {
   readonly clock: Clock;
   readonly report: (room: string, text: string) => void;
   readonly spawnWorker: () => WorkerHandle;
-  /** The module entry files enabled in a room. */
-  readonly modulesFor: (room: string) => readonly string[];
+  /**
+   * The installed packs and the server's skills: a room's modules, kit, skills and pack
+   * cards come from the packs it enabled. Default: none installed, the built-in skills.
+   */
+  readonly roomPacks?: RoomPacks;
+  /** Overrides the module entry files of a room (a harness's own); default: the room's enabled packs'. */
+  readonly modulesFor?: (room: string) => readonly string[];
   readonly review: ReviewFilter;
   readonly recall?: RecallDeps;
   readonly generateImage?: GenerateImage;
@@ -82,6 +88,9 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
   // One object for members' files, shared by the rooms (the byte channel) and the command
   // table (`uploads`, `import`), so both see the same offers and import files.
   const uploads = parts.media === undefined ? null : new Uploads(parts.media);
+  const roomPacks = parts.roomPacks ?? RoomPacks.none();
+  const store = parts.store;
+  const roomLocale = (room: string): string => store.stateGet(room, ROOM_LOCALE) ?? settings.locale;
   const services = servicesOn({
     store: parts.store,
     packs: parts.packs ?? new RulePackRegistry(builtInPacks()),
@@ -92,7 +101,7 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
   const hub = new Hub({
     services,
     env: {
-      skills: builtInSkillRegistry(),
+      skills: roomPacks.skillRegistry,
       ...(parts.recall === undefined ? {} : { recall: parts.recall }),
       ...(parts.generateImage === undefined ? {} : { generateImage: parts.generateImage }),
       settings: {
@@ -108,7 +117,7 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
         },
       },
     },
-    commands: (modules) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null }),
+    commands: (modules) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null, packs: roomPacks }),
     runTurn: runKeeperTurn,
     recordPlayerAction,
     defaultLocale: settings.locale,
@@ -123,10 +132,11 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
         pregenPerBeat: settings.director.pregenPerBeat,
       },
     },
-    // A room's presentation kit comes from its installed packs; until packs install, no room has one.
-    kitFor: () => null,
+    // A room's presentation kit, modules and pack cards come from the packs it enabled.
+    kitFor: (room) => roomPacks.kitFor(store, room, roomLocale(room)),
     spawnWorker: parts.spawnWorker,
-    modulesFor: parts.modulesFor,
+    modulesFor: parts.modulesFor ?? ((room) => roomPacks.modulesFor(store, room)),
+    packs: roomPacks,
     workerTimeoutMs: settings.modules.callTimeoutMs,
     ...(uploads === null ? {} : { uploads }),
   });
@@ -198,6 +208,8 @@ function transportSecret(dataDir: string): Uint8Array {
 export interface OpenData {
   readonly store: Store;
   readonly media: MediaStore;
+  /** The storages a lifecycle operation tells (more may be registered once the server is composed). */
+  readonly storages: RoomStorages;
   /** Absent: recall by meaning is off. */
   readonly recall: RecallDeps | undefined;
 }
@@ -224,7 +236,7 @@ export function openData(settings: Settings, clock: Clock = systemClock): OpenDa
     for (const storage of recallStorages(index)) storages.register(storage);
     recall = { embeddings: new OpenAIEmbeddings(settings.embeddings), index };
   }
-  return { store: new Store(db, { undoDepth: settings.store.undoDepth, storages }), media, recall };
+  return { store: new Store(db, { undoDepth: settings.store.undoDepth, storages }), media, storages, recall };
 }
 
 /** The key file of a data directory. */
@@ -238,8 +250,25 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
   const review = reviewFrom(settings);
   const clock = systemClock;
   const report = options.report ?? ((room: string, text: string): void => console.error(`[${room}] ${text}`));
-  const { store, media, recall } = openData(settings, clock);
+  const { store, media, storages, recall } = openData(settings, clock);
   if (recall === undefined) notes.push("recall_off");
+
+  // Installed packs: validated again from disk; their rule systems and skills join the
+  // built-ins (first claim wins), the rest is per room.
+  const installed = loadInstalledPacks(settings.dataDir);
+  const assembled = assemblePacks(installed.packs);
+  notes.push(...installed.notes, ...assembled.notes);
+  const roomPacks = new RoomPacks({ packs: installed.packs, skills: assembled.skills, media, report });
+  // A reset of everything (or a load) clears the room's media, kit assets included: put the
+  // enabled packs' pictures and sounds back right after, for the room plays on with them.
+  storages.register({
+    name: "pack_assets",
+    lifecycle: { reset: "all" },
+    clear: (room, event) => {
+      if (event.kind === "delete") return;
+      void roomPacks.registerAssets(room, store);
+    },
+  });
 
   // Model clients: one per lane that names its own endpoint, the Keeper's otherwise.
   let keeper: LLMClient;
@@ -292,8 +321,8 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     clock,
     report,
     spawnWorker: () => spawnWorker(options.workerEntry),
-    // Modules reach a room through an installed pack; until packs install, no room has one.
-    modulesFor: () => [],
+    roomPacks,
+    packs: assembled.ruleSystems,
     review,
     media,
     ...(recall === undefined ? {} : { recall }),

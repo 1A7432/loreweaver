@@ -68,6 +68,7 @@ import { type LaneSettings, runLanePass } from "./lanes.ts";
 import { eventIdOf, moduleRoom } from "./module_commands.ts";
 import type { RateLimiter } from "./rate_limit.ts";
 import { type ReviewFilter, reviewFact, reviewNarrative } from "./review.ts";
+import type { RoomPacks } from "./packs.ts";
 import { mediaData, type UploadOffer, type Uploads } from "./uploads.ts";
 import {
   BUILT_IN_VIEWS,
@@ -128,6 +129,8 @@ export interface RoomHost {
   readonly chains: OrderedChains;
   /** Members' files (the byte channel's gateway side); null on a server without a media store. */
   readonly uploads: Uploads | null;
+  /** The installed packs (the `packs` view). */
+  readonly packs: RoomPacks;
   kitFor(room: string): RoomKit | null;
   /** The room's worker when it has modules; null otherwise. */
   moduleWorker(room: string): RoomWorker | null;
@@ -376,6 +379,12 @@ export class Room {
       return;
     }
     const published = this.#publishOutcome(writer, outcome);
+    if (published && outcome.modulesChanged === true) {
+      // Other modules now: a fresh worker with the new list, and module views from scratch.
+      this.#moduleViews = null;
+      this.#moduleClock = null;
+      this.#host.reloadWorker(this.id);
+    }
     // What the command could only finish by waiting (indexing new lore for recall), after its
     // writes committed and its events went out; its lines join the caller's answer.
     const more = published && outcome.after !== undefined ? await this.#after(id, outcome.after) : [];
@@ -692,6 +701,7 @@ export class Room {
       commands: { registry: host.registry, contextFor: (who) => this.#contextFor(who, host.services.store.writer(this.id), "view") },
       moduleClock: this.#moduleClock,
       uploads: host.uploads?.enabled(this.id) ?? false,
+      packs: host.packs,
     };
     return { source, modules: await this.#modules(), at: this.meta.head };
   }

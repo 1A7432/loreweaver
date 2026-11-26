@@ -3,20 +3,27 @@
 //   loreweaver serve [--local]                    run the server; prints the ticket to dial
 //   loreweaver key <room> <role> <name>           hand out an access key (admin | player | observer)
 //   loreweaver import-world <room> <card-file>    bring a SillyTavern card into a room as its world
+//   loreweaver pack <source-dir> [--out <file>]   build a source tree into a .lwpack
+//   loreweaver install <path|https-url|gh:owner/repo[@tag]> [--yes]
+//                                                 show a pack's trust card; with --yes, install it
+//   loreweaver packs                              list the installed packs
+//   loreweaver uninstall <id>                     remove an installed pack
 //   loreweaver selftest                           prove this build can run a turn end to end
 //   loreweaver --version
 //
 // Output is one JSON object per command, so a script can read it; `serve` prints one when
-// it is ready and then runs until interrupted. `doctor`, `pack`, `install` and `lint`
-// arrive with the layers they drive.
+// it is ready and then runs until interrupted. Installed packs are loaded when the server
+// starts. `doctor` and `lint` arrive with the layers they drive.
 import { ConfigError, loadSettings, type Settings } from "../infra/config.ts";
 import { roomWorkerEntry } from "../infra/runtime/worker.ts";
 import { SERVER_VERSION } from "../infra/version.ts";
 import { openServer, type RunningServer, StartupError } from "./compose.ts";
 import { importWorldCard, mintKey, ROLES } from "./operator.ts";
+import { buildPack, installPack, listPacks, uninstallPack } from "./packs.ts";
 import { selftest } from "./selftest.ts";
 
-const USAGE = "usage: loreweaver serve [--local] | key <room> <admin|player|observer> <name> | import-world <room> <card-file> | selftest | --version";
+const USAGE =
+  "usage: loreweaver serve [--local] | key <room> <admin|player|observer> <name> | import-world <room> <card-file> | pack <source-dir> [--out <file>] | install <path|https-url|gh:owner/repo[@tag]> [--yes] | packs | uninstall <id> | selftest | --version";
 
 export interface Outcome {
   readonly code: number;
@@ -70,6 +77,28 @@ export async function run(argv: readonly string[], env: Environment = {}): Promi
     if ("code" in settings) return settings;
     const imported = await importWorldCard(settings, room, file);
     return { code: imported.ok ? 0 : 1, out: JSON.stringify(imported) };
+  }
+  if (command === "pack" && (rest.length === 1 || (rest.length === 3 && rest[1] === "--out"))) {
+    const built = await buildPack(rest[0] as string, rest.length === 3 ? { out: rest[2] as string } : {});
+    return { code: built.ok ? 0 : 1, out: JSON.stringify(built) };
+  }
+  if (command === "install" && (rest.length === 1 || (rest.length === 2 && rest[1] === "--yes"))) {
+    const settings = settingsFrom(env);
+    if ("code" in settings) return settings;
+    const installed = await installPack(settings.dataDir, rest[0] as string, { yes: rest.length === 2, fetch: (url, init) => fetch(url, init) });
+    return { code: installed.ok ? 0 : 1, out: JSON.stringify(installed) };
+  }
+  if (command === "packs" && rest.length === 0) {
+    const settings = settingsFrom(env);
+    if ("code" in settings) return settings;
+    const listed = listPacks(settings.dataDir);
+    return { code: listed.ok ? 0 : 1, out: JSON.stringify(listed) };
+  }
+  if (command === "uninstall" && rest.length === 1) {
+    const settings = settingsFrom(env);
+    if ("code" in settings) return settings;
+    const removed = uninstallPack(settings.dataDir, rest[0] as string);
+    return { code: removed.ok ? 0 : 1, out: JSON.stringify(removed) };
   }
   return { code: 2, out: USAGE };
 }

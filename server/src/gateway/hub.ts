@@ -19,6 +19,7 @@ import type { CommandRegistry, ModuleCommands } from "./commands/index.ts";
 import { currentWork, type RecordPlayerAction, type RunKeeperTurn, Work } from "./keeper.ts";
 import type { LaneSettings } from "./lanes.ts";
 import { RoomModuleCommands } from "./module_commands.ts";
+import { RoomPacks } from "./packs.ts";
 import { DEFAULT_RATE_LIMIT, RateLimiter, type RateLimitSettings } from "./rate_limit.ts";
 import { type ReviewFilter } from "./review.ts";
 import { Room, type RoomHost } from "./room.ts";
@@ -55,6 +56,8 @@ export interface HubDeps {
    * command table's `uploads` and `import` are given). Absent: no uploads, no fetches.
    */
   readonly uploads?: Uploads;
+  /** The installed packs (the `packs` view); default: none. Give the command table the same object. */
+  readonly packs?: RoomPacks;
   /** Per-member input rate (default: a burst of 5, one every 2 s). */
   readonly rateLimit?: RateLimitSettings;
   /** Start a room worker thread. */
@@ -77,9 +80,11 @@ export class Hub {
   readonly #workers = new Map<string, RoomWorker>();
   readonly #chains: OrderedChains;
   readonly #limiter: RateLimiter;
+  readonly #packs: RoomPacks;
 
   constructor(deps: HubDeps) {
     this.#deps = deps;
+    this.#packs = deps.packs ?? RoomPacks.none();
     this.#chains = new OrderedChains((room, error) => {
       deps.services.report(room, `after-turn pass failed: ${error instanceof Error ? error.message : String(error)}`);
     });
@@ -112,6 +117,7 @@ export class Hub {
       limiter: this.#limiter,
       chains: this.#chains,
       uploads: deps.uploads ?? null,
+      packs: this.#packs,
       kitFor: (room) => deps.kitFor(room),
       moduleWorker: (room) => this.moduleWorker(room),
       loreWorker: (room) => this.workerForLore(room),
@@ -173,9 +179,22 @@ export class Hub {
     return worker;
   }
 
+  /**
+   * After a lifecycle operation, or after the room's enabled packs changed: the worker
+   * starts over from the stored checkpoints. When the room's module list itself changed,
+   * the handle (which keeps its modules' descriptions for its whole life) is retired and
+   * the next call makes a new one with the new list.
+   */
   #reload(id: string): void {
     const worker = this.#workers.get(id);
-    if (worker !== undefined) void worker.reload(this.#deps.services.store.moduleStates(id) as Map<string, Json>);
+    if (worker === undefined) return;
+    const paths = this.#deps.modulesFor(id);
+    if (paths.length !== worker.paths.length || paths.some((path, index) => path !== worker.paths[index])) {
+      this.#workers.delete(id);
+      void worker.retire();
+      return;
+    }
+    void worker.reload(this.#deps.services.store.moduleStates(id) as Map<string, Json>);
   }
 
   /**

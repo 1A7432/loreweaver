@@ -314,9 +314,9 @@ test("unlisted blobs: never listed, visible only to their audience, never republ
   expect(code(await media.registerServerBlob({ room: "table", bytes: player, mime: "image/png", name: "x", audience: "room" }))).toBe(
     "media_bad_signature",
   );
-  expect(code(await media.registerServerBlob({ room: "table", bytes: ogg("a"), mime: "audio/ogg", name: "x", audience: "room" }))).toBe(
-    "media_bad_mime",
-  );
+  // A pack's sound is a server blob too (`gateway/packs.ts`), signature-checked like a picture.
+  expect(code(await media.registerServerBlob({ room: "table", bytes: player, mime: "audio/ogg", name: "x", audience: "members" }))).toBe("media_bad_signature");
+  expect(code(await media.registerServerBlob({ room: "table", bytes: player, mime: "video/mp4", name: "x", audience: "members" }))).toBe("media_bad_mime");
   // A member offering an unlisted blob's hash is not told it exists; completing is refused.
   const imageUnlisted = png("private");
   await media.registerServerBlob({ room: "table", bytes: imageUnlisted, mime: "image/png", name: "p.png", audience: "admin" });

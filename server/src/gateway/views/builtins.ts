@@ -11,6 +11,7 @@ import {
   type CharactersView,
   type CommandsViewData,
   type MeView,
+  type PacksView,
   type PartyView,
   type Role,
   type RoomView,
@@ -46,6 +47,8 @@ import { displayName, type SheetSpec } from "../../core/sheets/index.ts";
 import { MODULE_VARIABLES_ID, MODULE_VARIABLES_TYPE, type ModuleVariablesView, VARIABLE_TREE_ID, VARIABLE_TREE_TYPE, type VariableTreeView } from "../../core/variables/index.ts";
 import { translate } from "../../infra/i18n.ts";
 import type { CommandRegistry } from "../commands/index.ts";
+import { localText } from "../../core/packs/index.ts";
+import type { RoomPacks } from "../packs.ts";
 import { KEEPER_MUTED, ROOM_LOCALE, ROOM_RULE_VARIANT } from "../commands/index.ts";
 import { VIEWS_CATALOG } from "./catalog.ts";
 import { LAST_TURN_USAGE } from "./usage.ts";
@@ -77,6 +80,8 @@ export interface ViewSource {
   readonly moduleClock?: ClockInfo | null;
   /** Whether members may upload to the room now; absent (a server without a media store): no. */
   readonly uploads?: boolean;
+  /** The installed packs; absent: none. */
+  readonly packs?: RoomPacks;
 }
 
 export interface BuiltInView<N extends BuiltInViewName = BuiltInViewName> {
@@ -330,6 +335,24 @@ function usage(source: ViewSource, _viewer: ViewerContext): UsageView {
   return { last: last === null ? null : { ...last } };
 }
 
+/** An admin sees every installed pack; anyone else, the packs this room enabled. Names only. */
+function packs(source: ViewSource, viewer: ViewerContext): PacksView {
+  const installed = source.packs;
+  if (installed === undefined) return { packs: [] };
+  const store = source.services.store;
+  const enabled = new Set(installed.enabledIds(store, source.room));
+  const shown = viewer.member.role === "admin" ? installed.installed() : installed.enabled(store, source.room);
+  return {
+    packs: shown.map(({ pack }) => ({
+      id: pack.manifest.id,
+      version: pack.manifest.version,
+      name: localText(pack.manifest.name, viewer.locale) || pack.manifest.id,
+      enabled: enabled.has(pack.manifest.id),
+      cards: pack.cards.map((card) => ({ file: card.path, name: card.name, kind: card.kind })),
+    })),
+  };
+}
+
 function builtIn<N extends BuiltInViewName>(name: N, compute: BuiltInView<N>["compute"]): BuiltInView<N> {
   return { name, schema: BUILT_IN_VIEW_SCHEMAS[name], admin: false, compute };
 }
@@ -344,6 +367,7 @@ export const BUILT_IN_VIEWS: readonly BuiltInView[] = [
   builtIn("commands", commands),
   builtIn("room", room),
   builtIn("usage", usage),
+  builtIn("packs", packs),
 ] as readonly BuiltInView[];
 
 /** Who may see a view listed and subscribe to it. */

@@ -1,12 +1,13 @@
 // `loreweaver selftest`: bring the whole line up inside this process and push one turn
-// through it — the database on disk, a module loaded from a file into a room worker,
-// the real turn engine over a scripted model, and a client dialling in over iroh — then a
-// small picture up and back down the byte channel. It exists to prove a BUILT
-// server works on the machine it was built for: the worker thread, the runtime loading
-// of a module's TypeScript and the native transport are exactly the parts a compiled
-// binary can lose.
+// through it — a pack built from a TypeScript source tree (the bundler), installed into a
+// data directory and enabled in a room by its admin, its module loaded into the room's
+// worker, the database on disk, the real turn engine over a scripted model, and a client
+// dialling in over iroh — then a small picture up and back down the byte channel. It
+// exists to prove a BUILT server works on the machine it was built for: the bundler, the
+// worker thread, the runtime loading of a module file and the native transport are
+// exactly the parts a compiled binary can lose.
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +20,7 @@ import type { TurnEnvironment } from "../agent/turn/types.ts";
 import { DEFAULT_FOLD_SETTINGS } from "../core/chronicle/index.ts";
 import { builtInPacks, RulePackRegistry } from "../core/rulepacks/index.ts";
 import { builtInSkillRegistry, builtInSkills } from "../core/skills/index.ts";
+import { assemblePacks, RoomPacks } from "../gateway/packs.ts";
 import type { RunKeeperTurn } from "../gateway/keeper.ts";
 import { REVIEW_OFF } from "../gateway/review.ts";
 import { loadSettings } from "../infra/config.ts";
@@ -31,6 +33,7 @@ import { Store } from "../infra/store.ts";
 import { dial, IrohServer } from "../net/iroh.ts";
 import { Keystore } from "../net/keystore.ts";
 import { composeHub } from "./compose.ts";
+import { buildPack, installPack, loadInstalledPacks } from "./packs.ts";
 
 /** What the self-test's module injects, as the scripted model looks for it. */
 const INJECTION = /selftest module saw turn \d+/u;
@@ -38,17 +41,29 @@ const INJECTION = /selftest module saw turn \d+/u;
 /** A small PNG for the byte channel's round trip: the signature and a few bytes are all the store checks. */
 const PICTURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 200 }, (_, i) => (i * 7) % 256)]);
 
+/** The self-test pack's source tree: a TypeScript module that imports a helper, so bundling is real. */
+const PACK_YAML = `manifest_version: 3
+id: selftest
+version: 1.0.0
+name: Self-test
+description: The pack the self-test builds, installs and enables.
+license: MIT
+modules:
+  - { id: selftest, entry: src/main.ts }
+`;
 const MODULE_SOURCE = `
 import { defineModule } from "loreweaver/module";
+import { line } from "./line.ts";
 let turns: number = 0;
 export default defineModule({
   id: "selftest",
   create() { turns = 0; },
   load(snapshot) { turns = (snapshot as { turns: number }).turns; },
   save() { return { turns }; },
-  on: { turnStart(event, fx) { turns += 1; fx.inject("selftest module saw turn " + turns); } },
+  on: { turnStart(event, fx) { turns += 1; fx.inject(line(turns)); } },
 });
 `;
+const HELPER_SOURCE = `export function line(turns: number): string { return "selftest module saw turn " + turns; }\n`;
 
 /** The services of a server on one store whose every model lane is `llm`. */
 export function selftestServices(store: Store, llm: LLMClient, clock: Clock, report: (room: string, text: string) => void): Services {
@@ -123,11 +138,24 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
     steps.skills_embedded = false;
   }
   const dir = mkdtempSync(join(tmpdir(), "loreweaver-selftest-"));
-  const modulePath = join(dir, "module.ts");
-  writeFileSync(modulePath, MODULE_SOURCE);
+  // Build the pack from its source tree, install it into a data directory, load it back.
+  const source = join(dir, "pack-source");
+  mkdirSync(join(source, "src"), { recursive: true });
+  writeFileSync(join(source, "pack.yaml"), PACK_YAML);
+  writeFileSync(join(source, "src", "main.ts"), MODULE_SOURCE);
+  writeFileSync(join(source, "src", "line.ts"), HELPER_SOURCE);
+  const archive = join(dir, "selftest.lwpack");
+  const built = await buildPack(source, { out: archive });
+  steps.pack_built = built.ok;
+  const dataDir = join(dir, "data");
+  const installed = await installPack(dataDir, archive, { yes: true, fetch: () => Promise.reject(new Error("the self-test installs from a file")) });
+  steps.pack_installed = installed.ok && installed.installed;
+  const loaded = loadInstalledPacks(dataDir);
+  const assembled = assemblePacks(loaded.packs);
   const db = openDatabase(join(dir, "selftest.db"));
   const store = new Store(db);
   const media = new MediaStore(dir, db, { clock: systemClock });
+  const roomPacks = new RoomPacks({ packs: loaded.packs, skills: assembled.skills, media });
   // The REAL turn engine, composed as `serve` composes it, over a scripted model that
   // answers with the module's injection when it finds it in the prompt: the reply proves
   // the module ran in a worker and that what it injected reached the model.
@@ -150,12 +178,14 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
       problems.push(text);
     },
     spawnWorker: () => spawnWorker(workerEntry),
-    modulesFor: () => [modulePath],
+    roomPacks,
+    packs: assembled.ruleSystems,
     review: REVIEW_OFF,
     media,
   });
   const keystore = new Keystore();
-  keystore.add("selftest-key", { room: "selftest", name: "Tester", role: "player" });
+  // The room's admin: enabling the pack is theirs.
+  keystore.add("selftest-key", { room: "selftest", name: "Tester", role: "admin" });
   const server = new IrohServer({ keystore, room: (id) => hub.room(id) }, { mode: "local" });
   try {
     const ticket = await server.start();
@@ -172,13 +202,18 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
     link.send({ type: "hello", protocol: "3.0", key: "selftest-key", locale: "en", client: { name: "selftest", version: "0" }, caps: [] });
     await until((frame) => frame.type === "welcome");
     steps.welcomed = true;
+    link.send({ type: "input", rid: "enable", text: ".pack enable selftest" });
+    await until((frame) => frame.type === "result" && frame.rid === "enable");
+    const enabled = frames.at(-1);
+    steps.pack_enabled = enabled?.type === "result" && enabled.ok;
     link.send({ type: "input", rid: "1", text: "ping" });
     await until((frame) => frame.type === "event" && frame.kind === "narrative" && frame.data.speaker === "kp");
     steps.turn_answered = true;
     const reply = frames.find((frame) => frame.type === "event" && frame.kind === "narrative" && frame.data.speaker === "kp");
     steps.module_loaded_and_injected = reply?.type === "event" && reply.kind === "narrative" && reply.data.text === "selftest module saw turn 1";
     steps.module_state_stored = JSON.stringify(store.moduleStates("selftest").get("selftest")) === '{"turns":1}';
-    steps.log_stored = store.room("selftest").head === 2;
+    // The pack's announcement, the line and the reply.
+    steps.log_stored = store.room("selftest").head === 3;
     // The byte channel: offer on the control stream, the bytes on a stream of their own, the
     // table told, and the same bytes fetched back.
     const sha256 = createHash("sha256").update(PICTURE).digest("hex");

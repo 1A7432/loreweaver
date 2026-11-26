@@ -21,12 +21,14 @@ import { LifecycleError, StaleGeneration } from "../../infra/lifecycle/errors.ts
 import { COMMANDS_CATALOG } from "./catalog.ts";
 import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCommands } from "./engine/checks.ts";
 import { importCommand, uploadsCommand } from "./engine/files.ts";
+import { packCommand, skillCommand } from "./engine/packs.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
 import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, saveCommand, undoCommand } from "./engine/room.ts";
 import { pcCommand, renameCommand, sheetCommand } from "./engine/sheet.ts";
 import { chronicleCommand, habitsCommand, loreCommand, npcCommand, recapCommand, varCommand } from "./engine/world.ts";
 import { argumentTooLong, inlineRolls, MAX_COMMAND_ARG_CHARS, MAX_INLINE_ROLLS, splitCommand } from "./parse.ts";
 import { compact, validateArgs } from "./schema.ts";
+import { RoomPacks } from "../packs.ts";
 import type { Uploads } from "../uploads.ts";
 import {
   type Args,
@@ -56,6 +58,8 @@ export interface RegistryOptions {
   readonly uploads?: Uploads | null;
   /** Recall by meaning, to index the lore a world import writes; absent when it is off. */
   readonly recall?: RecallDeps | null;
+  /** The installed packs and the server's skills (`pack`, `skill`, `import` from a pack); default: none installed, built-in skills. */
+  readonly packs?: RoomPacks | null;
 }
 
 /** What a line a player typed turned out to be. */
@@ -96,6 +100,7 @@ export class CommandRegistry {
   constructor(options: RegistryOptions = {}) {
     this.#modules = options.modules ?? null;
     const gate = new ResetGate(options.resetConfirmMs);
+    const packs = options.packs ?? RoomPacks.none();
     this.#engine = Object.freeze([
       rollCommand,
       hiddenRollCommand,
@@ -119,7 +124,9 @@ export class CommandRegistry {
       resetCommand(gate),
       saveCommand,
       uploadsCommand(options.uploads ?? null),
-      importCommand(options.uploads ?? null, options.recall ?? null),
+      importCommand(options.uploads ?? null, options.recall ?? null, packs),
+      packCommand(packs),
+      skillCommand(packs),
       jrrpCommand,
       drawCommand,
       helpCommand((call) => this.#entries(call.context, call.locale)),
@@ -316,6 +323,7 @@ export class CommandRegistry {
       events: readonly CommandEvent[];
       signals: readonly CommandSignal[];
       lifecycle?: LifecycleNotice;
+      modulesChanged?: boolean;
       after?: () => Promise<readonly string[]>;
     } = {
       ok: true,
@@ -325,6 +333,7 @@ export class CommandRegistry {
     if (done.text !== undefined && done.text !== "") outcome.text = done.text;
     if (done.data !== undefined) outcome.data = done.data;
     if (done.lifecycle !== undefined) outcome.lifecycle = done.lifecycle;
+    if (done.modulesChanged === true) outcome.modulesChanged = true;
     if (done.after !== undefined) outcome.after = done.after;
     return outcome;
   }

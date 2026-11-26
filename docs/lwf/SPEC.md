@@ -3,6 +3,15 @@
 **Version 2.0 · stable.** Every constituent document carries its own version and
 stability label (§6).
 
+> **Pack 3.0 (draft).** [formats/pack.md](formats/pack.md) has moved to 3.0, a breaking
+> revision: packs carry **modules**, code bundled at build time that a 3.0 runtime runs
+> unsandboxed in its own process, with fault isolation rather than escape prevention; a
+> 2.x `hooks.js` is not run; the trust card is computed by the runtime instead of stored
+> in the manifest; card kinds are declared by the author and checked against the card.
+> Where this umbrella says otherwise about packs — the builder duties of §3.4, the
+> inventory and `trust` block of §4 items 1–2, the hook sandbox of §4 item 4 — pack 3.0
+> governs a 3.0 runtime.
+
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be interpreted as in
 [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
@@ -162,7 +171,7 @@ reference refuses `manifest_version: 1` packs.
 
 | Area | Document | Version |
 |---|---|---|
-| Container, presentation kit, presets, prep scripts | [formats/pack.md](formats/pack.md) | 2.0 stable |
+| Container, modules, presentation kit, assets | [formats/pack.md](formats/pack.md) | 3.0 draft |
 | Cards, lorebooks, the world/character split, isolation | [formats/cards.md](formats/cards.md) | 2.0 stable |
 | Rule systems | [formats/rulepacks.md](formats/rulepacks.md) | 2.0 stable |
 | Skills, hooks, templates | [formats/skills-hooks.md](formats/skills-hooks.md) | 2.0 stable |

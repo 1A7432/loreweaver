@@ -1,183 +1,236 @@
 # LWF: the `.lwpack` container
 
-**Version 2.0 · stable (additive-only).** Manifest schema `manifest_version: 2`. The
-`hooks.js` size cap rose from 40,000 to 400,000 characters (2.6.0) and to 1,000,000 (2.6.1),
-and a native-bundle card file may now reach 32 MiB — relaxations: every pack that was valid
-stays valid.
-Reference implementation: `core/pack.py` (build, verify, install), `infra/pack_source.py`
-(reference resolution) and `gateway/pack_install.py` (install doors) in the Loreweaver
-engine.
+**Version 3.0 · draft.** Manifest schema `manifest_version: 3`. This is a breaking
+revision of pack 2.0 (see §10): a pack now carries **modules** (code, bundled at build
+time), a 2.x `hooks.js` is no longer run, and the generated `files` and `trust` blocks
+are gone from the manifest. A runtime that implements 3.0 refuses `manifest_version: 1`
+and `2`.
+Reference implementation, in the Loreweaver engine: `server/src/infra/zip.ts` (the
+archive), `server/src/core/packs/` (manifest, whole-pack validation, trust card),
+`server/src/cli/packs.ts` (build, install, load) and `server/src/gateway/packs.ts`
+(enabling in a room).
 
-A pack is **one ZIP archive** with the suffix `.lwpack`. It contains a root manifest
-`pack.yaml` plus every file the manifest declares, and nothing else. It bundles a whole
-work (skills, rulepacks, cards, lorebooks, UI panels, a presentation kit, prompt
-presets, prep scripts, media assets) as one verifiable unit.
+A pack is **one ZIP archive** with the suffix `.lwpack`. At its root is a manifest,
+`pack.yaml`, and beside it the files the manifest names. It is how content reaches a
+server: modules, rule systems, skills, cards, a presentation kit and the pictures and
+sounds that kit uses, as one unit that a runtime validates before writing anything.
 
-The manifest exists in two forms:
+An author works in a **source tree**: a directory with a `pack.yaml`, module sources in
+TypeScript or JavaScript, and the content files. A **builder** turns the tree into the
+archive. The archive's manifest is the author's, with one change: each module's `entry`
+names the bundled file instead of the source (§3).
 
-- the **source manifest**, which an author writes in a source directory;
-- the **built manifest**, which a builder writes into the archive. It adds generated
-  integrity and disclosure data that an author MUST NOT write.
+## 1. A complete small pack
 
-## 1. Manifest
+```
+harbor/                      the source tree
+├── pack.yaml
+├── src/
+│   ├── tally.ts             a module, and a helper it imports
+│   └── line.ts
+├── skills/harbor-guide/SKILL.md
+├── rules/harbor-rules.yaml
+├── cards/drowned.json       a world card
+├── cards/sailor.json        a character card
+├── presentation.yaml
+├── art/quay.png
+└── sound/bell.ogg
+```
 
-The manifest is YAML. It MUST be parsed with a safe loader that rejects anchors and
-aliases (alias-bomb defense; reference: `core/yaml_safety.py`). The root MUST be a
-mapping. Unknown top-level keys are ignored. Every nested object defined in this
-document is **closed**: an unknown key in it is an error, unless the object's table says
-otherwise.
+```yaml
+manifest_version: 3
+id: harbor
+version: 1.0.0
+name: { en: Harbor, zh: 港口 }
+description: A small harbor town.
+authors: [Ada]
+license: CC-BY-4.0
+engine: { protocol: "3.0" }
+modules:
+  - { id: tally, entry: src/tally.ts }
+contents:
+  skills: [skills/harbor-guide]
+  rulepacks: [rules/harbor-rules.yaml]
+  cards:
+    - { path: cards/drowned.json, kind: world, notes: Import as the world. }
+    - { path: cards/sailor.json, kind: character }
+  presentation: [presentation.yaml]
+assets:
+  - { path: art/cover.png, title: Cover }
+```
 
-| Field | Source | Built | Meaning |
-|---|---|---|---|
-| `manifest_version` | optional | **required** | Integer. When a source manifest omits it, it means the current version, `2`. |
-| `id` | required | required | Slug `^[a-z0-9][a-z0-9-]{0,63}$`. Names the install directory `<id>@<version>`. |
-| `version` | required | required | `^\d{1,6}\.\d{1,6}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,32})?$`. At most one suffix: a pre-release (`-…`) or a build tag (`+…`), not both. |
-| `name`, `description` | required | required | A non-empty string (stored as `en`), or a mapping with `en` and/or `zh` keys. Other locale keys are dropped. Values are trimmed and truncated to 2,000 characters. |
-| `authors` | optional | optional | A list of non-empty strings. Consumers keep at most 32 entries, each truncated to 200 characters. |
-| `license` | required | required | An SPDX id or a short name, truncated to 200 characters. |
-| `engine` | optional | optional | Minimum versions (§8). Closed: only `protocol` and `server`. |
-| `contents` | optional | optional | A mapping from content kind to a list of entries (§2). An unknown kind is an error. |
-| `assets` | optional | optional | Media file records (§3). |
-| `files` | **forbidden** | **required** | The generated archive inventory (§4.1). |
-| `trust` | **forbidden** | **required** | The generated disclosure summary (§4.2). |
+`loreweaver pack harbor` writes `harbor-1.0.0.lwpack`. Inside it, `pack.yaml` says
+`entry: modules/tally.js`, and `modules/tally.js` is `src/tally.ts` with `src/line.ts`
+folded in. `src/` itself is not in the archive. The kit's picture and sound are in the
+archive although only `art/cover.png` is listed under `assets` (§6).
 
-**Schema versions.** A consumer MUST refuse a `manifest_version` greater than the
-version it implements. It accepts a lower version only through a registered migration
-to the current shape. Version 1, the pre-2.0 shape, has no migration and MUST be
-refused.
+## 2. The manifest
 
-**Paths.** Every path in the manifest is relative and uses `/` as its separator. This
-covers content entries, card overlays, assets and `files` records. Every such path MUST
-pass the path-safety rule of §6.1.
-
-Reference: `core/pack.py::parse_manifest_text`.
-
-## 2. Content kinds
-
-`contents` accepts exactly the kinds below. Each kind lists at most 64 entries. An entry
-MUST NOT appear twice within a kind. A file MUST NOT be declared under more than one
-kind, and MUST NOT also be an asset or a card overlay.
-
-| Kind | Entry | Rules |
-|---|---|---|
-| `skills` | a skill directory | The last path segment is the skill id and MUST be a slug. The directory holds `SKILL.md` (required) and `hooks.js` (optional), and nothing else. `SKILL.md` MUST parse ([skills-hooks.md](skills-hooks.md) §1). `hooks.js` MUST NOT exceed 1,000,000 characters. |
-| `rulepacks` | a `.yaml` or `.yml` file | The file stem is the system id and MUST be a slug. The file MUST parse as a rulepack ([rulepacks.md](rulepacks.md)). The rules-script files it declares are shipped automatically (below). |
-| `cards` | a card entry | See §2.1. |
-| `lorebooks` | a JSON file | See §2.2. |
-| `panels` | a `.yaml` or `.yml` file | A panels file ([panels.md](panels.md)). Panel ids MUST be unique across all of the pack's panels files, and the pack declares at most 16 panels in total. |
-| `presentation` | a `.yaml` or `.yml` file | At most **one** per pack. See §2.3. |
-| `presets` | a `.json` file | A prompt preset. See §2.4. |
-| `prep` | a `.js` file | A prep-plan script. See §2.5. |
-
-**Rules scripts.** A rulepack that declares `resolution.script` or
-`subsystems.<name>.script` names a bare filename, with no `/` or `\`. That file lives
-next to the rulepack YAML. A builder MUST put it in the archive and in the `files`
-inventory without the author listing it, and a verifier MUST refuse an archive that
-lacks it. Reference: `core/pack.py::_rulepack_script_files`.
-
-### 2.1 Cards
-
-A card entry is either a path string or a mapping:
-
-| Key | Source | Built | Meaning |
-|---|---|---|---|
-| `path` | required | required | The card file: a SillyTavern card (PNG or JSON, at most 16 MiB) or a native bundle (`*.lorecard.json`, at most 32 MiB). See [cards.md](cards.md) §1–§2. |
-| `notes` | optional | optional | Install notes for the room admin: a string or an `{en, zh}` mapping, at most 2,000 characters per locale. |
-| `overlay` | optional | optional | The path of a lore-overlay file that annotates this card ([cards.md](cards.md) §7). |
-| `kind` | **forbidden** | **required** | `character` or `world`, stamped by the builder from payload detection. |
-
-- **The card kind is detected, never declared.** A builder MUST set `kind` to `world`
-  when the card carries world machinery under the predicate of [cards.md](cards.md) §4,
-  and to `character` otherwise. A source manifest that declares `kind` MUST be refused.
-  A verifier MUST re-run detection on the archived card, and MUST refuse the archive if
-  the stamped kind differs from the detected one.
-- **Native bundles are sniffed by content.** A file is parsed as a native bundle when it
-  is a JSON object whose `format` is `"loreweaver.card"`, whatever its name. Its typed
-  variable specs count as variable declarations for detection.
-- **Overlays.** A declared overlay MUST parse with the overlay parser, both at build time
-  and at verification. A structural error fails the build. An overlay entry title that
-  the card does not carry is only a build **warning**. An overlay is annotation, never
-  machinery: it cannot change a card's detected kind.
-
-Reference: `core/pack.py::_parse_card_entry`, `_validate_card_bytes`,
-`_enforce_card_kind`, `_validate_card_overlay`.
-
-### 2.2 Lorebooks
-
-A lorebook file is UTF-8 JSON (a BOM is tolerated), at most 4 MiB, in one of these
-shapes:
-
-- `{entries: [...]}` or `{entries: {...}}`, the SillyTavern world-info shapes;
-- a bare list of entries;
-- an object without `entries` that carries `character_book` or `data.character_book`.
-
-It MUST contain at least 1 entry and at most 200. Its import semantics are those of
-[cards.md](cards.md) §6. Reference: `core/pack.py::_validate_lorebook_bytes`.
-
-### 2.3 The presentation kit
-
-A presentation kit is a YAML file of at most 128 KiB. It tells a runtime's presentation
-layer what a module may show and play. It is closed at every level.
+The manifest is YAML, read with a safe loader that refuses anchors and aliases. Its root
+MUST be a mapping. Top-level keys this document does not define are **ignored** and
+reported (§8); every nested object is **closed**: an unknown key in it is an error.
 
 | Field | Req | Meaning |
 |---|---|---|
-| `version` | yes | MUST be `2`. Version 1 is refused. |
+| `manifest_version` | yes | The integer `3`. Missing, `1`, `2` or a later version is refused, each with its own code. |
+| `id` | yes | `^[a-z0-9][a-z0-9-]{0,63}$`. Names the install directory. |
+| `version` | yes | `MAJOR.MINOR.PATCH` (each 1–6 digits), with at most one suffix: a pre-release `-…` or a build tag `+…` (1–32 of `[0-9A-Za-z.-]`). |
+| `name` | yes | A non-empty string (read as English) or a mapping with `en` and/or `zh`. At most 2,000 characters per language. |
+| `description` | yes | As `name`. |
+| `authors` | no | A list of at most 32 non-empty strings, each at most 200 characters. |
+| `license` | yes | An SPDX id or a short name, at most 200 characters. |
+| `engine` | no | Minimum versions (§7). Closed: `protocol` and `server` only. |
+| `modules` | no | At most 16 module entries (§3). |
+| `contents` | no | A mapping from content kind to its entries (§4). |
+| `assets` | no | At most 512 asset records (§6). |
+
+Text is counted in Unicode code points. **A value over its cap is refused, never cut.**
+
+**Paths.** Every path in the manifest is relative and `/`-separated. It is unsafe, and
+refused, when it is empty or longer than 512 characters; has a segment longer than 255
+characters; contains a backslash, a NUL or any control character; is absolute; starts
+with a drive letter such as `C:` or contains any other colon; has an empty, blank, `.` or
+`..` segment; has a segment ending in a dot or a space; or has a segment that is a
+Windows device name (`con`, `nul`, `com1`, `lpt1`, … with or without an extension). The
+same rule applies to archive entry names (§5) and to every file an install writes. No
+path may be `pack.yaml`.
+
+**One file, one role.** A file is named at most once across module entries, content
+entries and assets. Two names that are one file on a case-insensitive filesystem (after
+Unicode NFC normalisation and case folding) count as the same file.
+
+## 3. Modules
+
+A module is content code: the rules a pack does not trust the Keeper to keep by itself
+(a tracker, a clock, a command the players can type, a private status view). It is
+written against `loreweaver/module` (the module SDK) and runs in the room's worker
+thread of a runtime that enabled its pack. Each entry is:
+
+| Key | Req | Meaning |
+|---|---|---|
+| `id` | yes | `^[a-z][a-z0-9_]{0,63}$`, unique in the pack. It MUST equal the `id` the module passes to `defineModule`: the module's commands and views are named `<id>/<name>`. |
+| `entry` | yes | In a source tree: the module's source file, `.ts`, `.mts`, `.tsx`, `.js`, `.mjs` or `.jsx`. In an archive: the bundled `.js` file. |
+
+**Bundled at build time.** A builder bundles each entry and everything it imports —
+the author's other files and any npm packages — into **one** JavaScript file, written as
+`modules/<id>.js`, and rewrites `entry` to name it. Nothing is installed when a pack is
+installed: there is no `package.json` step, so a pack carries its dependencies. One
+import is left as an import: `loreweaver/module`, which the runtime answers with the SDK
+it was built with, so a module never carries its own copy. Node built-ins stay imports
+too.
+
+A validator MUST refuse an archive whose module entry is not a `.js` file
+(`module_not_bundled`), is missing, is over 16 MiB, or is not UTF-8.
+
+**Trust.** A 3.0 runtime runs module code as ordinary code in its own process. There is
+no sandbox: a module can use the filesystem, the network and anything its bundle
+contains. What the runtime owes is fault isolation — a module that throws or hangs costs
+its room a call, not the server. Installing a pack that has modules is therefore the
+decision to run its code, and the trust card says so first (§8).
+
+## 4. Content kinds
+
+`contents` accepts exactly these kinds. Each lists at most 64 entries.
+
+| Kind | Entry | Rules |
+|---|---|---|
+| `skills` | a skill directory | Its last segment is the skill id, a slug; ids are unique in the pack. The directory holds `SKILL.md`, which MUST parse ([skills-hooks.md](skills-hooks.md) §1). A `hooks.js` beside it is **not run**: it is reported as ignored and not installed. |
+| `rulepacks` | a `.yaml` or `.yml` file | Its stem is the rule system's id, a slug, unique in the pack. It MUST compile ([rulepacks.md](rulepacks.md)). |
+| `cards` | `{path, kind, notes?}` | §4.1. |
+| `presentation` | a `.yaml` or `.yml` file | At most **one**. §4.2. |
+
+The 2.x kinds `lorebooks`, `panels`, `presets` and `prep` are refused with the code
+`unsupported_kind`; any other unknown kind with `unknown_kind`.
+
+**Rule packs.** `extends:` names a base rule system: first one of the pack's own rule
+packs, then one the runtime has built in. A pack cannot extend another pack's rule
+system — a pack ships everything it needs. A rule pack that needs the rules-script lane
+(`resolution.script`, a `script` subsystem) is refused: that lane is not part of 3.0.
+
+### 4.1 Cards
+
+| Key | Req | Meaning |
+|---|---|---|
+| `path` | yes | A SillyTavern card (`.png` or `.json`) or a native bundle (`*.lorecard.json`). [cards.md](cards.md) §1–§2. At most 32 MiB. |
+| `kind` | yes | `world` or `character`: what the author says the card is. |
+| `notes` | no | Notes for the room admin, a string or `{en, zh}`, at most 2,000 characters per language. |
+
+**The kind is checked against the card.** A validator runs the detection of
+[cards.md](cards.md) §4 on the card and MUST refuse the pack when it disagrees with
+`kind` (`card_kind_mismatch`, with the kind detected). A card that carries any world
+machinery — variable declarations, templates, keeper-only entries, hook scripts, a
+native bundle's typed variables — is a world card. Hook scripts in a card are counted,
+never run.
+
+### 4.2 The presentation kit
+
+A YAML file of at most 128 KiB telling the runtime's presentation layer what the pack's
+table may show and play. It is closed at every level.
+
+| Field | Req | Meaning |
+|---|---|---|
+| `version` | yes | MUST be `2`. |
 | `generation` | no | `allow` (default) or `pack_only`. |
-| `templates` | no | An allowlist drawn from `image`, `title_card`, `letter`, `clipping` and `text`, without duplicates. Empty or omitted means all are allowed. |
-| `style` | no | `{keywords?, banned?, palette?}`. `keywords` is a string or an `{en,zh}` mapping. `banned` is a list of at most 24 strings, each at most 400 characters. `palette` is a list of at most 8 strings, each at most 80 characters. |
-| `subjects` | no | At most 64 entries `{id, kind, name, ref?, prompt?}`. `id` is a slug and unique. `kind` is `npc`, `location` or `item`. `name` is a string or an `{en,zh}` mapping. `ref` is a path. `prompt` is at most 1,000 characters. |
-| `audio` | no | At most 32 entries `{id, layer, asset, title?}`. `id` is a slug and unique. `layer` is `bgm`, `ambience` or `sfx`. `asset` is a path. `title` is at most 400 characters. |
+| `templates` | no | An allowlist drawn from `image`, `title_card`, `letter`, `clipping` and `text`, without duplicates. Empty or omitted: all. |
+| `style` | no | `{keywords?, banned?, palette?}`. `keywords` is a string or `{en, zh}` (at most 400 characters each). `banned`: at most 24 strings of at most 400 characters. `palette`: at most 8 strings of at most 80 characters. |
+| `subjects` | no | At most 64 `{id, kind, name, ref?, prompt?}`. `id` a slug, unique. `kind` is `npc`, `location` or `item`. `name` a string or `{en, zh}`. `ref` the path of a picture. `prompt` at most 1,000 characters. |
+| `audio` | no | At most 32 `{id, layer, asset, title?}`. `id` a slug, unique. `layer` is `bgm`, `ambience` or `sfx`. `asset` the path of a sound. `title` at most 400 characters. |
 
-Consumer obligations:
+Every `ref` MUST be an image in the pack and every cue `asset` a sound in the pack
+(`kit_asset_missing`, `kit_asset_type`). A subject without a `ref` may be named but is
+never sent to image generation; `generation: pack_only` disables generation, and when
+several packs share a room one `pack_only` disables it for the room while their
+`templates` allowlists intersect.
 
-- A subject without a `ref` MUST NOT be sent to image generation. It may still be named.
-- `generation: pack_only` MUST disable image generation for the pack. When several
-  enabled packs share a room, a single `pack_only` disables it for the whole room, and
-  the packs' `templates` allowlists intersect.
-- A `ref` MUST be an image asset and an audio `asset` MUST be an audio asset (§3).
+## 5. The archive
 
-Reference: `core/presentation.py::parse_presentation_text`; the room merge policy is in
-`gateway/presentation.py`.
+A pack archive is a ZIP file with these properties; a runtime refuses one that has
+another:
 
-### 2.4 Prompt presets
+- one disk, a classic end-of-central-directory record: no zip64, no multi-disk;
+- entries stored (method 0) or deflated (method 8); no encryption;
+- no symbolic-link entries; every name passes the path rule of §2 and is UTF-8 (or plain
+  ASCII); no two names that are one file once normalised (§2);
+- each local header agrees with its central record, and no two entries overlap;
+- every CRC matches.
 
-A preset is a SillyTavern completion-preset JSON object of at most 2 MiB. It MUST carry
-a non-empty `prompts` array of at most 512 entries. Its install id comes from the file
-name: lowercase the stem, collapse every run of characters outside `[a-z0-9]` to one
-`-`, trim dashes and cap at 64 characters. A stem that leaves nothing usable becomes
-`preset`. If two preset files of one pack derive the same id, the build MUST fail.
-Reference: `core/preset.py::parse_st_preset`, `core/preset_store.py::sanitize_preset_id`.
+**Caps.** The archive at most 512 MiB; at most 2,048 entries; one entry at most 128 MiB
+uncompressed and all entries together at most 1 GiB; an entry larger than 1 MiB may not
+compress better than 100:1. Sizes are enforced **while inflating**: the inflater is
+bounded by the size the entry declares, and an entry that inflates to more or less than
+it declared is refused, so a header that lies cannot make a reader allocate past the
+caps. `pack.yaml` at most 256 KiB, a rule pack at most 512 KiB.
 
-### 2.5 Prep scripts
+**What may be in it.** `pack.yaml`, and every file the manifest names. Any other file
+is handled this way:
 
-A prep script is UTF-8 JavaScript of at most 20,000 characters. Build and verification
-check only the extension, the size and the encoding: a builder MUST NOT need a
-JavaScript runtime to build a pack.
+- a file named `hooks.js`, anywhere: **ignored** — not run, not installed, reported;
+- any other code file (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.tsx`, `.jsx`,
+  `.wasm`, `.node`, `.sh`, `.bat`, `.cmd`, `.ps1`, `.exe`, `.dll`, `.so`, `.dylib`):
+  the pack is **refused** (`undeclared_script`). The only code a pack carries is its
+  declared module entries;
+- anything else: **ignored** — not installed, reported.
 
-A prep script never runs automatically, only on an explicit room-admin request. It then
-runs in a sandbox whose only callable is `plan(tool, args)`, and emits an operation list
-within these limits: at most 200 operations, at most 8,000 bytes of arguments per
-operation, and 1 s of CPU. The runtime validates the whole list before applying
-anything, and applies each operation through its ordinary, permission-checked tool path.
-Reference: `core/pack.py::_validate_pack_prep_scripts`, `core/prep_script.py`.
+**Determinism.** A builder MUST produce the same bytes from the same source tree. The
+reference writes `pack.yaml` first and then every file in ascending path order, stamps
+every entry with the ZIP epoch (1980-01-01 00:00) and mode `0644`, deflates at one fixed
+level (storing an entry that would not shrink), and writes the module bundles with paths
+relative to the source tree. Byte identity between different builders is not required.
+A builder reads only the files the manifest names, never through a symbolic link, and
+never outside the source tree.
 
-## 3. Assets
+## 6. Assets
 
-An asset record describes one media file.
+An asset is a picture or a sound. The pack's assets are the records under `assets` and,
+in addition, every picture and sound its presentation kit names. A record is a path or:
 
-| Key | Source | Built | Meaning |
-|---|---|---|---|
-| `path` | required | required | The file. Unique among assets. |
-| `sha256` | optional | required | 64 lowercase hex characters. A source value MUST match the file, or the build fails. |
-| `size` | ignored | required | The byte size, a non-negative integer. |
-| `mime` | optional | required | The media type. When the source omits it, the builder derives it from the extension (table below). |
-| `title`, `license` | optional | optional | Strings, truncated to 2,000 characters. |
-| `tags` | optional | optional | A list of strings. Consumers keep at most 16, each truncated to 64 characters. |
-
-Unknown keys in an asset record are ignored. A pack declares at most 512 asset records.
-
-**Media types by extension.** A builder MUST map these extensions as shown, so that a
-build does not depend on the build machine's media-type database:
+| Key | Req | Meaning |
+|---|---|---|
+| `path` | yes | The file. |
+| `mime` | no | If given, it MUST equal the type of the extension (below). |
+| `sha256` | no | 64 lowercase hex characters, quoted in YAML. If given, it MUST match the file. |
+| `title`, `license` | no | At most 2,000 and 200 characters. |
+| `tags` | no | At most 16 strings of at most 64 characters. |
 
 | Extensions | Type | Extensions | Type |
 |---|---|---|---|
@@ -188,234 +241,90 @@ build does not depend on the build machine's media-type database:
 | `.svg` | `image/svg+xml` | `.m4a` | `audio/mp4` |
 | | | `.aac` | `audio/aac` |
 
-Other extensions are builder-defined; the reference falls back to
-`application/octet-stream`. In this document an **image asset** is an asset of one of
-the five image types above, and an **audio asset** is one of the six audio types.
+Any other extension is refused (`asset_type`). A picture is at most 8 MiB and a sound at
+most 128 MiB (`asset_too_large`), and the bytes MUST start the way their type starts — an
+SVG MUST pass the runtime's SVG validator (no scripts, no external references) —
+or the pack is refused (`asset_bad_signature`).
 
-**Folded assets.** Panels and the presentation kit reference pack files by path. A
-builder MUST add an asset record for each such path that the author did not list under
-`assets`. That covers every tier-2 panel `assets` path (the entry included), every
-tier-1 `image` and `map_pin` `src`, every presentation subject `ref` and every audio
-`asset`. The build MUST then check that:
+## 7. Engine minimums
 
-- every `image`/`map_pin` `src` and every subject `ref` is an image asset;
-- every audio cue `asset` is an audio asset;
-- each tier-2 panel's code payload is at most 2 MiB. The payload is the entry plus every
-  asset of type `text/html`, `text/javascript`, `application/javascript` or `text/css`.
+`engine.protocol` and `engine.server` are minimum versions, never ranges: one to four
+dotted integers. The runtime compares `protocol` with the wire protocol it speaks and
+`server` with its own version, padding both with zeros and comparing integer by integer;
+a suffix on the runtime's own version (`3.0.0-alpha.0`) is ignored. An unmet minimum
+refuses the install (`engine_too_old`). There are no dependencies between packs.
 
-A verifier MUST repeat these checks against the built asset records.
+## 8. Installing and enabling
 
-Reference: `core/pack.py::_asset_mime`, `build_pack`, `_enforce_panel_code_cap`,
-`_enforce_panel_images`, `_enforce_kit_assets`.
+**Verify first, write second.** A runtime reads the archive (§5), then validates the
+whole pack — every named file present, every module bundled, every rule pack compiling,
+every skill and card parsing, every card the kind it says, the kit and its assets — and
+checks the engine minimums. Any problem refuses the install with a stable code and the
+path it concerns, before a single file is written.
 
-## 4. Generated blocks
+**The trust card.** Before installing, the runtime shows whoever installs it a plain
+summary computed from the validated content: the pack's name, id, version, authors and
+license; whether it **runs code**, and which modules (id, file, size, digest); the rule
+systems it adds and what each extends; its skills, the tools each unlocks and whether it
+declares mature content; its cards, each with its kind and the world machinery it
+carries; the presentation kit; how many assets and bytes; and what was **ignored** (a
+`hooks.js`, unnamed files, unknown manifest keys). Being computed, it cannot understate
+what the pack ships. In the reference, `loreweaver install <ref>` prints it and writes
+nothing; `loreweaver install <ref> --yes` installs.
 
-### 4.1 `files`, the inventory
+**Who installs.** In the reference, installing is the operator's action, from the shell
+only: since modules run as real code in the server's process, which code a server runs is
+decided by whoever runs the server, not by a room's admin.
 
-The built manifest lists **every archive member except `pack.yaml` itself**: content
-files, rules scripts, card overlays and assets. Each record is `{path, sha256, size}`,
-with the field rules of §3. The list is sorted by path, MUST be non-empty, MUST NOT
-repeat a path, and holds at most 2,048 records. Every asset record's `sha256` and `size`
-MUST equal those of its inventory record.
+**Where it lands.** The reference writes the pack's files — exactly the files of the
+pack, ignored ones excluded — under `<data>/packs/<id>/<version>/` at their archive paths,
+readable by the server's user only, staged in a sibling directory and renamed into place.
+It lists the pack in `<data>/packs/index.json` in install order. One version of a pack is
+installed at a time: a new version takes the old one's place in the index, and the old
+files are removed after; installing the version already installed is refused
+(`already_installed`). Installed packs are validated again when the server starts, and a
+pack that no longer validates is skipped with a note.
 
-### 4.2 `trust`, the disclosure summary
+**Names a pack shares.** A pack's rule systems join the runtime's rule systems for the
+whole server; its skills join the runtime's skills. An id is kept by its **first
+claimant**: the runtime's built-ins, then the installed packs in install order. A later
+pack's rule system or skill with a taken id is not loaded — the earlier one is never
+replaced, a built-in least of all — and the runtime names it at install and at start.
 
-A builder computes the trust block from the content. A verifier MUST recompute it from
-the archive with the same detectors, and MUST refuse the archive if any field differs.
-A pack therefore cannot understate what it ships.
+**Install ≠ enable.** Installing changes no room. A room's admin enables an installed
+pack in a room (`pack enable <id>`; `pack disable <id>` undoes it), and the choice is a
+room setting that survives every reset. For that room only, an enabled pack's modules
+load in the room's worker, in the order the packs were enabled; its presentation kit
+joins the room's kit, and the pictures and sounds the kit names become the room's
+unlisted media, fetchable by that room's members only; its skills can be enabled with
+`skill enable <id>` (enabling a pack enables none of them, and disabling it disables
+them); and its cards can be imported: `import {pack, card, as}`, where `card` is the
+card's path in the pack — a world import stays the admin's. Rule systems need no
+enabling: a room chooses one with `rule system <id>`.
 
-| Field | Type | Value |
-|---|---|---|
-| `skills`, `rulepacks`, `cards`, `lorebooks`, `prep_scripts` | int | The number of entries of that kind. |
-| `assets`, `asset_bytes` | int | The number of asset records (folded ones included), and the sum of their sizes. |
-| `has_hooks` | bool | Some skill ships `hooks.js`, or some card carries at least one hook script ([cards.md](cards.md) §4). |
-| `has_ejs` | bool | The text `<%` occurs in some `SKILL.md`, card file or lorebook file, read as UTF-8 with invalid bytes ignored; for a PNG card, also in its decoded card JSON. |
-| `has_rules_script` | bool | Some rulepack declares a rules script. |
-| `world_cards` | int | The number of cards stamped `kind: world`. |
-| `panels` | int | The number of panels across all panels files. |
-| `presentation` | int | The number of subjects in the presentation kit, or 0 without a kit. |
-| `imagegen` | bool | The kit says `generation: allow` and at least one subject has a `ref`. |
-| `presets` | int | The number of presets. |
-| `overlays` | int | The number of cards that declare an overlay. |
-| `overlay_exposes` | int | The number of variable prefixes that all overlays together publish through `expose`. |
-
-Reference: `core/pack.py::PackTrust`, `build_pack`, `_verify_pack`.
-
-## 5. Determinism
-
-A builder MUST be deterministic: building the same source tree twice with the same
-builder MUST produce byte-identical archives, and so the same sha256. The reference
-builder:
-
-- writes `pack.yaml` first, then every other member in ascending path order;
-- stamps every entry with the ZIP epoch timestamp (1980-01-01 00:00:00) and regular file
-  mode `0644`;
-- compresses with DEFLATE;
-- dumps the manifest as YAML with sorted keys.
-
-Byte identity between different builder implementations is not required.
-
-A builder reads the source tree only through confined paths: a source path MUST NOT be
-a symlink, and MUST resolve inside the source directory.
-
-Reference: `core/pack.py::build_pack`, `_source_file`.
-
-## 6. Verification and install
-
-### 6.1 Path safety
-
-An archive entry name or a manifest path is unsafe, and MUST be refused, when it:
-
-- is empty or longer than 512 characters, or has a segment longer than 255 characters;
-- contains a backslash, a NUL byte or any other control character below U+0020;
-- is absolute, or its first segment is a drive letter such as `C:`;
-- has an empty, whitespace-only, `.` or `..` segment.
-
-An archive entry whose ZIP attributes mark it as a symbolic link MUST be refused.
-Directory entries (names ending in `/`) are ignored.
-
-### 6.2 Caps
-
-A conforming verifier enforces at least the caps below. A later 2.x revision may raise a
-cap, but never lower it.
-
-| Cap | Value |
-|---|---|
-| Archive file size | 512 MiB |
-| Sum of declared uncompressed entry sizes | 1 GiB |
-| Archive entries; `files` records | 2,048 |
-| `pack.yaml` | 256 KiB |
-| Entries per content kind / asset records | 64 / 512 |
-| Card file (SillyTavern / native bundle) / lorebook file | 16 MiB / 32 MiB / 4 MiB |
-| Panels per pack / panels file | 16 / 256 KiB |
-| Tier-2 code payload per panel | 2 MiB |
-| Presentation kit / preset / overlay file | 128 KiB / 2 MiB / 256,000 bytes |
-| `hooks.js` | 1,000,000 characters (a room loads at most 8,000,000 across all its scripts) |
-| Rules scripts / prep scripts | 40,000 / 20,000 characters |
-
-### 6.3 Verification order
-
-**Verify first, write second.** An archive that fails any of the steps below MUST NOT
-cause a single filesystem write. The reference runs them in this order:
-
-1. **Container.** The file exists and fits the archive cap. It is a ZIP archive and its
-   entry count fits. Every non-directory entry name is safe (§6.1) and is not a symlink.
-   The declared uncompressed total fits.
-2. **Manifest.** A root `pack.yaml` exists, fits its cap, and parses as a *built*
-   manifest (§1): `manifest_version`, `files` and `trust` are present.
-3. **Engine minimums** (§8). An unmet minimum refuses the install.
-4. **Inventory.** The set of archive members other than `pack.yaml` equals the set of
-   `files` paths: nothing undeclared and nothing missing. Every member's bytes are read
-   under a hard ceiling of its declared `size`, so reading past it aborts (zip-bomb
-   defense). The member's sha256 and size MUST match its record. Every asset record
-   MUST agree with its inventory record.
-5. **Content.** Every declared file is present and parses with the parsers the builder
-   used. This covers skills, rulepacks with their rules scripts, cards (with the kind
-   check of §2.1), card overlays, lorebooks, panels (with the pack-level panel rules and
-   the code cap), the presentation kit (with its asset type checks), presets and prep
-   scripts.
-6. **Disclosure.** The recomputed trust block equals the stored one (§4.2).
-
-Reference: `core/pack.py::_open_pack`, `_archive_manifest`, `install_pack`,
-`_verify_pack`.
-
-### 6.4 Where things land
-
-After verification, the reference install writes two sets of files.
-
-- **The pack home** `packs/<id>@<version>/`. It receives the verbatim `pack.yaml`, the
-  cards, card overlays, lorebooks, panels files, presentation kit, prep scripts and
-  assets, at their archive paths. In-room import and enable flows read from here.
-- **The discovery directories**, which all packs share:
-  - skills land at `skills/<skill-id>/SKILL.md`, plus `hooks.js`;
-  - rulepacks land at `rulepacks/<stem>.yaml`, and each rules script at
-    `rulepacks/<stem>/<script>`. Two packs that ship a script of the same name therefore
-    cannot overwrite each other;
-  - presets land at `presets/<preset-id>.json`.
-
-These rules apply:
-
-- **Confinement.** Every write MUST resolve inside its target directory.
-- **Atomic pack home.** The pack home MUST be staged and then swapped in, so that an I/O
-  failure during extraction never leaves a half-written pack home. Reinstalling the same
-  `id@version` replaces its pack home wholesale and never merges. Different versions of
-  one pack coexist as separate homes.
-- **Built-ins win.** A pack MUST NOT be able to override a runtime's built-in skill or
-  rule system. A pack file that has a built-in id still lands, but discovery keeps
-  resolving the built-in. A runtime SHOULD tell the installer which ids were shadowed.
-- **Shared names.** Discovery files are keyed by id or stem only. If another pack later
-  installs a skill with the same id, or a rulepack with the same stem, it replaces the
-  earlier file. A runtime SHOULD report such rulepack collisions (reference:
-  `core/pack.py::rulepack_stem_collisions`).
-- **A skill lands whole.** Installing a skill replaces its whole file set: a file the new
-  version does not ship (for example `hooks.js`) MUST be removed, so a stale hook can never
-  run under a trust card that says `has_hooks: false`.
-
-### 6.5 Install ≠ enable
-
-Installing makes content **discoverable**. On its own it MUST NOT change the state of
-any room: no card is imported, no skill, panel set or preset is enabled, and no rule
-system becomes a room's system.
-
-A runtime MAY offer a room-scoped install command that the room admin issues from
-inside a room. Such a command names the room as well as the pack, so it MAY also enable
-the pack **in that room**. The reference enables the pack's panels, presentation kit and
-skills (built-in ids included). When the pack ships exactly one world card, the
-reference also imports it. It never chooses between several world cards. This is an
-enable action that the room admin takes, not a side effect of installing.
-Reference: `gateway/commands/panels.py::_switch_everything_on`; engine decision record
-`docs/notes/rejected/pack-install-shadowed-gate.md`.
-
-### 6.6 Disclosure to the operator
-
-A runtime MUST show whoever installs a pack the trust block (§4.2) together with the
-pack's name, id, version, authors and license. An interactive install SHOULD show it and
-ask for confirmation before it writes anything. An install that the operator or room
-admin commanded by typing the exact pack reference MAY report it with the result
-instead. Disclosure supports the operator's informed decision: the format gates
-integrity, not taste.
-
-## 7. Distribution and references
+## 9. Sources
 
 A pack reference is one of:
 
 - a local path;
-- an `https://` URL. Other schemes (`http://`, `ftp://`, `file://`) MUST be refused;
-- `gh:owner/repo[@tag]`. It resolves through the GitHub releases API to the release with
-  that tag, or to the repository's latest release when no tag is given. From that
-  release it takes the first asset whose name ends in `.lwpack`.
+- an `https://` URL. Every other scheme is refused, and so is a redirect that leaves
+  https;
+- `gh:owner/repo[@tag]`: the GitHub releases API gives the release with that tag, or the
+  latest release, and the first asset whose name ends in `.lwpack` is downloaded.
 
-A downloaded pack goes through the full verification of §6.3. A runtime may send a
-credential with the release-metadata request. If it does, it MUST NOT forward that
-credential on a redirect that leaves the host or downgrades to `http`, and MUST NOT
-attach it to a URL that the user typed.
+A download is capped at the archive cap while it streams. **Git releases are the
+registry**: there is no central index, no namespace authority and no account. Publishers
+should publish the archive's sha256 beside it, so anyone can rebuild the pack and compare
+(§5).
 
-**Git releases are the registry.** There is deliberately no central index, no namespace
-authority and no account. Publishers SHOULD publish the pack's sha256 next to the
-release asset, so anyone can rebuild the pack and compare (§5).
+## 10. From pack 2.0
 
-**Pack-relative references.** A runtime MAY accept `<pack-id>/<relative path>` to name a
-file inside an installed pack. The reference resolves it against the newest installed
-home of that pack: the highest numeric `MAJOR.MINOR.PATCH`, with the full directory name
-as the tiebreak. After symlink resolution, the file MUST still be inside that home and
-MUST be a regular file. Reference: `core/pack.py::resolve_installed_path`.
+Pack 3.0 is not compatible with 2.0, and a 3.0 runtime refuses a 2.0 pack. To move one:
 
-**Stable entry handles.** A native bundle's lore entries MAY carry a stable `id`
-([cards.md](cards.md) §2). Together with the pack id it forms the handle
-`<pack-id>#<entry-id>`, which the reference records as a document's provenance. Authors
-SHOULD keep entry ids stable across versions. This document defines only the handle
-syntax, not how a runtime resolves a handle.
-
-## 8. Engine minimums
-
-`engine.protocol` and `engine.server` are minimum versions, never ranges. A declared
-value MUST match `^\d{1,6}(\.\d{1,6}){0,3}$`. The runtime compares `protocol` with the
-wire-protocol version it speaks, and `server` with its own release version. Both sides
-are padded with zeros to the same length and compared as integer tuples. The runtime's
-own version string MAY carry a development or local suffix; only its leading
-dotted-integer prefix is compared. An unmet minimum MUST refuse the install with a clear
-message.
-
-There are no inter-pack dependencies: a pack ships everything it needs.
-
-Reference: `core/pack.py::version_at_least`.
+- set `manifest_version: 3`, and delete the `files` and `trust` blocks a 2.0 builder
+  generated — a 3.0 runtime computes the trust card itself;
+- write `kind:` on every card entry (2.0 forbade it and stamped it at build time);
+- move the logic of each skill's `hooks.js` into a module (§3): the script is no longer
+  run;
+- drop `lorebooks`, `presets` and `prep` (not part of 3.0) and, for now, `panels`;
+- a rule pack with a rules script does not load in 3.0.

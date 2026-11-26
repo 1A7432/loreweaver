@@ -107,6 +107,11 @@ export class RoomWorker {
     for (const [module, snapshot] of options.checkpoints ?? []) this.#checkpoints.set(module, snapshot);
   }
 
+  /** The module entry files this handle loads, in dispatch order. */
+  get paths(): readonly string[] {
+    return this.#paths;
+  }
+
   /** The ids of the loaded modules, in dispatch order; empty before the first load. */
   get loaded(): readonly string[] {
     return (this.#descriptions ?? []).map((module) => module.id);
@@ -202,6 +207,14 @@ export class RoomWorker {
       for (const [module, snapshot] of checkpoints) this.#checkpoints.set(module, snapshot);
       await this.#terminate();
     }, false);
+  }
+
+  /**
+   * Stop the worker once every call queued so far has run: the room's module list changed,
+   * and the hub has already made a new handle for the next call.
+   */
+  retire(): Promise<void> {
+    return this.#enqueue(() => this.#terminate(), false);
   }
 
   /**
