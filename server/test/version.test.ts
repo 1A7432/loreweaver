@@ -1,0 +1,14 @@
+import { expect, test } from "bun:test";
+
+import manifest from "../package.json" with { type: "json" };
+import { run } from "../src/cli/main.ts";
+import { SERVER_VERSION } from "../src/infra/version.ts";
+
+test("the version constant is the package version", () => {
+  expect(SERVER_VERSION).toBe(manifest.version);
+});
+
+test("--version prints it and anything else is a usage error", () => {
+  expect(run(["--version"])).toEqual({ code: 0, out: SERVER_VERSION });
+  expect(run([]).code).toBe(2);
+});

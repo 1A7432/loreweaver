@@ -5,14 +5,14 @@
     "": {
       "name": "loreweaver-clients",
     },
-    "protocol": {
+    "clients/protocol": {
       "name": "loreweaver-protocol",
       "version": "2.6.0",
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
-    "tui": {
+    "clients/tui": {
       "name": "@loreweaver/tui",
       "version": "0.7.0",
       "bin": {
@@ -28,12 +28,28 @@
         "react": "19.3.1",
       },
     },
+    "sdk": {
+      "name": "loreweaver",
+      "version": "3.0.0-alpha.0",
+      "devDependencies": {
+        "@types/bun": "1.4.5",
+        "typescript": "^7.0.2",
+      },
+    },
+    "server": {
+      "name": "loreweaver-server",
+      "version": "3.0.0-alpha.0",
+      "devDependencies": {
+        "@types/bun": "1.4.5",
+        "typescript": "^7.0.2",
+      },
+    },
   },
   "overrides": {
     "shell-quote": "^1.11.0",
   },
   "packages": {
-    "@loreweaver/tui": ["@loreweaver/tui@workspace:tui"],
+    "@loreweaver/tui": ["@loreweaver/tui@workspace:clients/tui"],
 
     "@number0/iroh": ["@number0/iroh@1.2.0", "", { "optionalDependencies": { "@number0/iroh-android-arm-eabi": "1.2.0", "@number0/iroh-android-arm64": "1.2.0", "@number0/iroh-darwin-arm64": "1.2.0", "@number0/iroh-linux-arm-gnueabihf": "1.2.0", "@number0/iroh-linux-arm-musleabihf": "1.2.0", "@number0/iroh-linux-arm64-gnu": "1.2.0", "@number0/iroh-linux-arm64-musl": "1.2.0", "@number0/iroh-linux-x64-gnu": "1.2.0", "@number0/iroh-linux-x64-musl": "1.2.0", "@number0/iroh-win32-arm64-msvc": "1.2.0", "@number0/iroh-win32-x64-msvc": "1.2.0" } }, "sha512-pZoVnL+8nK4DQG3owF5UQ/LcIjg7m2Ue1oeEUEhLsNt9RHtEFxiASNSPopOdsRfjRimJ/e6zjQ0k3iYE6N1hZQ=="],
 
@@ -79,6 +95,10 @@
 
     "@opentui/react": ["@opentui/react@0.9.7", "", { "dependencies": { "@opentui/core": "0.9.7", "react-reconciler": "^0.33.0" }, "peerDependencies": { "react": ">=19.2.0", "react-devtools-core": "^7.0.1", "ws": "^8.18.0" } }, "sha512-Wo06PlIB2zNzAWyew5+FEsjcC4/iJUS9Ez62P9SzjJcSoWJEzAlKJwcUa5EZ9ozG4zoCWwSRPpyfkJtF7WNz+g=="],
 
+    "@types/bun": ["@types/bun@1.4.5", "", { "dependencies": { "bun-types": "1.4.5" } }, "sha512-DpgwNI9z0L1S0gtb45QLCWgwCUcMLnsHYMJHQvpNj7erGiCGBvpggltAIeARrtobNMKMuy0UP7i56tKKgwFs/Q=="],
+
+    "@types/node": ["@types/node@26.6.11", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-uUyQ2XLEz+EXh34lmS3GhKrkqn/8FU7KUiKRpk347At2bmnMVWss45yz8b4FG/tUtmV1tV/+TVkITItPROyeeQ=="],
+
     "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
 
     "@typescript/typescript-darwin-arm64": ["@typescript/typescript-darwin-arm64@7.0.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-gowzar9MwS/aRWp6f3a4KUqzRjAZjOsmGNCM6LcTgXum+dBfgsBVMN+AgvOCCbguXyick6LJhpBszxMebJ8syA=="],
@@ -123,6 +143,8 @@
 
     "bun-ffi-structs": ["bun-ffi-structs@0.3.1", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-3gM7PpVWLyrwxWjcilSiGuhWanhZivvo6l0u573NziPH6f/gwk6McbaYgn7oJWov6pKGRTDbrg94W5DcJsKTtQ=="],
 
+    "bun-types": ["bun-types@1.4.5", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-ECHn+9dhL3wv0G6u0+7dQvrnaimXiRDxxerYBmhTaLyJEEuvTPWk2Fye3XIf5Y++JIIiHKfQw4Z7V5D8KuiXbg=="],
+
     "diff": ["diff@9.0.0", "https://registry.npmmirror.com/diff/-/diff-9.0.0.tgz", {}, "sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw=="],
 
     "emoji-regex": ["emoji-regex@10.6.0", "https://registry.npmmirror.com/emoji-regex/-/emoji-regex-10.6.0.tgz", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
@@ -131,7 +153,11 @@
 
     "jpeg-js": ["jpeg-js@0.4.4", "https://registry.npmmirror.com/jpeg-js/-/jpeg-js-0.4.4.tgz", {}, "sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg=="],
 
-    "loreweaver-protocol": ["loreweaver-protocol@workspace:protocol"],
+    "loreweaver": ["loreweaver@workspace:sdk"],
+
+    "loreweaver-protocol": ["loreweaver-protocol@workspace:clients/protocol"],
+
+    "loreweaver-server": ["loreweaver-server@workspace:server"],
 
     "pngjs": ["pngjs@7.0.0", "https://registry.npmmirror.com/pngjs/-/pngjs-7.0.0.tgz", {}, "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="],
 
@@ -150,6 +176,8 @@
     "strip-ansi": ["strip-ansi@7.1.2", "https://registry.npmmirror.com/strip-ansi/-/strip-ansi-7.1.2.tgz", { "dependencies": { "ansi-regex": "^6.0.1" } }, "sha512-gmBGslpoQJtgnMAvOVqGZpEz9dyoKTCzy2nfz/n8aIFhN/jCE/rCmcxabB6jOOHV+0WNnylOxaxBQPSvcWklhA=="],
 
     "typescript": ["typescript@7.0.2", "", { "optionalDependencies": { "@typescript/typescript-aix-ppc64": "7.0.2", "@typescript/typescript-darwin-arm64": "7.0.2", "@typescript/typescript-darwin-x64": "7.0.2", "@typescript/typescript-freebsd-arm64": "7.0.2", "@typescript/typescript-freebsd-x64": "7.0.2", "@typescript/typescript-linux-arm": "7.0.2", "@typescript/typescript-linux-arm64": "7.0.2", "@typescript/typescript-linux-loong64": "7.0.2", "@typescript/typescript-linux-mips64el": "7.0.2", "@typescript/typescript-linux-ppc64": "7.0.2", "@typescript/typescript-linux-riscv64": "7.0.2", "@typescript/typescript-linux-s390x": "7.0.2", "@typescript/typescript-linux-x64": "7.0.2", "@typescript/typescript-netbsd-arm64": "7.0.2", "@typescript/typescript-netbsd-x64": "7.0.2", "@typescript/typescript-openbsd-arm64": "7.0.2", "@typescript/typescript-openbsd-x64": "7.0.2", "@typescript/typescript-sunos-x64": "7.0.2", "@typescript/typescript-win32-arm64": "7.0.2", "@typescript/typescript-win32-x64": "7.0.2" }, "bin": { "tsc": "bin/tsc" } }, "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="],
+
+    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
 
     "web-tree-sitter": ["web-tree-sitter@0.25.10", "https://registry.npmmirror.com/web-tree-sitter/-/web-tree-sitter-0.25.10.tgz", { "peerDependencies": { "@types/emscripten": "^1.40.0" }, "optionalPeers": ["@types/emscripten"] }, "sha512-Y09sF44/13XvgVKgO2cNDw5rGk6s26MgoZPXLESvMXeefBf7i6/73eFurre0IsTW6E14Y0ArIzhUMmjoc7xyzA=="],
 

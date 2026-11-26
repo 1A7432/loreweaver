@@ -1,0 +1,15 @@
+{
+  "name": "loreweaver-server",
+  "version": "3.0.0-alpha.0",
+  "description": "The Loreweaver server.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json && bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.5",
+    "typescript": "^7.0.2"
+  }
+}

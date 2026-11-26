@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "bun run src/index.tsx",
-    "build": "bun build ./src/index.tsx --outdir ./dist --target bun --format esm --external \"@opentui/core-*\" --external \"@number0/iroh\" && (mkdir -p dist/node_modules/@opentui && cp -RL ../node_modules/.bun/@opentui+core-*/node_modules/@opentui/core-* dist/node_modules/@opentui/ 2>/dev/null || true)",
+    "build": "bun build ./src/index.tsx --outdir ./dist --target bun --format esm --external \"@opentui/core-*\" --external \"@number0/iroh\" && (mkdir -p dist/node_modules/@opentui && cp -RL ../../node_modules/.bun/@opentui+core-*/node_modules/@opentui/core-* dist/node_modules/@opentui/ 2>/dev/null || true)",
     "test": "bun test"
   },
   "dependencies": {

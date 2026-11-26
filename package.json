@@ -1,10 +1,12 @@
 {
-  "name": "loreweaver-clients",
+  "name": "loreweaver-workspace",
   "private": true,
   "type": "module",
   "workspaces": [
-    "protocol",
-    "tui"
+    "clients/protocol",
+    "clients/tui",
+    "sdk",
+    "server"
   ],
   "overrides": {
     "shell-quote": "^1.11.0"

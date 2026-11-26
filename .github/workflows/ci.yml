@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # v3: the 3.0 rewrite lives on its own long-running branch until it is released.
+    branches: [main, v3]
   pull_request:
 
 concurrency:
@@ -57,3 +58,21 @@ jobs:
       - name: tui (OpenTUI)
         working-directory: clients/tui
         run: bun install && bun test && bun run build
+
+  server:
+    name: Server + module SDK — TypeScript (bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      # One workspace for the whole repository (the root package.json); `--frozen-lockfile`
+      # fails the job when bun.lock does not match the manifests.
+      - run: bun install --frozen-lockfile
+      # `check` is `tsc --noEmit` AND the test runner, for the same reason as the
+      # protocol job above: the type gate is half of the gate.
+      - name: sdk
+        working-directory: sdk
+        run: bun run check
+      - name: server
+        working-directory: server
+        run: bun run check
