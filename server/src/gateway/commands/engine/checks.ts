@@ -45,6 +45,7 @@ import {
   facesOf,
   putDocument,
 } from "../support.ts";
+import { ROOM_RULE_PACK } from "../state.ts";
 import { type Args, type CommandCall, type CommandEvent, type CommandSpec, type Done, isRefused, refuse, type Refused, type TextForms } from "../types.ts";
 import { DISFAVOR_WORDS, FAVOR_WORDS, splitRepeat } from "./dice.ts";
 
@@ -790,9 +791,20 @@ export const newCharacterCommand: CommandSpec = {
     if (!seated.ok) return refuse("seat_refused", { code: seated.code });
     saveCharacter(call, id, created.data);
     saveSeating(call, seated.data);
+    const events: CommandEvent[] = [
+      { kind: "narrative", data: { speaker: "system", text: call.tell("character.created", { member: member.name, name: created.data.sheet.name, system: pack.id }), format: "plain" } },
+    ];
+    // A room that has no rule system takes the one its first character was made for: a
+    // table that rolled CoC investigators and then could not make a check (seen in the
+    // first hands-on run of the terminal client) is not a state anyone chose. An admin
+    // changes it with `rule system`; a room that already has one is left alone.
+    if (call.context.pack === null) {
+      call.context.writer.statePut(ROOM_RULE_PACK, pack.id);
+      events.push({ kind: "narrative", data: { speaker: "system", text: call.tell("rule.system_event", { system: pack.id }), format: "plain" } });
+    }
     return {
       data: { id, name: created.data.sheet.name, system: pack.id, violations: created.violations.map((violation) => violation.code) },
-      events: [{ kind: "narrative", data: { speaker: "system", text: call.tell("character.created", { member: member.name, name: created.data.sheet.name, system: pack.id }), format: "plain" } }],
+      events,
     };
   },
 };

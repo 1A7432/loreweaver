@@ -52,3 +52,16 @@ test("in a room with no system, the rule can be looked at and a system chosen", 
   ok(await b.run(ADMIN, "rule", { system: "coc7" }));
   expect(b.store.stateGet(ROOM, ROOM_RULE_PACK)).toBe("coc7");
 });
+
+test("a room with no rule system takes the system of its first character, and only then", async () => {
+  const b = bench({ system: null });
+  const first = ok(await b.run(ADA, "new_character", { system: "coc7", name: "Ada Hale" }));
+  expect(narration(first)).toEqual(["Ada made a new character: Ada Hale (coc7).", "Rule system set to coc7."]);
+  expect(b.store.stateGet(ROOM, ROOM_RULE_PACK)).toBe("coc7");
+
+  // The room has a system now: a character of another one does not move it.
+  b.system = "coc7";
+  const second = ok(await b.run(ADMIN, "new_character", { system: "dnd5e", name: "Root" }));
+  expect(narration(second).length).toBe(1);
+  expect(b.store.stateGet(ROOM, ROOM_RULE_PACK)).toBe("coc7");
+});

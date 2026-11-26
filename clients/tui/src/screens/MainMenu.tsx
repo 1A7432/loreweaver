@@ -102,7 +102,10 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
               <box
                 height={1}
                 backgroundColor={visibleSelected === index ? theme.accent : theme.bg}
-                onMouseOver={() => setSelected(index)}
+                // The pointer MOVING onto a row selects it. Not `onMouseOver`: that also fires when a new
+                // screen puts a row under a pointer that has not moved, and the row under the button
+                // just clicked can be Quit or Delete — one Enter away.
+                onMouseMove={() => setSelected(index)}
                 onMouseDown={() => activate(index)}
               >
                 <text fg={visibleSelected === index ? theme.bg : theme.fg}>
