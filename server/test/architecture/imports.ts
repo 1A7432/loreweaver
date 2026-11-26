@@ -11,8 +11,10 @@
 //   4. A relative import names its file with the extension, so the tree also loads
 //      under a runtime that strips types without resolving extensions.
 //   5. The only thing imported from outside `src/` by path is data — message catalogs
-//      (`.json`) and the built-in content a compiled binary must carry (`.yaml`, `.md`,
-//      `.txt`). Code outside `src/` is reached as a package or not at all.
+//      (`.json`), the built-in content a compiled binary must carry (`.yaml`, `.md`,
+//      `.txt`), and the vendored libraries under `assets/vendor/`, which are imported AS
+//      TEXT to be run inside a template context, never as modules. Code outside `src/`
+//      is reached as a package or not at all.
 //   6. Stored documents are read whole only by the code that defines what they mean
 //      (`core/`) and by the Keeper's tools (`agent/`). The gateway, the transports and
 //      the worker reach room content through projections (`core/documents/views.ts`),
@@ -91,12 +93,13 @@ export function checkImports(files: ReadonlyMap<string, string>): Violation[] {
         }
         continue;
       }
-      if (!/\.(ts|json|yaml|md|txt)$/.test(specifier)) {
+      if (!/\.(ts|js|json|yaml|md|txt)$/.test(specifier)) {
         violations.push({ file, rule: 4, detail: `relative import without an extension: ${specifier}` });
       }
       const target = resolveRelative(file, specifier);
       if (target === null) {
-        if (!/\.(json|yaml|md|txt)$/.test(specifier)) {
+        const vendored = /(^|\/)assets\/vendor\/[^/]+\.js$/.test(specifier);
+        if (!vendored && !/\.(json|yaml|md|txt)$/.test(specifier)) {
           violations.push({ file, rule: 5, detail: `imports code from outside src/: ${specifier}` });
         }
         continue;
