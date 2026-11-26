@@ -14,35 +14,32 @@ permissions:
   contents: read
 
 jobs:
-  python:
-    name: Python (${{ matrix.python-version }}) — lint + i18n + tests
+  frozen:
+    # The Python server is frozen on this branch: it is the reference the rewrite reads,
+    # and it is deleted when 3.0 ships. Its own tests no longer run here (they can only
+    # change if its files do); instead this job fails when the branch differs from main
+    # anywhere in the frozen tree.
+    name: Frozen Python tree untouched
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Keep in sync with `requires-python` in pyproject.toml (currently >=3.11).
-        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.4.0
         with:
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
-      # anthropic/gemini: the two native (non-OpenAI-shaped) provider classes,
-      # whose contract tests are version-sensitive. ejs: the QuickJS sandbox every
-      # untrusted-code lane runs in — the rules-script resolvers, the Layer C.1
-      # skill hooks and the full-EJS templates all SKIP THEMSELVES without it, so
-      # leaving it out silently retires the coverage that matters most here. Keep
-      # this in sync with the `uv sync` line in AGENTS.md. The `dev`
-      # dependency-group (pytest/ruff) is installed by default; --locked asserts
-      # uv.lock is current.
-      - run: uv sync --locked --extra anthropic --extra gemini --extra ejs
-      - name: Ruff
-        run: uv run ruff check core infra agent gateway net adapters app.py lw_versioning.py scripts
-      - name: i18n lint (no hardcoded natural-language strings)
-        run: uv run python scripts/i18n_lint.py
-      - name: Tests (offline — FakeLLM/FakeEmbeddings, no API keys)
-        run: uv run pytest -q
+          fetch-depth: 0
+      - name: No frozen path differs from main
+        run: |
+          git fetch --no-tags origin main
+          base=$(git merge-base origin/main HEAD)
+          changed=$(git diff --name-only "$base" HEAD -- \
+            core infra agent gateway net adapters tests \
+            app.py lw_versioning.py conftest.py pyproject.toml uv.lock loreweaver-server.spec \
+            scripts/i18n_lint.py scripts/i18n_allowlist.txt scripts/package_server.py \
+            scripts/playtest.py scripts/longrun.py scripts/coverage_sweep.py)
+          if [ -n "$changed" ]; then
+            echo "These frozen files differ from main:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "The frozen tree is identical to main."
 
   clients:
     name: Clients — TypeScript (bun)
