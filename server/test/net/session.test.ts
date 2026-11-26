@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { EventFrame, ResultFrame, ServerFrame, WelcomeFrame } from "loreweaver-protocol/v3";
 
-import { ScriptedLLM } from "../../src/infra/llm.ts";
+import { ScriptedLLM } from "../../src/infra/llm/index.ts";
 import { bench, fixtureModule, isIdle, Wire, type Bench } from "../helpers.ts";
 
 const benches: Bench[] = [];

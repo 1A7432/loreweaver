@@ -12,7 +12,7 @@ import type { ServerFrame } from "loreweaver-protocol/v3";
 
 import { Hub } from "../gateway/hub.ts";
 import { systemClock } from "../infra/ids.ts";
-import { ScriptedLLM } from "../infra/llm.ts";
+import { ScriptedLLM } from "../infra/llm/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
 import { spawnWorker } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";

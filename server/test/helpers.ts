@@ -4,7 +4,7 @@ import type { ClientFrame, ServerFrame } from "loreweaver-protocol/v3";
 
 import { Hub } from "../src/gateway/hub.ts";
 import type { Clock } from "../src/infra/ids.ts";
-import type { LLMClient } from "../src/infra/llm.ts";
+import type { LLMClient } from "../src/infra/llm/index.ts";
 import { openDatabase } from "../src/infra/runtime/sqlite.ts";
 import { roomWorkerEntry, spawnWorker } from "../src/infra/runtime/worker.ts";
 import { Store } from "../src/infra/store.ts";

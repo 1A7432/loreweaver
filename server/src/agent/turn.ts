@@ -5,7 +5,7 @@
 import type { NarrativeData } from "loreweaver-protocol/v3";
 
 import type { Clock } from "../infra/ids.ts";
-import type { ChatMessage, LLMClient } from "../infra/llm.ts";
+import type { ChatMessage, LLMClient } from "../infra/llm/index.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
 import { dispatchTurnStart } from "./modules.ts";
 

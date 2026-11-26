@@ -2,7 +2,7 @@
 import type { Json } from "loreweaver/module";
 
 import type { Clock } from "../infra/ids.ts";
-import type { LLMClient } from "../infra/llm.ts";
+import type { LLMClient } from "../infra/llm/index.ts";
 import { RoomWorker } from "../infra/room_worker.ts";
 import type { WorkerHandle } from "../infra/runtime/worker.ts";
 import type { Store } from "../infra/store.ts";
