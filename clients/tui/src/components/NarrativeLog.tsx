@@ -3,8 +3,8 @@ import { useRenderer } from "@opentui/react"
 import { useEffect, useMemo } from "react"
 import { stripControlChars, type DiceData } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
-import { itemBlocks, lastChoicesIndex, type LogItem } from "../log"
-import { diceText, localText, markerText, speakerLabel } from "../logText"
+import { blockPictureKey, itemBlocks, lastChoicesIndex, type LogItem, type Picture } from "../log"
+import { diceText, localText, markerText, mediaText, speakerLabel } from "../logText"
 import type { Palette } from "../themes"
 import { Spinner } from "./Spinner"
 import { UiBlocksView, type UiChoice } from "./UiBlocks"
@@ -38,6 +38,12 @@ export interface NarrativeLogProps {
   // picked option is acted on with.
   choicesFocused?: boolean
   onChoicePick?: (option: UiChoice) => void
+  /** Member names by id (the `party` view), for who shared a file. */
+  names?: ReadonlyMap<string, string>
+  /** The picture the arrows have selected (its `Picture.key`), drawn highlighted. */
+  selectedPicture?: string
+  /** A picture was clicked. */
+  onPictureOpen?: (key: string) => void
 }
 
 function diceColor(dice: DiceData, theme: Palette): string {
@@ -93,6 +99,9 @@ export function NarrativeLog({
   locale,
   choicesFocused = false,
   onChoicePick,
+  names,
+  selectedPicture,
+  onPictureOpen,
 }: NarrativeLogProps) {
   const renderer = useRenderer()
   const narrativeSyntaxStyle = useMemo(() => SyntaxStyle.fromStyles(NARRATIVE_STYLES, renderer.nativeScene), [renderer])
@@ -126,6 +135,16 @@ export function NarrativeLog({
           if (item.kind === "local") {
             const line = item.line
             if (line.spinner) return <Spinner key={item.key} active label={localText(line, locale)} color={theme.accent} />
+            if (line.kind === "notice") {
+              // An out-of-band line for the table — a turn that failed, a long operation — set
+              // apart from the story by a bar in the margin and its own colour, never in a story voice.
+              const tone = line.level === "warn" ? theme.fumble : theme.accent
+              return (
+                <box key={item.key} border={["left"]} borderColor={tone} paddingLeft={1} width="100%" flexShrink={0}>
+                  <text fg={tone}>{localText(line, locale)}</text>
+                </box>
+              )
+            }
             const color = line.kind === "result" ? theme.system : line.level === "warn" ? theme.fail : theme.system
             return (
               <text key={item.key} fg={color}>
@@ -154,6 +173,7 @@ export function NarrativeLog({
                 locale={locale}
                 meterWidth={10}
                 interactive={onChoicePick && index === activeChoices ? { focused: choicesFocused, onPick: onChoicePick } : undefined}
+                images={{ key: (at) => blockPictureKey(item.key, at), selected: selectedPicture, ...(onPictureOpen ? { onOpen: onPictureOpen } : {}) }}
               />
             )
           }
@@ -179,7 +199,25 @@ export function NarrativeLog({
               </text>
             )
           }
-          const marker = markerText(event, locale)
+          if (event.kind === "media") {
+            const picture = event.data.mime.startsWith("image/")
+            const selected = picture && selectedPicture === item.key
+            return (
+              <box
+                key={item.key}
+                width="100%"
+                flexShrink={0}
+                backgroundColor={selected ? theme.accent : undefined}
+                onMouseDown={picture && onPictureOpen ? () => onPictureOpen(item.key) : undefined}
+              >
+                <text fg={selected ? theme.bg : theme.system}>
+                  {mediaText(event.data, names, locale)}
+                  {selected ? `  ${tt(locale, "log.pictureOpen")}` : ""}
+                </text>
+              </box>
+            )
+          }
+          const marker = markerText(event, locale, names)
           return marker ? (
             <text key={item.key} fg={theme.dim}>
               {marker}

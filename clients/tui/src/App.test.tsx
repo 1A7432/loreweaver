@@ -186,4 +186,80 @@ describe("App", () => {
     await screen("online again", (text) => text.includes("● online"))
     harness.mockInput.pressKey(PAGE_UP)
   })
+
+  test("host locally by keyboard: Tab reaches the button, Enter starts it; Disconnect stops that server and returns to the connect screen", async () => {
+    const server = new FakeServer({ role: "admin", name: "Admin", room: "main" })
+    let stopped = 0
+    const bringUp: AppProps["bringUp"] = async () => ({ ticket: TICKET, key: "first-admin-key", newKey: true, stop: async () => void (stopped += 1) })
+    const { harness, screen } = await boot(server, { bringUp, prefill: { locale: "en", localServerHome: "/srv/lw" } })
+    await screen("the connect screen", (text) => text.includes("Host locally"))
+    // Ticket → key → name → the button.
+    for (let i = 0; i < 3; i += 1) {
+      harness.mockInput.pressTab()
+      await pump()
+    }
+    await screen("the button focused", (text) => text.includes("› ⌂ Host locally & play  Enter"))
+    harness.mockInput.pressEnter()
+    const menu = await screen("the admin's menu", (text) => text.includes("Enter game") && text.includes("Disconnect"))
+    expect(menu).toContain("Import a world card")
+    // Enter game, My character, Commands, Import a world card, Settings, Disconnect.
+    for (let i = 0; i < 5; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the connect screen again", (text) => text.includes("⚄ Connect"))
+    await waitFor("the local server stopped", () => stopped === 1)
+    expect(server.current.closed).toBe(true)
+  })
+
+  test("when the server this client started exits, the client stops redialling and offers the way back", async () => {
+    const server = new FakeServer({ role: "admin", name: "Admin", room: "main" })
+    let exit: (code: number) => void = () => {}
+    const exited = new Promise<number>((resolve) => (exit = resolve))
+    const bringUp: AppProps["bringUp"] = async () => ({ ticket: TICKET, key: "first-admin-key", newKey: true, stop: async () => {}, exited })
+    const { harness, screen } = await boot(server, { bringUp, prefill: { locale: "en" } })
+    await screen("the connect screen", (text) => text.includes("Host locally"))
+    const frame = harness.captureCharFrame()
+    const row = frame.split("\n").findIndex((line) => line.includes("Host locally & play"))
+    await harness.mockMouse.click((frame.split("\n")[row] ?? "").indexOf("Host locally") + 2, row)
+    await screen("the menu", (text) => text.includes("Enter game"))
+    server.unreachable = true
+    server.current.drop()
+    exit(1)
+    await screen("the lost screen", (text) => text.includes("The local server this client started has exited"))
+    harness.mockInput.pressEnter()
+    await screen("the connect screen again", (text) => text.includes("⚄ Connect"))
+  })
+
+  test("settings say plainly that server messages change language on the next connect", async () => {
+    const server = new FakeServer()
+    const { harness, screen } = await boot(server)
+    await screen("the connect screen", (text) => text.includes("⚄ Connect"))
+    harness.mockInput.pressEnter()
+    await screen("the menu", (text) => text.includes("Enter game"))
+    for (let i = 0; i < 3; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the settings", (text) => text.includes("from the next connect"))
+    harness.mockInput.pressArrow("right")
+    await screen("the warning in the new language", (text) => text.includes("断开后重新连接才会切换"))
+  })
+
+  test("Esc in the game view closes an open share form, not the game", async () => {
+    const server = new FakeServer()
+    const { harness, screen } = await boot(server)
+    await screen("the connect screen", (text) => text.includes("⚄ Connect"))
+    harness.mockInput.pressEnter()
+    await screen("the menu", (text) => text.includes("Enter game"))
+    harness.mockInput.pressEnter()
+    await screen("the game", (text) => text.includes("say or command"))
+    harness.mockInput.pressKey("F8")
+    await screen("the share form", (text) => text.includes("Share a picture with the table"))
+    harness.mockInput.pressEscape()
+    const after = await screen("the form closed", (text) => !text.includes("Share a picture with the table"))
+    expect(after).toContain("say or command")
+  })
 })

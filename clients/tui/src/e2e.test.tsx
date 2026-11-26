@@ -2,7 +2,8 @@
 // no model configured, reached through this client's own iroh transport, the protocol `Session`
 // and the game view. Nothing here is a double.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { builtInView } from "loreweaver-protocol/v3"
@@ -13,6 +14,8 @@ import { roomWorkerEntry } from "../../../server/src/infra/runtime/worker.ts"
 import { Connection } from "./connection"
 import { GameView } from "./GameView"
 import { irohDialer } from "./irohLink"
+import { readLocalFile } from "./media"
+import { PNG } from "pngjs"
 import { liveRender, waitFor, waitForScreen } from "./testkit"
 import { themes } from "./themes"
 
@@ -94,3 +97,75 @@ test(
   },
   60_000,
 )
+
+test(
+  "the byte channel: share a PNG and fetch it back byte for byte; import a character card and, as admin, a world card",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loreweaver-tui-e2e-"))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const server: RunningServer = await openServer(loadSettings({ TRPG_DATA_DIR: join(dir, "server") }), { mode: "local", workerEntry: roomWorkerEntry(), report: () => {} })
+    cleanups.push(() => server.close())
+    const connection = new Connection({
+      ticket: server.ticket,
+      key: server.firstKey?.key as string,
+      name: "Ada",
+      locale: "en",
+      client: { name: "loreweaver-tui-test", version: "0" },
+      dial: irohDialer({ mode: "local" }),
+      mediaCacheDir: join(dir, "cache"),
+    })
+    cleanups.push(() => connection.stop())
+    await connection.start()
+    const session = connection.session
+    await until("the welcome and the views", () => session.status === "online" && session.getSnapshot().views.has("me") && session.getSnapshot().views.has("room"))
+    const memberId = session.getSnapshot().welcome?.you.id
+
+    // A share: offered on the control stream, sent on a byte stream, announced as a media event.
+    const png = new PNG({ width: 3, height: 2 })
+    for (let i = 0; i < 6; i += 1) png.data.set([i * 40, 90, 200, 255], i * 4)
+    const bytes = new Uint8Array(PNG.sync.write(png))
+    const path = join(dir, "handout.png")
+    writeFileSync(path, bytes)
+    const stored = await connection.upload(await readLocalFile(path, "image"), "share")
+    const hash = createHash("sha256").update(bytes).digest("hex")
+    expect(stored).toEqual({ hash, size: bytes.length, mime: "image/png", name: "handout.png" })
+    await until("the media event", () => session.getSnapshot().events.some((event) => event.kind === "media" && event.data.hash === hash))
+    const media = session.getSnapshot().events.find((event) => event.kind === "media")
+    expect(media?.kind === "media" && media.data).toMatchObject({ name: "handout.png", mime: "image/png", from: memberId })
+    // Fetched back over its own stream, byte for byte, and kept in the cache.
+    const fetched = await connection.fetchMedia(hash)
+    expect(Buffer.from(fetched.bytes).equals(Buffer.from(bytes))).toBe(true)
+    expect(fetched.path).toBe(join(dir, "cache", hash))
+    // A hash the room does not hold: the server's coded refusal, in words.
+    await expect(connection.fetchMedia("d".repeat(64))).rejects.toMatchObject({ code: "media_not_found", server: true })
+
+    // A character needs the room's rule system: the admin picks one the server offers.
+    await until("the systems", () => (builtInView(session.getSnapshot(), "characters")?.data.systems.length ?? 0) > 0)
+    const system = builtInView(session.getSnapshot(), "characters")?.data.systems[0]?.id as string
+    expect((await connection.runCommand("rule", { system }))?.ok).toBe(true)
+
+    // A character card, as a literal JSON file: uploaded for import, then imported.
+    const card = { spec: "chara_card_v2", spec_version: "2.0", data: { name: "Mirabel Hart", description: "A lighthouse keeper's daughter.", personality: "Steady." } }
+    writeFileSync(join(dir, "mirabel.json"), JSON.stringify(card))
+    const cardFile = await connection.upload(await readLocalFile(join(dir, "mirabel.json"), "card"), "import")
+    // Nothing of an import file reaches the table.
+    expect(session.getSnapshot().events.some((event) => event.kind === "media" && event.data.hash === cardFile.hash)).toBe(false)
+    const imported = await connection.runCommand("import", { file: cardFile.hash, as: "character" })
+    expect(imported, JSON.stringify(imported)).toMatchObject({ ok: true })
+    await until("the character in the me view", () => builtInView(session.getSnapshot(), "me")?.data.character?.name === "Mirabel Hart")
+
+    // A world card, as the admin: one line for the table, the counts for the admin alone.
+    const world = { spec: "chara_card_v2", spec_version: "2.0", data: { name: "Drowned City", description: "A city under the sea.", character_book: { entries: [{ keys: ["harbor"], content: "The harbor is older than the city.", comment: "Harbor" }] } } }
+    writeFileSync(join(dir, "world.json"), JSON.stringify(world))
+    const before = session.getSnapshot().events.length
+    const worldFile = await connection.upload(await readLocalFile(join(dir, "world.json"), "card"), "import")
+    const answer = await connection.runCommand("import", { file: worldFile.hash, as: "world" })
+    expect(answer, JSON.stringify(answer)).toMatchObject({ ok: true })
+    expect(answer?.ok && answer.text).toContain("Drowned City")
+    await until("the table's line", () => session.getSnapshot().events.slice(before).some((event) => event.kind === "narrative" && event.data.text.includes("Drowned City")))
+    const lines = session.getSnapshot().events.slice(before).filter((event) => event.kind === "narrative")
+    expect(lines).toHaveLength(1)
+  },
+  60_000,
+)
+

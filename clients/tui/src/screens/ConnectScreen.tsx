@@ -40,8 +40,9 @@ export interface ConnectScreenProps {
 }
 
 
-type Field = "host" | "key" | "name" | "localServerHome"
-const FIELD_ORDER: Field[] = ["host", "key", "name", "localServerHome"]
+type Field = "host" | "key" | "name" | "hostLocal" | "localServerHome"
+// Cyclic in screen order, starting at the ticket: … name → the host-locally button → its folder → ticket …
+const FIELD_ORDER: Field[] = ["host", "key", "name", "hostLocal", "localServerHome"]
 
 export function ConnectScreen({
   theme,
@@ -79,15 +80,19 @@ export function ConnectScreen({
   // Scoped to this screen (mounted only on the connect screen), so Tab cycling
   // never collides with the menu's arrow navigation. The focused <input> still
   // receives typed characters; Tab/Enter are handled here / by onSubmit.
+  // The host-locally button is a Tab stop only where it is offered.
+  const order = onHostLocal ? FIELD_ORDER : FIELD_ORDER.filter((field) => field !== "hostLocal" && field !== "localServerHome")
   useKeyboard((event: KeyEvent) => {
     const keyName = typeof event.name === "string" ? event.name.toLowerCase() : ""
     if (keyName === "tab") {
       setFocused((prev) => {
-        const index = FIELD_ORDER.indexOf(prev)
-        const delta = event.shift ? FIELD_ORDER.length - 1 : 1
-        return FIELD_ORDER[(index + delta) % FIELD_ORDER.length]
+        const index = Math.max(0, order.indexOf(prev))
+        const delta = event.shift ? order.length - 1 : 1
+        return order[(index + delta) % order.length] as Field
       })
     }
+    // No input owns Enter while the button has the focus: it activates the button.
+    if ((keyName === "return" || keyName === "enter") && focused === "hostLocal" && onHostLocal && !connecting) onHostLocal()
   })
 
   const fieldColor = (field: Field) => (focused === field ? theme.accent : theme.dim)
@@ -128,8 +133,19 @@ export function ConnectScreen({
 
         {onHostLocal ? (
           <box flexDirection="column" marginBottom={1}>
-            <box onMouseDown={() => onHostLocal()} backgroundColor={theme.success} paddingX={1}>
-              <text fg={theme.bg}>{connecting ? tt(locale, "connect.connecting") : tt(locale, "connect.hostLocal")}</text>
+            <box
+              onMouseDown={() => {
+                setFocused("hostLocal")
+                onHostLocal()
+              }}
+              backgroundColor={focused === "hostLocal" ? theme.accent : theme.success}
+              paddingX={1}
+            >
+              <text fg={theme.bg}>
+                {focused === "hostLocal" ? "› " : ""}
+                {connecting ? tt(locale, "connect.connecting") : tt(locale, "connect.hostLocal")}
+                {focused === "hostLocal" ? `  ${tt(locale, "connect.hostLocalEnter")}` : ""}
+              </text>
             </box>
             <box flexDirection="column" marginTop={1} onMouseDown={() => setFocused("localServerHome")}>
               <text fg={fieldColor("localServerHome")} wrapMode="none" truncate>{tt(locale, "connect.localServerHome")}</text>

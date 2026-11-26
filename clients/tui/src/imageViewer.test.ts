@@ -18,11 +18,8 @@ function hash(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex")
 }
 
-function clientFor(bytes: Uint8Array, mime = "image/png") {
-  const digest = hash(bytes)
-  return {
-    getMedia: async () => ({ hash: digest, mime, name: "image.png", bytes }),
-  } as never
+function payloadFor(bytes: Uint8Array, mime = "image/png") {
+  return { hash: hash(bytes), mime, name: "image.png", bytes }
 }
 
 describe("image viewer", () => {
@@ -70,8 +67,7 @@ describe("image viewer", () => {
     const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text x="1" y="5">Map</text></svg>')
     const events: string[] = []
     const lines = await viewImage({
-      client: clientFor(svg, "image/svg+xml"),
-      media: { hash: hash(svg), mime: "image/svg+xml", name: "map.svg", size: svg.byteLength },
+      payload: payloadFor(svg, "image/svg+xml"),
       renderer: { capabilities: { kitty_graphics: true }, suspend: () => events.push("suspend"), resume: () => events.push("resume") },
       write: () => events.push("write"),
       columns: 20,
@@ -86,8 +82,7 @@ describe("image viewer", () => {
     const bytes = new Uint8Array([1, 2, 3])
     const events: string[] = []
     await viewImage({
-      client: clientFor(bytes),
-      media: { hash: hash(bytes), mime: "image/png", name: "image.png", size: bytes.byteLength },
+      payload: payloadFor(bytes),
       renderer: { capabilities: { kitty_graphics: true }, suspend: () => events.push("suspend"), resume: () => events.push("resume") },
       write: (text) => events.push(text.includes("a=d") ? "delete" : "write"),
       readKey: async () => events.push("read"),
@@ -100,16 +95,22 @@ describe("image viewer", () => {
     expect(events.at(-1)).toBe("resume")
   })
 
+  test("a GIF goes to the system viewer when one is offered, and is refused when not", async () => {
+    const bytes = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+    const opened: string[] = []
+    await viewImage({ payload: payloadFor(bytes, "image/gif"), openExternally: () => opened.push("open"), env: {} })
+    expect(opened).toEqual(["open"])
+    await expect(viewImage({ payload: payloadFor(bytes, "image/gif"), env: {} })).rejects.toThrow("unsupported inline preview")
+  })
+
   test("sixel path uses suspend flow and modal path returns halfblock lines", async () => {
     const png = new PNG({ width: 1, height: 1 })
     png.data.set([255, 0, 0, 255], 0)
     const bytes = new Uint8Array(PNG.sync.write(png))
-    const media = { hash: hash(bytes), mime: "image/png", name: "image.png", size: bytes.byteLength }
     const events: string[] = []
 
     await viewImage({
-      client: clientFor(bytes),
-      media,
+      payload: payloadFor(bytes),
       renderer: { capabilities: { sixel: true }, suspend: () => events.push("suspend"), resume: () => events.push("resume") },
       write: (text) => events.push(text.startsWith("\x1bPq") ? "sixel" : "write"),
       readKey: async () => events.push("read"),
@@ -122,8 +123,7 @@ describe("image viewer", () => {
     expect(events.at(-1)).toBe("resume")
 
     const lines = await viewImage({
-      client: clientFor(bytes),
-      media,
+      payload: payloadFor(bytes),
       renderer: { capabilities: { sixel: false, kitty_graphics: false } },
       columns: 2,
       rows: 2,

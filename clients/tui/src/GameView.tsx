@@ -5,7 +5,9 @@ import { stripControlChars } from "loreweaver-protocol/v3"
 import { HeaderBar, type LinkStatus } from "./components/HeaderBar"
 import { NarrativeLog } from "./components/NarrativeLog"
 import { PartyRoster, freeClaimables } from "./components/PartyRoster"
+import { PictureViewer } from "./components/PictureViewer"
 import { ScenePanel } from "./components/ScenePanel"
+import { ShareForm } from "./components/ShareForm"
 import { StatusBar } from "./components/StatusBar"
 import type { UiChoice } from "./components/UiBlocks"
 import { VariablesPanel } from "./components/VariablesPanel"
@@ -14,7 +16,7 @@ import { useConnectionState, useSnapshot, viewData } from "./hooks"
 import { tt, type MessageKey } from "./i18n"
 import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
 import { sidebarCollapsed, sidebarWidth } from "./layout"
-import { lastChoicesIndex, logItems, type Cleared } from "./log"
+import { lastChoicesIndex, logItems, logPictures, type Cleared, type Picture } from "./log"
 import type { Palette, ThemeName } from "./themes"
 import { usesAppClipboardCopy } from "./copy"
 import { writeTranscript } from "./transcript"
@@ -36,6 +38,12 @@ export interface GameViewProps {
   transcriptDir?: string
   /** Open the command list (F7). */
   onCommands?: () => void
+  /** A picture or the share form opened (true) or closed: while one is open, Esc is theirs, not the shell's. */
+  onModalChange?: (open: boolean) => void
+  /** The environment a picture's graphics protocol is chosen from; tests hand in `{}`. */
+  pictureEnv?: Record<string, string | undefined>
+  /** Whether a picture may use the terminal's own graphics (kitty, iTerm2, sixel); tests turn it off. */
+  pictureGraphics?: boolean
 }
 
 /** The link as the header shows it. */
@@ -56,7 +64,12 @@ function keyName(event: KeyEvent): string {
   return typeof event.name === "string" ? event.name.toLowerCase() : ""
 }
 
-export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, onCommands }: GameViewProps) {
+/** Member names by id, from the `party` view: who shared a file. */
+function memberNames(party: { members: { id: string; name: string }[] } | null): ReadonlyMap<string, string> {
+  return new Map((party?.members ?? []).map((member) => [member.id, member.name]))
+}
+
+export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true }: GameViewProps) {
   const snapshot = useSnapshot(connection)
   const local = useConnectionState(connection)
   const { width: terminalWidth } = useTerminalDimensions()
@@ -82,6 +95,11 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const [rosterFocused, setRosterFocused] = useState(false)
   const [choicesFocused, setChoicesFocused] = useState(false)
   const [narrowSidebarOpen, setNarrowSidebarOpen] = useState(false)
+  // Pictures: Tab puts the arrows on them, Enter (or a click) shows one; F8 opens the share form.
+  const [picturesFocused, setPicturesFocused] = useState(false)
+  const [pictureKey, setPictureKey] = useState<string | null>(null)
+  const [viewing, setViewing] = useState<Picture | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const inputRef = useRef<InputRenderable>(null)
   // Narratives that replaced a draft streamed in front of this player (see NarrativeLog).
@@ -93,6 +111,10 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const showSidebar = !narrow || narrowSidebarOpen
   const inputState = inputLimitState(command)
   const hasChoices = lastChoicesIndex(items) !== -1
+  const pictures = useMemo(() => logPictures(items), [items])
+  const names = useMemo(() => memberNames(party), [party])
+  const selectedPicture = pictures.find((picture) => picture.key === pictureKey) ?? pictures.at(-1)
+  const modal = viewing !== null || shareOpen
   const rosterFocusable = Boolean(me?.character) || freeClaimables(characters).length > 0
   const turn = snapshot.turn
   const busy = turn?.status === "busy"
@@ -111,6 +133,28 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   useEffect(() => {
     if (!hasChoices) setChoicesFocused(false)
   }, [hasChoices])
+  useEffect(() => {
+    if (pictures.length === 0) setPicturesFocused(false)
+  }, [pictures.length])
+
+  useEffect(() => {
+    onModalChange?.(modal)
+  }, [modal])
+  useEffect(() => () => onModalChange?.(false), [])
+
+  const openPicture = (key: string) => {
+    const picture = pictures.find((entry) => entry.key === key)
+    if (!picture) return
+    setPictureKey(key)
+    setViewing(picture)
+  }
+
+  const movePicture = (direction: -1 | 1) => {
+    if (pictures.length === 0) return
+    const at = selectedPicture ? pictures.indexOf(selectedPicture) : pictures.length - 1
+    const next = pictures[Math.max(0, Math.min(pictures.length - 1, at + direction))]
+    if (next) setPictureKey(next.key)
+  }
 
   // The dice reveal: the newest roll that arrives while this view is open tumbles, then settles;
   // a critical flashes. Rolls already in the log when the view opened do not animate.
@@ -221,14 +265,28 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   // while it is mounted.
   useKeyboard((event) => {
     const name = keyName(event)
+    // An open picture or share form owns the keyboard (each closes itself).
+    if (modal) return
+    if (name === "f8") {
+      setShareOpen(true)
+      return
+    }
+    if (picturesFocused && (name === "up" || name === "down")) {
+      movePicture(name === "up" ? -1 : 1)
+      return
+    }
+    if (picturesFocused && (name === "return" || name === "enter")) {
+      if (selectedPicture) openPicture(selectedPicture.key)
+      return
+    }
     if (name === "?" || name === "slash") setShowHelp((value) => !value)
     if (name === "pageup") {
       loadOlder()
       scrollRef.current?.scrollBy?.(-1, "viewport")
     }
     if (name === "pagedown") scrollRef.current?.scrollBy?.(1, "viewport")
-    if (name === "up") recallHistory(-1)
-    if (name === "down") recallHistory(1)
+    if (name === "up" && !rosterFocused && !choicesFocused) recallHistory(-1)
+    if (name === "down" && !rosterFocused && !choicesFocused) recallHistory(1)
     if (event.ctrl && name === "l") {
       const current = connection.session.getSnapshot()
       setCleared({ seq: current.head, lineId: connection.getState().lines.at(-1)?.id ?? 0 })
@@ -238,19 +296,16 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
     if (event.ctrl && name === "s" && event.shift) submit(".save")
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (name === "f7") onCommands?.()
-    // Tab cycles focus: chat input -> the latest choices select (when one is live) -> the roster
-    // (only when it can act) -> back to the input, so focus is never stranded.
+    // Tab cycles focus: chat input -> the latest choices select (when one is live) -> the
+    // pictures in the log (when there are any) -> the roster (only when it can act) -> back to the
+    // input, so focus is never stranded.
     if (name === "tab") {
-      if (choicesFocused) {
-        setChoicesFocused(false)
-        if (showSidebar && rosterFocusable) setRosterFocused(true)
-      } else if (rosterFocused) {
-        setRosterFocused(false)
-      } else if (hasChoices) {
-        setChoicesFocused(true)
-      } else if (showSidebar && rosterFocusable) {
-        setRosterFocused(true)
-      }
+      const stops = ["input", ...(hasChoices ? ["choices"] : []), ...(pictures.length > 0 ? ["pictures"] : []), ...(showSidebar && rosterFocusable ? ["roster"] : [])]
+      const current = choicesFocused ? "choices" : picturesFocused ? "pictures" : rosterFocused ? "roster" : "input"
+      const next = stops[(Math.max(0, stops.indexOf(current)) + 1) % stops.length]
+      setChoicesFocused(next === "choices")
+      setPicturesFocused(next === "pictures")
+      setRosterFocused(next === "roster")
     }
   })
 
@@ -274,13 +329,16 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
             locale={locale}
             choicesFocused={choicesFocused}
             onChoicePick={pickChoice}
+            names={names}
+            selectedPicture={picturesFocused || viewing !== null ? selectedPicture?.key : undefined}
+            onPictureOpen={openPicture}
           />
         </scrollbox>
 
         {showSidebar ? (
           <scrollbox width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} viewportCulling={false}>
             <box flexDirection="column" width="100%" minWidth={0} flexShrink={0}>
-              {narrow ? <ScenePanel scene={scene} theme={theme} locale={locale} /> : null}
+              {narrow ? <ScenePanel scene={scene} theme={theme} locale={locale} established={3} /> : null}
               <PartyRoster
                 character={me?.character}
                 party={party}
@@ -292,12 +350,27 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
                 onClaim={claim}
                 initiativeFirst={narrow}
               />
-              {narrow ? null : <ScenePanel scene={scene} theme={theme} locale={locale} />}
+              {narrow ? null : <ScenePanel scene={scene} theme={theme} locale={locale} established={8} />}
               <VariablesPanel variables={viewData(snapshot, "variables")} theme={theme} locale={locale} />
             </box>
           </scrollbox>
         ) : null}
       </box>
+
+      {viewing !== null ? (
+        <PictureViewer
+          connection={connection}
+          picture={viewing}
+          theme={theme}
+          locale={locale}
+          names={names}
+          graphics={pictureGraphics}
+          {...(pictureEnv ? { env: pictureEnv } : {})}
+          onClose={() => setViewing(null)}
+        />
+      ) : null}
+
+      {shareOpen ? <ShareForm connection={connection} theme={theme} locale={locale} onClose={() => setShareOpen(false)} /> : null}
 
       <box height={3} flexDirection="row" border borderColor={theme.border} paddingX={1}>
         <text fg={theme.accent}>{"> "}</text>
@@ -309,7 +382,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
           minWidth={0}
           value={command}
           maxLength={CHAT_INPUT_LIMIT}
-          focused={!rosterFocused && !choicesFocused}
+          focused={!rosterFocused && !choicesFocused && !picturesFocused && !modal}
           placeholder={tt(locale, "game.placeholder")}
           onInput={(value: string) => {
             setCommand(value)
@@ -351,11 +424,12 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
 
       {showHelp ? (
         // One key group per row; explicit height/flexShrink so the rows never collapse onto one.
-        <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg} flexDirection="column" width="100%" height={7} flexShrink={0}>
+        <box border borderColor={theme.accent} paddingX={1} backgroundColor={theme.bg} flexDirection="column" width="100%" height={8} flexShrink={0}>
           <text fg={theme.fg}>{tt(locale, "game.help")}</text>
           <text fg={theme.fg}>{tt(locale, "game.helpLog")}</text>
           <text fg={theme.fg}>{tt(locale, "game.helpDice")}</text>
           <text fg={theme.fg}>{tt(locale, "game.helpCommands")}</text>
+          <text fg={theme.fg}>{tt(locale, "game.helpPictures")}</text>
           <text fg={theme.accent}>{tt(locale, usesAppClipboardCopy(platform) ? "game.helpCopy" : "game.helpCopyMac")}</text>
         </box>
       ) : null}

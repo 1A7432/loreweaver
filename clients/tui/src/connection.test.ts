@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { mkdtemp, readFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { CLIENT_VIEWS } from "./connection"
 import { FakeServer, ManualClock, pump } from "./testkit"
 
@@ -178,5 +182,101 @@ describe("Connection", () => {
     server.current.drop()
     expect(await connection.input("hello")).toBeNull()
     expect(connection.getState().lines.at(-1)).toMatchObject({ kind: "failed", code: "not_connected" })
+  })
+})
+
+describe("Connection: the byte channel", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5])
+  const hashOf = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+
+  async function online(options: Record<string, unknown> = {}) {
+    const server = new FakeServer()
+    const cache = await mkdtemp(join(tmpdir(), "lw-cache-"))
+    const connection = server.connect({ mediaCacheDir: cache, ...options })
+    await connection.start()
+    await pump()
+    return { server, connection, cache }
+  }
+
+  test("fetchMedia gets the bytes over a stream, keeps them in the cache, and serves the cache next time", async () => {
+    const { server, connection, cache } = await online()
+    const hash = hashOf(png)
+    server.files.set(hash, { bytes: png, mime: "image/png", name: "map.png", purpose: "share" })
+    const file = await connection.fetchMedia(hash)
+    expect(file).toMatchObject({ hash, mime: "image/png", name: "map.png", path: join(cache, hash) })
+    expect(Buffer.from(await readFile(join(cache, hash))).equals(Buffer.from(png))).toBe(true)
+    expect(connection.getState().fetches.get(hash)).toMatchObject({ status: "ready" })
+    // The server forgets it; the cache still answers, and its type is read from the bytes.
+    server.files.clear()
+    const again = await server.connect({ mediaCacheDir: cache }).fetchMedia(hash)
+    expect(again.mime).toBe("image/png")
+  })
+
+  test("a fetch the server refuses is a failed fetch with the server's words", async () => {
+    const { connection } = await online()
+    const hash = "b".repeat(64)
+    await expect(connection.fetchMedia(hash)).rejects.toMatchObject({ code: "media_not_found", server: true })
+    expect(connection.getState().fetches.get(hash)).toEqual({ status: "failed", code: "media_not_found", message: "refused: media_not_found" })
+    await expect(connection.fetchMedia("../etc/passwd")).rejects.toMatchObject({ code: "bad_hash" })
+  })
+
+  test("upload offers on the control stream, PUTs the bytes, and the share shows as a media event", async () => {
+    const { server, connection } = await online()
+    const progress: number[] = []
+    connection.subscribe(() => {
+      const upload = connection.getState().upload
+      if (upload) progress.push(upload.sent)
+    })
+    const stored = await connection.upload({ name: "map.png", mime: "image/png", bytes: png }, "share")
+    expect(stored).toEqual({ hash: hashOf(png), size: png.length, mime: "image/png", name: "map.png" })
+    expect(server.offered[0]).toEqual({ name: "map.png", mime: "image/png", size: png.length, sha256: hashOf(png), purpose: "share" })
+    expect(progress.at(-1)).toBe(png.length)
+    expect(connection.getState().upload).toBeNull()
+    await pump()
+    expect(connection.session.getSnapshot().events.at(-1)).toMatchObject({ kind: "media", data: { name: "map.png" } })
+    // The same bytes again: the server already holds them, nothing is sent.
+    const again = await connection.upload({ name: "map.png", mime: "image/png", bytes: png }, "share")
+    expect(again.hash).toBe(hashOf(png))
+    expect(server.offers.size).toBe(0)
+  })
+
+  test("a refused offer rejects with the server's code and words", async () => {
+    const { server, connection } = await online()
+    server.refuseOffer = { code: "media_disabled", message: "上传已关闭。" }
+    await expect(connection.upload({ name: "a.png", mime: "image/png", bytes: png }, "import")).rejects.toMatchObject({ code: "media_disabled", message: "上传已关闭。", server: true })
+    expect(server.offered[0]?.purpose).toBe("import")
+  })
+})
+
+describe("Connection: giving up", () => {
+  test("after the redials run out it gives up and says so; nothing more is dialled", async () => {
+    const server = new FakeServer()
+    const clock = new ManualClock()
+    const connection = server.connect({ timers: clockTimers(clock), now: clock.now, redialBaseMs: 100, redialMaxMs: 100, maxRedials: 3 })
+    await connection.start()
+    await pump()
+    server.unreachable = true
+    server.current.drop()
+    for (let i = 0; i < 6; i += 1) {
+      clock.advance(100)
+      await pump()
+    }
+    expect(connection.getState().lost).toBe("redials")
+    expect(connection.getState().phase).toBe("ended")
+    expect(clock.armed).toBe(0)
+  })
+
+  test("giveUp('server_exited') stops a redialling connection at once", async () => {
+    const server = new FakeServer()
+    const clock = new ManualClock()
+    const connection = server.connect({ timers: clockTimers(clock), now: clock.now })
+    await connection.start()
+    await pump()
+    server.current.drop()
+    connection.giveUp("server_exited")
+    expect(connection.getState()).toMatchObject({ lost: "server_exited", phase: "ended" })
+    clock.advance(60_000)
+    await pump()
+    expect(server.transports).toHaveLength(1)
   })
 })

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readdir, readFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Connection } from "./connection"
 import { GameView, type GameViewProps } from "./GameView"
 import { FakeServer, liveRender, pump, waitFor, waitForScreen } from "./testkit"
+import { PNG } from "pngjs"
 import { themes } from "./themes"
 
 /** The terminal's Page Up sequence (the mock keyboard has no name for it). */
@@ -49,7 +51,8 @@ function table(server: FakeServer): void {
 }
 
 async function play(server: FakeServer, props: Partial<GameViewProps> = {}, width = 120, height = 40) {
-  const connection = server.connect()
+  // Fetched pictures are cached in a folder of the test's own, never in the person's home.
+  const connection = server.connect({ mediaCacheDir: await mkdtemp(join(tmpdir(), "loreweaver-cache-")) })
   connections.push(connection)
   await connection.start()
   await waitFor("the welcome", () => connection.session.status === "online")
@@ -74,7 +77,7 @@ describe("GameView", () => {
     expect(frame).toContain("[Martha]: Keep your voice down.")
     expect(frame).toContain("⚄ Ada 1d100 7 vs 60 -> Hard success")
     expect(frame).toContain("│ Come alone.")
-    expect(frame).toContain("[media] Martha: map.png")
+    expect(frame).toContain("map.png — shared by Martha")
     // Header: room, scene, clock and round, the last turn's tokens and cache share.
     expect(frame).toContain("joined arkham")
     expect(frame).toContain("Miskatonic Library ◷23:40 ·ROUND2")
@@ -219,5 +222,87 @@ describe("GameView", () => {
     const help = await screen("the help", (text) => text.includes("F7 the command list"))
     expect(help).toContain("Ctrl+S save log")
     expect(help).toContain("drag to select, Ctrl+C to copy")
+  })
+
+  test("a shared picture is an entry in the log: Tab to it, Enter fetches it and shows a preview; Esc closes only the picture", async () => {
+    const server = new FakeServer()
+    table(server)
+    const png = new PNG({ width: 2, height: 2 })
+    for (let i = 0; i < 4; i += 1) png.data.set([200, 30, 30, 255], i * 4)
+    const bytes = new Uint8Array(PNG.sync.write(png))
+    const hash = createHash("sha256").update(bytes).digest("hex")
+    server.files.set(hash, { bytes, mime: "image/png", name: "map.png", purpose: "share" })
+    server.event("media", { hash, mime: "image/png", size: bytes.length, name: "map.png", from: "m2" })
+    server.event("blocks", { blocks: [{ kind: "image", hash: "c".repeat(64), caption: "The cellar door" }] })
+    const modal: boolean[] = []
+    const { harness, screen, connection } = await play(server, { pictureGraphics: false, pictureEnv: {}, onModalChange: (open) => modal.push(open) })
+    // Who shared it comes from the party view.
+    await screen("the entry", (text) => text.includes("map.png — shared by Bao"))
+    harness.mockInput.pressTab()
+    await screen("the newest picture selected", (text) => text.includes("The cellar door  Enter: view"))
+    harness.mockInput.pressArrow("up")
+    await screen("the shared picture selected", (text) => text.includes("map.png — shared by Bao  Enter: view"))
+    harness.mockInput.pressEnter()
+    const shown = await screen("the preview", (text) => text.includes("▀") && text.includes("Enter / Esc / q close"))
+    expect(shown).toContain("🖼 map.png · shared by Bao")
+    expect(connection.getState().fetches.get(hash)).toMatchObject({ status: "ready" })
+    expect(modal.at(-1)).toBe(true)
+    harness.mockInput.pressEscape()
+    await screen("the preview closed", (text) => !text.includes("Enter / Esc / q close"))
+    expect(modal.at(-1)).toBe(false)
+    // A picture the server does not hold: its refusal, in the server's words.
+    harness.mockInput.pressArrow("down")
+    await screen("the block's picture selected", (text) => text.includes("The cellar door  Enter: view"))
+    harness.mockInput.pressEnter()
+    await screen("the refusal", (text) => text.includes("refused: media_not_found"))
+  })
+
+  test("F8 shares a local picture: the file is offered, sent, and the table sees it", async () => {
+    const server = new FakeServer()
+    table(server)
+    const dir = await mkdtemp(join(tmpdir(), "loreweaver-share-"))
+    const png = new PNG({ width: 1, height: 1 })
+    await writeFile(join(dir, "handout.png"), PNG.sync.write(png))
+    const { harness, screen } = await play(server, { pictureGraphics: false, pictureEnv: {} })
+    harness.mockInput.pressKey("F8")
+    await screen("the share form", (text) => text.includes("Share a picture with the table"))
+    await harness.mockInput.typeText(join(dir, "nope.png"))
+    harness.mockInput.pressEnter()
+    await screen("the missing file said plainly", (text) => text.includes("No such file"))
+    for (let i = 0; i < "nope.png".length; i += 1) harness.mockInput.pressBackspace()
+    await harness.mockInput.typeText("handout.png")
+    harness.mockInput.pressEnter()
+    await screen("the shared picture in the log", (text) => text.includes("handout.png — shared by Ada") && !text.includes("Share a picture with the table"))
+    expect(server.offered[0]).toMatchObject({ name: "handout.png", mime: "image/png", purpose: "share" })
+  })
+
+  test("the share form says why when uploads are off; an observer is told too", async () => {
+    const server = new FakeServer()
+    table(server)
+    server.views.set("room", { locale: "en", localeLabel: "English", system: null, variant: null, keeperMuted: false, uploads: false })
+    const { harness, screen } = await play(server)
+    await screen("the room view", (text) => text.includes("joined arkham"))
+    await waitFor("the room view", () => server.current.calls("view.subscribe").length > 0)
+    harness.mockInput.pressKey("F8")
+    await screen("the reason", (text) => text.includes("The admin has turned uploads off in this room"))
+    harness.mockInput.pressEscape()
+    await screen("closed", (text) => !text.includes("turned uploads off"))
+
+    const watcher = new FakeServer({ role: "observer" })
+    const second = await play(watcher)
+    second.harness.mockInput.pressKey("F8")
+    await second.screen("the observer's reason", (text) => text.includes("Observers cannot upload files"))
+  })
+
+  test("a notice reads as a warning line apart from the story; the scene panel lists what the table established", async () => {
+    const server = new FakeServer()
+    table(server)
+    server.views.set("scene", { name: "Cellar", focus: "", established: [{ text: "The door is locked", at: "23:10" }, { text: "Martha lied", at: null }], time: null, clockModule: null, round: null })
+    const { screen } = await play(server)
+    await screen("the scene", (text) => text.includes("ESTABLISHED"))
+    server.signal("notice", { level: "warn", code: "provider_auth", text: "The model provider refused the login." })
+    const frame = await screen("the notice", (text) => text.includes("[WARN] The model provider refused the login."))
+    expect(frame).toContain("· The door is locked (23:10)")
+    expect(frame).toContain("· Martha lied")
   })
 })

@@ -104,11 +104,71 @@ export class ManualClock {
 import type { ReactNode } from "react"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import type { ClientFrame, EventFrame, EventKind, EventPayloads, Role } from "loreweaver-protocol/v3"
+import { createHash } from "node:crypto"
+import { HeaderReader, type ByteFile, type ClientFrame, type EventFrame, type EventKind, type EventPayloads, type Role } from "loreweaver-protocol/v3"
 import { Connection, type ConnectionOptions } from "./connection"
-import type { Dialer, Transport } from "./irohLink"
+import { byteGet, bytePut, StreamGate, type ByteStreamLike, type Dialer, type FetchedFile, type Transport } from "./irohLink"
 
 type Answer = { ok: true; text?: string; data?: unknown } | { ok: false; code: string; message: string }
+
+/** One direction of an in-memory stream: chunks in, reads of at most `max` bytes out. */
+export class Pipe {
+  readonly #chunks: Uint8Array[] = []
+  #ended = false
+  #waiting: (() => void) | null = null
+
+  push(chunk: Uint8Array): void {
+    if (this.#ended) return
+    if (chunk.length > 0) this.#chunks.push(chunk)
+    this.#wake()
+  }
+
+  end(): void {
+    this.#ended = true
+    this.#wake()
+  }
+
+  #wake(): void {
+    const waiting = this.#waiting
+    this.#waiting = null
+    waiting?.()
+  }
+
+  async read(max: number): Promise<number[] | null> {
+    while (this.#chunks.length === 0 && !this.#ended) await new Promise<void>((resolve) => (this.#waiting = resolve))
+    const chunk = this.#chunks.shift()
+    if (chunk === undefined) return null
+    if (chunk.length > max) this.#chunks.unshift(chunk.subarray(max))
+    return Array.from(chunk.subarray(0, max))
+  }
+
+  /** Everything until the end. */
+  async all(): Promise<Uint8Array> {
+    const parts: number[] = []
+    for (;;) {
+      const chunk = await this.read(64 * 1024)
+      if (chunk === null) return Uint8Array.from(parts)
+      parts.push(...chunk)
+    }
+  }
+}
+
+/** A byte stream as the client sees it, and the two pipes behind it. */
+export function memoryStream(): { client: ByteStreamLike; toServer: Pipe; toClient: Pipe } {
+  const toServer = new Pipe()
+  const toClient = new Pipe()
+  return {
+    toServer,
+    toClient,
+    client: {
+      send: { writeAll: async (buf) => toServer.push(Uint8Array.from(buf)), finish: async () => toServer.end() },
+      recv: { read: (max) => toClient.read(max), stop: async () => toClient.end() },
+    },
+  }
+}
+
+const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex")
+const line = (value: unknown): Uint8Array => new TextEncoder().encode(`${JSON.stringify(value)}\n`)
 
 export class FakeTransport implements Transport {
   readonly sent: ClientFrame[] = []
@@ -135,6 +195,26 @@ export class FakeTransport implements Transport {
 
   close(): void {
     this.closed = true
+  }
+
+  readonly #gate = new StreamGate()
+
+  fetch(hash: string): Promise<FetchedFile> {
+    return this.#gate.run(() => {
+      if (this.closed) return Promise.reject(new Error("closed"))
+      const stream = memoryStream()
+      void this.#server.serveBytes(this, stream.toServer, stream.toClient)
+      return byteGet(stream.client, hash, { stallMs: 2000 })
+    })
+  }
+
+  put(uploadId: string, bytes: Uint8Array, onProgress?: (sent: number) => void): Promise<ByteFile> {
+    return this.#gate.run(() => {
+      if (this.closed) return Promise.reject(new Error("closed"))
+      const stream = memoryStream()
+      void this.#server.serveBytes(this, stream.toServer, stream.toClient)
+      return bytePut(stream.client, uploadId, bytes, { stallMs: 2000, ...(onProgress ? { onProgress } : {}) })
+    })
   }
 
   /** A frame from the server. */
@@ -184,6 +264,17 @@ export class FakeServer {
   refuseHello: { code: string; message: string } | null = null
   onInput: (text: string, transport: FakeTransport) => Answer | null = () => ({ ok: true })
   onCall: (method: string, params: Record<string, unknown>, transport: FakeTransport) => Answer | null = () => ({ ok: true })
+  /** Files the room holds, by hash (what a GET answers). */
+  readonly files = new Map<string, { bytes: Uint8Array; mime: string; name: string; purpose: "share" | "import" }>()
+  /** Accepted offers waiting for their bytes. */
+  readonly offers = new Map<string, { name: string; mime: string; size: number; sha256: string; purpose: "share" | "import" }>()
+  /** Every `media.offer` received, in order. */
+  readonly offered: Record<string, unknown>[] = []
+  /** Refuse every offer with this (the upload switch, an observer…). */
+  refuseOffer: { code: string; message: string } | null = null
+  /** Answer a byte stream with exactly these chunks instead (a misbehaving server). */
+  rawBytes: ((request: unknown) => Uint8Array[]) | null = null
+  #uploads = 0
   #seq = 0
   #rev = 0
 
@@ -258,8 +349,59 @@ export class FakeServer {
       transport.push({ type: "result", rid: frame.rid, ok: true, data: { events } })
       return
     }
+    if (frame.method === "media.offer") {
+      this.offered.push(frame.params)
+      if (this.refuseOffer) {
+        this.#answer(transport, frame.rid, { ok: false, ...this.refuseOffer })
+        return
+      }
+      const params = frame.params as { name: string; mime: string; size: number; sha256: string; purpose?: "share" | "import" }
+      const held = this.files.get(params.sha256)
+      if (held) {
+        const existing = { hash: params.sha256, size: held.bytes.length, mime: held.mime, name: held.name, from: "m1" }
+        this.#answer(transport, frame.rid, { ok: true, data: { existing } })
+        return
+      }
+      const id = `u${++this.#uploads}`
+      this.offers.set(id, { name: params.name, mime: params.mime, size: params.size, sha256: params.sha256, purpose: params.purpose ?? "share" })
+      this.#answer(transport, frame.rid, { ok: true, data: { upload_id: id } })
+      return
+    }
     const answer = this.onCall(frame.method, frame.params, transport)
     if (answer !== null) this.#answer(transport, frame.rid, answer)
+  }
+
+  /** One byte stream, served the way the real server does (or by `rawBytes`). */
+  async serveBytes(_transport: FakeTransport, toServer: Pipe, toClient: Pipe): Promise<void> {
+    const received = await toServer.all()
+    const reader = new HeaderReader()
+    const step = reader.push(received)
+    const request = step.state === "line" ? step.value : undefined
+    const body = step.state === "line" ? step.rest : new Uint8Array(0)
+    const reply = (chunks: Uint8Array[]) => {
+      for (const chunk of chunks) toClient.push(chunk)
+      toClient.end()
+    }
+    if (this.rawBytes) return reply(this.rawBytes(request))
+    const refuse = (code: string) => reply([line({ ok: false, code, message: `refused: ${code}` })])
+    const req = request as { op?: string; hash?: string; upload_id?: string } | undefined
+    if (req?.op === "get" && typeof req.hash === "string") {
+      const file = this.files.get(req.hash)
+      if (!file) return refuse("media_not_found")
+      return reply([line({ op: "get", ok: true, hash: req.hash, size: file.bytes.length, mime: file.mime, name: file.name }), file.bytes])
+    }
+    if (req?.op === "put" && typeof req.upload_id === "string") {
+      const offer = this.offers.get(req.upload_id)
+      if (!offer) return refuse("media_unknown_upload")
+      this.offers.delete(req.upload_id)
+      if (body.length !== offer.size) return refuse("media_size_mismatch")
+      if (sha256(body) !== offer.sha256) return refuse("media_hash_mismatch")
+      this.files.set(offer.sha256, { bytes: body, mime: offer.mime, name: offer.name, purpose: offer.purpose })
+      reply([line({ op: "put", ok: true, hash: offer.sha256, size: body.length, mime: offer.mime, name: offer.name })])
+      if (offer.purpose === "share") this.event("media", { hash: offer.sha256, mime: offer.mime, size: body.length, name: offer.name, from: "m1" })
+      return
+    }
+    refuse("bad_request")
   }
 
   #answer(transport: FakeTransport, rid: string, answer: Answer): void {

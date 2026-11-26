@@ -21,6 +21,10 @@ export interface MainMenuProps {
   onCharacter: () => void
   onCommands: () => void
   onSettings: () => void
+  /** An admin's "import a world card" screen. */
+  onImportWorld?: () => void
+  /** Leave this server (back to the connect screen; a server this client started is stopped). */
+  onDisconnect?: () => void
   // Optional so a caller that does not wire teardown gets no Quit row rather than a dead one.
   onQuit?: () => void
 }
@@ -43,7 +47,7 @@ export function roleLabel(snapshot: SessionSnapshot, locale: string): string {
   return tt(locale, role === "admin" ? "menu.role.admin" : role === "observer" ? "menu.role.observer" : "menu.role.player")
 }
 
-export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onQuit }: MainMenuProps) {
+export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onDisconnect, onQuit }: MainMenuProps) {
   const snapshot = useSnapshot(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const showSidebar = !sidebarCollapsed(terminalWidth)
@@ -59,8 +63,10 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
     { label: tt(locale, "menu.commands"), run: onCommands },
     { label: tt(locale, "menu.settings"), run: onSettings },
   ]
-  // Last and set apart by a blank row: not for a newcomer to hit while arrowing through.
-  const quitIndex = onQuit ? items.length : -1
+  if (isAdmin && onImportWorld) items.splice(3, 0, { label: tt(locale, "menu.importWorld"), run: onImportWorld })
+  // Leaving goes last and is set apart by a blank row: not for a newcomer to hit while arrowing through.
+  const leaveIndex = onDisconnect || onQuit ? items.length : -1
+  if (onDisconnect) items.push({ label: tt(locale, "menu.disconnect"), run: onDisconnect })
   if (onQuit) items.push({ label: tt(locale, "menu.quit"), run: onQuit })
 
   const clamp = (index: number) => Math.max(0, Math.min(items.length - 1, index))
@@ -98,7 +104,7 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
         <box flexDirection="column" flexGrow={1} paddingX={2} paddingY={1}>
           {items.map((item, index) => (
             <box key={item.label} flexDirection="column">
-              {index === quitIndex ? <box height={1} /> : null}
+              {index === leaveIndex ? <box height={1} /> : null}
               <box
                 height={1}
                 backgroundColor={visibleSelected === index ? theme.accent : theme.bg}
@@ -126,7 +132,7 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
           <box width={sidebarWidth(terminalWidth)} maxWidth="40%" flexShrink={0} flexDirection="column">
             <CharacterPanel character={viewData(snapshot, "me")?.character} theme={theme} locale={locale} />
             <PartyPanel party={party} theme={theme} locale={locale} />
-            <ScenePanel scene={viewData(snapshot, "scene")} theme={theme} locale={locale} />
+            <ScenePanel scene={viewData(snapshot, "scene")} theme={theme} locale={locale} established={4} />
           </box>
         ) : null}
       </box>

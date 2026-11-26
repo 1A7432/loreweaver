@@ -4,6 +4,7 @@ import type { KeyEvent, SelectOption } from "@opentui/core"
 import { stripControlChars, type Result } from "loreweaver-protocol/v3"
 import { CharacterPanel } from "../components/CharacterPanel"
 import { attributeLines } from "../components/characterAttributes"
+import { ImportForm } from "../components/ImportForm"
 import { freeClaimables } from "../components/PartyRoster"
 import { StatusBar } from "../components/StatusBar"
 import type { Connection } from "../connection"
@@ -20,7 +21,7 @@ export interface CharacterScreenProps {
   onBack: () => void
 }
 
-type Mode = "view" | "create" | "claim" | "edit" | "rename"
+type Mode = "view" | "create" | "claim" | "edit" | "rename" | "import"
 
 interface ViewAction {
   label: string
@@ -240,6 +241,7 @@ export function CharacterScreen({ connection, theme, themeName, locale, onBack }
       { label: deleteArmed ? tt(locale, "character.view.confirmDelete") : tt(locale, "character.view.delete"), run: () => void remove() },
     )
   }
+  viewActions.push({ label: tt(locale, "character.view.import"), run: () => enter("import") })
   viewActions.push({ label: tt(locale, "character.view.back"), run: onBack })
   const clampView = (index: number) => Math.max(0, Math.min(viewActions.length - 1, index))
   const activateView = (index: number) => {
@@ -529,6 +531,8 @@ export function CharacterScreen({ connection, theme, themeName, locale, onBack }
                   </>,
                 )
               : null}
+
+            {mode === "import" ? panel(<ImportForm connection={connection} as="character" theme={theme} locale={locale} />) : null}
 
             {note ? (
               <box marginTop={1} minWidth={0}>

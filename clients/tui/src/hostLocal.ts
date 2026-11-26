@@ -54,6 +54,8 @@ export interface HostHandle {
   newKey: boolean
   /** Stop the server; resolves once its process has exited. */
   stop(): Promise<void>
+  /** Resolves (with the exit code) when the server's process has exited, for whatever reason. */
+  exited?: Promise<number>
 }
 
 export interface HostLocalOptions {
@@ -259,7 +261,7 @@ export const bringUpServer: BringUp = async (onLog, signal, options = {}) => {
     }
     onLog({ kind: "ok", key: "hostlocal.step.ready" })
     live = false
-    return { ticket: ready.ticket, key, newKey, stop }
+    return { ticket: ready.ticket, key, newKey, stop, exited: proc.exited.catch(() => -1) }
   } catch (error) {
     live = false
     void stop()

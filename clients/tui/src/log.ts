@@ -70,6 +70,43 @@ export function itemBlocks(item: Extract<LogItem, { kind: "event" }>): BlocksDat
   return item.event.kind === "blocks" ? item.event.data : null
 }
 
+/** A picture in the log: a shared image (`media` event) or an `image` block. */
+export interface Picture {
+  /** Unique in the log: the item's key, and for a block `:<index>` after it. */
+  readonly key: string
+  readonly hash: string
+  readonly mime?: string
+  /** The file's name, or a block's caption or alt text ("" when it has none). */
+  readonly name: string
+  /** The member id that shared it (a `media` event only). */
+  readonly from?: string
+}
+
+/** The key an image block's picture gets. */
+export function blockPictureKey(itemKey: string, index: number): string {
+  return `${itemKey}:${index}`
+}
+
+/** Every picture in the log, in order: what Tab, the arrows and Enter move through. */
+export function logPictures(items: readonly LogItem[]): Picture[] {
+  const out: Picture[] = []
+  for (const item of items) {
+    if (item.kind !== "event") continue
+    const event = item.event
+    if (event.kind === "media") {
+      if (event.data.mime.startsWith("image/")) out.push({ key: item.key, hash: event.data.hash, mime: event.data.mime, name: event.data.name, from: event.data.from })
+      continue
+    }
+    const blocks = itemBlocks(item)
+    if (!blocks) continue
+    blocks.blocks.forEach((block, index) => {
+      if (block.kind !== "image") return
+      out.push({ key: blockPictureKey(item.key, index), hash: block.hash, ...(block.mime ? { mime: block.mime } : {}), name: block.caption || block.alt || "" })
+    })
+  }
+  return out
+}
+
 /** The index of the last item that carries a `choices` block: the one live select. */
 export function lastChoicesIndex(items: readonly LogItem[]): number {
   for (let index = items.length - 1; index >= 0; index -= 1) {

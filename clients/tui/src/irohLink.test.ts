@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { ALPN, ControlStream, dialIroh, looksLikeTicket, MAX_LINE_BYTES, type IrohModuleLike, type IrohRecvStreamLike } from "./irohLink"
-import { waitFor } from "./testkit"
+import { createHash } from "node:crypto"
+import { ByteError, byteGet, bytePut, StreamGate } from "./irohLink"
+import { memoryStream, waitFor } from "./testkit"
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -160,5 +162,115 @@ describe("dialIroh", () => {
     expect(looksLikeTicket(" endpointabcdefghijklmnopqrstuvwxyz234567 ")).toBe(true)
     expect(looksLikeTicket("ws://127.0.0.1:8787")).toBe(false)
     expect(looksLikeTicket("endpointshort")).toBe(false)
+  })
+})
+
+// --- the byte channel ---------------------------------------------------------------------------
+
+const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+const jsonLine = (value: unknown) => encoder.encode(`${JSON.stringify(value)}\n`)
+
+/** Serve one stream: read the client's side to its end, then answer with `chunks`. */
+function answer(stream: ReturnType<typeof memoryStream>, chunks: (request: string) => Uint8Array[]): Promise<string> {
+  return stream.toServer.all().then((received) => {
+    const text = decoder.decode(received)
+    for (const chunk of chunks(text)) stream.toClient.push(chunk)
+    stream.toClient.end()
+    return text
+  })
+}
+
+describe("byte channel", () => {
+  const body = encoder.encode("a picture's bytes ".repeat(5000))
+  const hash = sha(body)
+  const header = { op: "get", ok: true, hash, size: body.length, mime: "image/png", name: "map.png" }
+
+  test("a GET sends one header line and reads exactly the declared bytes, split however they arrive", async () => {
+    const stream = memoryStream()
+    const served = answer(stream, () => {
+      const all = new Uint8Array([...jsonLine(header), ...body])
+      const parts: Uint8Array[] = []
+      for (let at = 0; at < all.length; at += 777) parts.push(all.subarray(at, at + 777))
+      return parts
+    })
+    const file = await byteGet(stream.client, hash)
+    expect(await served).toBe(`{"op":"get","hash":"${hash}"}\n`)
+    expect(file).toMatchObject({ hash, size: body.length, mime: "image/png", name: "map.png" })
+    expect(Buffer.from(file.bytes).equals(Buffer.from(body))).toBe(true)
+  })
+
+  test("a server that sends more than it declared is refused", async () => {
+    const stream = memoryStream()
+    void answer(stream, () => [jsonLine(header), body, encoder.encode("x")])
+    await expect(byteGet(stream.client, hash)).rejects.toMatchObject({ code: "too_much", server: false })
+  })
+
+  test("a header promising more than the client accepts is refused before anything is kept", async () => {
+    const stream = memoryStream()
+    void answer(stream, () => [jsonLine({ ...header, size: 10_000 })])
+    await expect(byteGet(stream.client, hash, { maxBytes: 9_999 })).rejects.toMatchObject({ code: "too_large" })
+  })
+
+  test("bytes that do not match the hash asked for are dropped", async () => {
+    const other = encoder.encode("something else")
+    const stream = memoryStream()
+    void answer(stream, () => [jsonLine({ ...header, size: other.length }), other])
+    await expect(byteGet(stream.client, hash)).rejects.toMatchObject({ code: "hash_mismatch" })
+  })
+
+  test("a coded error line becomes a ByteError carrying the server's words", async () => {
+    const stream = memoryStream()
+    void answer(stream, () => [jsonLine({ ok: false, code: "media_not_found", message: "没有这个文件。" })])
+    const error = await byteGet(stream.client, hash).catch((caught) => caught)
+    expect(error).toBeInstanceOf(ByteError)
+    expect(error).toMatchObject({ code: "media_not_found", message: "没有这个文件。", server: true })
+  })
+
+  test("a header line that never ends is refused at the protocol's header limit", async () => {
+    const stream = memoryStream()
+    void answer(stream, () => [encoder.encode("{".repeat(4096))])
+    await expect(byteGet(stream.client, hash)).rejects.toMatchObject({ code: "bad_reply" })
+  })
+
+  test("a PUT sends the header, exactly the bytes, finishes its side, and reads the receipt", async () => {
+    const stream = memoryStream()
+    const progress: number[] = []
+    const served = answer(stream, () => [jsonLine({ op: "put", ok: true, hash, size: body.length, mime: "image/png", name: "map.png" })])
+    const receipt = await bytePut(stream.client, "u1", body, { onProgress: (sent) => progress.push(sent) })
+    const received = await served
+    expect(received.startsWith(`{"op":"put","upload_id":"u1"}\n`)).toBe(true)
+    expect(encoder.encode(received).length).toBe(jsonLine({ op: "put", upload_id: "u1" }).length + body.length)
+    expect(receipt).toEqual({ hash, size: body.length, mime: "image/png", name: "map.png" })
+    expect(progress.at(-1)).toBe(body.length)
+  })
+
+  test("a PUT the server refuses reports the server's code", async () => {
+    const stream = memoryStream()
+    void answer(stream, () => [jsonLine({ ok: false, code: "media_disabled", message: "Uploads are off." })])
+    await expect(bytePut(stream.client, "u1", body)).rejects.toMatchObject({ code: "media_disabled", server: true })
+  })
+
+  test("at most four operations run at once; the rest wait their turn", async () => {
+    const gate = new StreamGate(4)
+    const releases: (() => void)[] = []
+    let peak = 0
+    const runs = Array.from({ length: 7 }, () =>
+      gate.run(async () => {
+        peak = Math.max(peak, gate.open)
+        await new Promise<void>((resolve) => releases.push(resolve))
+      }),
+    )
+    await waitFor("four running", () => releases.length === 4)
+    while (releases.length > 0) {
+      releases.shift()?.()
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    await waitFor("all done", () => releases.length === 0 && gate.open <= 4, undefined, async () => {
+      releases.shift()?.()
+      await new Promise((resolve) => setImmediate(resolve))
+    })
+    await Promise.all(runs)
+    expect(peak).toBe(4)
+    expect(gate.open).toBe(0)
   })
 })

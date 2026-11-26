@@ -1,17 +1,17 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
-import { homedir, tmpdir } from "node:os"
-import { basename, extname, join } from "node:path"
+import { basename, extname, join, resolve } from "node:path"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { PNG } from "pngjs"
 import jpeg from "jpeg-js"
-import { stripControlChars } from "loreweaver-protocol/v3"
+import { isContentHash, stripControlChars } from "loreweaver-protocol/v3"
+import { defaultLoreweaverHome, expandHome } from "./localPaths"
 
-// Media helpers kept for the byte channel (protocol 3.0 §8.6), which the server does not offer
-// yet: decoding, the content-addressed cache, terminal previews. Nothing in the UI uses them
-// today; they carry no protocol coupling beyond these three shapes.
+// Media on the client side of the byte channel (protocol 3.0 §8.6): the content-addressed cache
+// of fetched files, reading a file a person names for upload, decoding and terminal previews.
+// Nothing here talks to the server; `connection.ts` does, through the transport.
 
 /** A piece of media by content hash. */
 export interface MediaRef {
@@ -21,17 +21,12 @@ export interface MediaRef {
   size?: number
 }
 
-/** Its bytes, as a byte channel would hand them over. */
+/** Its bytes, as the byte channel hands them over. */
 export interface MediaPayload {
   hash: string
   mime: string
   name: string
   bytes: Uint8Array
-}
-
-/** Whatever can fetch bytes by hash. */
-export interface MediaSource {
-  getMedia(hash: string): Promise<MediaPayload>
 }
 
 export interface HalfBlockLine {
@@ -44,6 +39,18 @@ export interface RgbaImage {
   height: number
   data: Uint8Array
 }
+
+/**
+ * The largest file this client offers. The server's default limit for pictures and card files
+ * (both count against its image budget); the protocol package does not state it, so it is kept
+ * here — a server configured lower still refuses with its own coded answer.
+ */
+export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+/** The largest file read back from the cache (the largest the byte channel accepts). */
+const MAX_CACHED_BYTES = 128 * 1024 * 1024
+
+/** The picture types the server stores as room media. */
+export const SHAREABLE_IMAGE_MIMES: readonly string[] = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]
 
 export function halfBlockPreviewSize(availableWidth: number, availableHeight = 28): { width: number; height: number } {
   return {
@@ -77,23 +84,20 @@ export function detectMediaMime(path: string): string {
   return detectImageMime(path) || detectAudioMime(path)
 }
 
+/** A picture's type from its first bytes; "" when it is none this client previews. */
+export function sniffImageMime(bytes: Uint8Array): string {
+  const starts = (...sig: number[]) => sig.every((byte, index) => bytes[index] === byte)
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "image/png"
+  if (starts(0xff, 0xd8, 0xff)) return "image/jpeg"
+  if (starts(0x47, 0x49, 0x46, 0x38)) return "image/gif"
+  if (starts(0x52, 0x49, 0x46, 0x46) && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp"
+  const head = new TextDecoder().decode(bytes.subarray(0, 512)).trimStart()
+  if (head.startsWith("<svg") || (head.startsWith("<?xml") && head.includes("<svg"))) return "image/svg+xml"
+  return ""
+}
+
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex")
-}
-
-export async function readUpload(path: string): Promise<{ name: string; mime: string; bytes: Uint8Array; sha256: string }> {
-  const bytes = new Uint8Array(await readFile(path))
-  return { name: basename(path), mime: detectImageMime(path), bytes, sha256: sha256Hex(bytes) }
-}
-
-export async function readAudioUpload(path: string): Promise<{ name: string; mime: string; bytes: Uint8Array; sha256: string }> {
-  const bytes = new Uint8Array(await readFile(path))
-  return { name: basename(path), mime: detectAudioMime(path), bytes, sha256: sha256Hex(bytes) }
-}
-
-export async function readMediaUpload(path: string): Promise<{ name: string; mime: string; bytes: Uint8Array; sha256: string }> {
-  const bytes = new Uint8Array(await readFile(path))
-  return { name: basename(path), mime: detectMediaMime(path), bytes, sha256: sha256Hex(bytes) }
 }
 
 export function coerceDroppedFilePath(value: string): string {
@@ -117,35 +121,143 @@ export function droppedImagePath(value: string): string | undefined {
   return detectImageMime(path) ? path : undefined
 }
 
-export async function getCachedMedia(client: MediaSource, media: MediaRef): Promise<MediaPayload> {
-  const path = cachePath(media.hash)
-  if (existsSync(path)) {
-    const bytes = new Uint8Array(await readFile(path))
-    if (sha256Hex(bytes) === media.hash) {
-      return { hash: media.hash, mime: media.mime, name: media.name ?? media.hash, bytes }
-    }
-  }
-  const payload = await client.getMedia(media.hash)
-  if (sha256Hex(payload.bytes) !== media.hash) throw new Error("media checksum mismatch")
-  try {
-    await mkdir(mediaCacheDir(), { recursive: true })
-    await writeFile(path, payload.bytes)
-  } catch {
-    // A read-only home directory should not break viewing; it only disables the cache.
-  }
-  return payload
+// --- a file a person names ---------------------------------------------------------------------
+
+/** What an upload is made of. */
+export interface LocalFile {
+  name: string
+  mime: string
+  bytes: Uint8Array
 }
 
-export async function openMedia(client: MediaSource, media: MediaRef): Promise<void> {
-  const payload = await getCachedMedia(client, media)
-  const dir = join(tmpdir(), "loreweaver-media")
-  await mkdir(dir, { recursive: true })
-  const path = join(dir, `${payload.hash}${extensionForMime(payload.mime)}`)
-  await writeFile(path, payload.bytes)
-  const command =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open"
+/** Why a named file was not read: each code has words in both languages (`file.error.*`). */
+export type LocalFileCode = "empty_path" | "not_found" | "is_directory" | "not_a_file" | "too_large" | "empty" | "bad_type" | "unreadable"
+
+export class LocalFileError extends Error {
+  readonly code: LocalFileCode
+  readonly path: string
+
+  constructor(code: LocalFileCode, path: string) {
+    super(code)
+    this.name = "LocalFileError"
+    this.code = code
+    this.path = path
+  }
+}
+
+/**
+ * The type a file is offered as, by its name: a picture to share (`image`), or a card to import
+ * (`card`: a PNG with the card inside, or the card as JSON). "" when it is not one of those.
+ */
+export function uploadMime(path: string, kind: "image" | "card"): string {
+  if (kind === "card") {
+    const ext = extname(path).toLowerCase()
+    return ext === ".png" ? "image/png" : ext === ".json" ? "application/json" : ""
+  }
+  const mime = detectImageMime(path)
+  return SHAREABLE_IMAGE_MIMES.includes(mime) ? mime : ""
+}
+
+/**
+ * Read the one file a person named, for upload. `~` is expanded; a directory, anything that is
+ * not a regular file, a file of the wrong type and one over `maxBytes` are refused BEFORE any of
+ * it is read — the size is checked on the opened file itself, and the read stops at the size it
+ * reported (a file that grew meanwhile is refused, not cut).
+ */
+export async function readLocalFile(typed: string, kind: "image" | "card", maxBytes: number = MAX_UPLOAD_BYTES): Promise<LocalFile> {
+  const cleaned = coerceDroppedFilePath(typed)
+  if (!cleaned) throw new LocalFileError("empty_path", typed)
+  const path = resolve(expandHome(cleaned))
+  let info
+  try {
+    info = await stat(path)
+  } catch {
+    throw new LocalFileError("not_found", path)
+  }
+  if (info.isDirectory()) throw new LocalFileError("is_directory", path)
+  if (!info.isFile()) throw new LocalFileError("not_a_file", path)
+  const mime = uploadMime(path, kind)
+  if (!mime) throw new LocalFileError("bad_type", path)
+  if (info.size > maxBytes) throw new LocalFileError("too_large", path)
+  if (info.size === 0) throw new LocalFileError("empty", path)
+  let handle
+  try {
+    handle = await open(path, "r")
+  } catch {
+    throw new LocalFileError("unreadable", path)
+  }
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile()) throw new LocalFileError("not_a_file", path)
+    if (opened.size > maxBytes) throw new LocalFileError("too_large", path)
+    if (opened.size === 0) throw new LocalFileError("empty", path)
+    const bytes = new Uint8Array(opened.size + 1)
+    let filled = 0
+    while (filled < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, filled, bytes.length - filled, filled)
+      if (bytesRead === 0) break
+      filled += bytesRead
+    }
+    // One byte past the size it reported: the file is changing under us.
+    if (filled !== opened.size) throw new LocalFileError(filled > opened.size ? "too_large" : "unreadable", path)
+    return { name: basename(path), mime, bytes: bytes.subarray(0, filled) }
+  } catch (error) {
+    if (error instanceof LocalFileError) throw error
+    throw new LocalFileError("unreadable", path)
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+// --- the cache -----------------------------------------------------------------------------------
+
+/** Where fetched media is kept, by hash: the client's own folder. */
+export function mediaCacheDir(): string {
+  return process.env.LOREWEAVER_MEDIA_CACHE_DIR || join(defaultLoreweaverHome(), "cache", "media")
+}
+
+/** The cache file of `hash`; undefined for anything that is not a content hash (never a path). */
+export function cachedMediaPath(hash: string, dir: string = mediaCacheDir()): string | undefined {
+  return isContentHash(hash) ? join(dir, hash) : undefined
+}
+
+/** The cached bytes of `hash`, when the cache holds them intact; null otherwise. */
+export async function readCachedMedia(hash: string, dir?: string): Promise<Uint8Array | null> {
+  const path = cachedMediaPath(hash, dir)
+  if (path === undefined) return null
+  try {
+    const info = await stat(path)
+    if (!info.isFile() || info.size > MAX_CACHED_BYTES) return null
+    const bytes = new Uint8Array(await readFile(path))
+    return sha256Hex(bytes) === hash ? bytes : null
+  } catch {
+    return null
+  }
+}
+
+/** Keep `bytes` under their hash. Returns the file, or undefined when the cache cannot be written. */
+export async function writeCachedMedia(hash: string, bytes: Uint8Array, dir?: string): Promise<string | undefined> {
+  const path = cachedMediaPath(hash, dir)
+  if (path === undefined || sha256Hex(bytes) !== hash) return undefined
+  try {
+    await mkdir(join(path, ".."), { recursive: true })
+    // Written aside and renamed: a reader never sees half a file.
+    const partial = `${path}.${process.pid}.part`
+    await writeFile(partial, bytes)
+    await rename(partial, path)
+    return path
+  } catch {
+    // A read-only home directory should not break viewing; it only disables the cache.
+    return undefined
+  }
+}
+
+/** Show a file in the system's own viewer (for a type the terminal cannot draw). */
+export function openInSystemViewer(path: string): void {
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open"
   const args = process.platform === "win32" ? ["/c", "start", "", path] : [path]
   const child = spawn(command, args, { detached: true, stdio: "ignore" })
+  child.on("error", () => {})
   child.unref()
 }
 
@@ -352,14 +464,6 @@ function rgbHex([r, g, b]: [number, number, number]): string {
 
 function toHex(value: number): string {
   return Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0")
-}
-
-function cachePath(hash: string): string {
-  return join(mediaCacheDir(), hash)
-}
-
-function mediaCacheDir(): string {
-  return process.env.LOREWEAVER_MEDIA_CACHE_DIR || join(homedir(), ".loreweaver", "cache", "media")
 }
 
 export function extensionForMime(mime: string): string {

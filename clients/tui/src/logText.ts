@@ -1,6 +1,6 @@
 // The words for log entries, shared by the on-screen log and the transcript export so the file
 // reads like what the player saw. Server text is control-stripped here, once.
-import { stripControlChars, type Block, type DiceData, type EventFrame, type NarrativeData } from "loreweaver-protocol/v3"
+import { stripControlChars, type Block, type DiceData, type EventFrame, type MediaData, type NarrativeData } from "loreweaver-protocol/v3"
 import { badgeLine, clippingLines, imageLine, letterLines, mapPinLine, meterLine, statLine, titleCardLines } from "./components/UiBlocks"
 import type { LocalLine } from "./connection"
 import { tt } from "./i18n"
@@ -63,9 +63,21 @@ export function blockLines(blocks: readonly Block[], locale?: string): string[] 
   })
 }
 
+/** Who shared a file: the member's name from the `party` view, "the server", or the id as a last resort. */
+export function sharerName(from: string, names: ReadonlyMap<string, string> | undefined, locale?: string): string {
+  if (from === "server") return tt(locale, "log.fromServer")
+  return stripControlChars(names?.get(from) ?? from)
+}
+
+/** A shared file as one line: a picture or another file, its name, who shared it. */
+export function mediaText(data: MediaData, names: ReadonlyMap<string, string> | undefined, locale?: string): string {
+  const vars = { name: stripControlChars(data.name), from: sharerName(data.from, names, locale) }
+  return tt(locale, data.mime.startsWith("image/") ? "log.picture" : "log.file", vars)
+}
+
 /** An event that is not a narrative, dice or blocks entry, as one line. */
-export function markerText(event: EventFrame, locale?: string): string | null {
-  if (event.kind === "media") return tt(locale, "log.media", { from: stripControlChars(event.data.from), name: stripControlChars(event.data.name) })
+export function markerText(event: EventFrame, locale?: string, names?: ReadonlyMap<string, string>): string | null {
+  if (event.kind === "media") return mediaText(event.data, names, locale)
   if (event.kind === "rewind") return tt(locale, "log.rewind")
   if (event.kind === "reset") return tt(locale, "log.reset", { scope: tt(locale, `log.resetScope.${event.data.scope}`) })
   return null

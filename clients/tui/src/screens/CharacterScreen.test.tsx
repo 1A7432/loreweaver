@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { Connection } from "../connection"
 import { FakeServer, liveRender, pump, waitFor, waitForScreen } from "../testkit"
 import { themes } from "../themes"
@@ -149,5 +152,35 @@ describe("CharacterScreen", () => {
     harness.mockInput.pressEnter()
     await waitFor("the claim", () => calls().length === 1)
     expect(calls()[0]).toEqual({ id: "pc", args: { op: "claim", name: "pre-7" } })
+  })
+
+  test("import a character card: the file is uploaded for import, then import {file, as: character}; the answer shows here", async () => {
+    const server = new FakeServer()
+    server.views.set("me", ME_SHEET)
+    server.views.set("characters", { ...SYSTEMS, mine: "ch-1" })
+    const dir = await mkdtemp(join(tmpdir(), "lw-card-"))
+    await writeFile(join(dir, "ada.json"), JSON.stringify({ spec: "chara_card_v2", data: { name: "Ada" } }))
+    server.onCall = (method, params) => {
+      if (method === "command.run" && params.id === "import") return { ok: true, text: "Imported Ada (Call of Cthulhu 7e). Left behind: hooks ×1" }
+      return { ok: true }
+    }
+    const { harness, screen, calls } = await open(server)
+    await screen("the actions", (text) => text.includes("Import a character card"))
+    // New, Edit, Rename, Re-derive, Release, Delete, Import.
+    for (let i = 0; i < 6; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the import form", (text) => text.includes("Card file"))
+    await harness.mockInput.typeText(dir)
+    harness.mockInput.pressEnter()
+    await screen("a folder refused", (text) => text.includes("That is a folder, not a file"))
+    await harness.mockInput.typeText("/ada.json")
+    harness.mockInput.pressEnter()
+    await screen("the answer", (text) => text.includes("Imported Ada (Call of Cthulhu 7e). Left behind: hooks ×1"))
+    const offer = server.offered[0] as { sha256: string; purpose: string; mime: string }
+    expect(offer).toMatchObject({ purpose: "import", mime: "application/json", name: "ada.json" })
+    expect(calls().at(-1)).toEqual({ id: "import", args: { file: offer.sha256, as: "character" } })
   })
 })

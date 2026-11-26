@@ -75,6 +75,16 @@ export function SettingsScreen({
             <text fg={locale === "zh" ? theme.bg : theme.fg}>中文</text>
           </box>
         </box>
+        {/* The server took this client's language from `hello`; it changes on the next connect. */}
+        {locale !== connection.locale ? (
+          <box marginBottom={1}>
+            <text fg={theme.fail}>{tt(locale, "settings.languageNextConnect")}</text>
+          </box>
+        ) : (
+          <box marginBottom={1}>
+            <text fg={theme.dim}>{tt(locale, "settings.languageNote")}</text>
+          </box>
+        )}
 
         {/* Theme */}
         <text fg={theme.dim}>{tt(locale, "settings.theme")}</text>

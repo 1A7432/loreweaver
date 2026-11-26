@@ -1,11 +1,11 @@
 import { PNG } from "pngjs"
-import { decodeImage, getCachedMedia, openMedia, renderHalfBlockPreview, type HalfBlockLine, type MediaRef, type MediaSource } from "./media"
+import { decodeImage, renderHalfBlockPreview, type HalfBlockLine, type MediaPayload } from "./media"
 import { encodeSixel, resizeRgbaArea } from "./sixel"
 
 export interface RendererLike {
   capabilities?: { kitty_graphics?: boolean; sixel?: boolean } | null
-  suspend?: () => void
-  resume?: () => void
+  suspend?: () => void | Promise<void>
+  resume?: () => void | Promise<void>
 }
 
 export type ViewerMode = "kitty" | "iterm2" | "sixel" | "modal"
@@ -16,12 +16,16 @@ export interface TerminalPixelSize {
 }
 
 export interface ViewImageOptions {
-  client: MediaSource
-  media: MediaRef
+  /** The picture, already fetched (and checked against its hash). */
+  payload: MediaPayload
   renderer?: RendererLike
   /** The line under a full-screen picture telling the person how to close it (already in their language). */
   closeHint?: string
-  forceSystem?: boolean
+  /**
+   * Hand the picture to the system's viewer: for a type no in-terminal path can draw (GIF, WebP).
+   * Absent, such a picture is refused with "unsupported inline preview".
+   */
+  openExternally?: () => void
   columns?: number
   rows?: number
   env?: Record<string, string | undefined>
@@ -120,17 +124,13 @@ export function fitImageToArea(imageWidth: number, imageHeight: number, areaWidt
 }
 
 export async function viewImage(options: ViewImageOptions): Promise<HalfBlockLine[] | undefined> {
-  if (options.forceSystem) {
-    await openMedia(options.client, options.media)
-    return undefined
-  }
-
-  const payload = await getCachedMedia(options.client, options.media)
+  const payload = options.payload
   const columns = options.columns ?? Math.max(20, (process.stdout.columns || 80) - 4)
   const rows = options.rows ?? Math.max(10, (process.stdout.rows || 24) - 4)
   // No in-terminal decoder for these in ANY mode — hand off to the system viewer.
   if (payload.mime === "image/gif" || payload.mime === "image/webp") {
-    await openMedia(options.client, options.media)
+    if (!options.openExternally) throw new Error("unsupported inline preview")
+    options.openExternally()
     return undefined
   }
   // SVG is never executed as browser content; its text-map preview is the only in-terminal
@@ -142,7 +142,7 @@ export async function viewImage(options: ViewImageOptions): Promise<HalfBlockLin
 
   const write = options.write ?? ((text: string) => process.stdout.write(text))
   const readKey = options.readKey ?? waitForAnyKey
-  options.renderer?.suspend?.()
+  await options.renderer?.suspend?.()
   try {
     const terminalPixels =
       mode === "sixel" ? await (options.queryWindowPixels ?? queryTerminalPixelSize)(columns, rows, write) : undefined
@@ -171,7 +171,7 @@ export async function viewImage(options: ViewImageOptions): Promise<HalfBlockLin
     await readKey()
     write(mode === "kitty" ? kittyDeleteSequence() : "\x1b[2J\x1b[H")
   } finally {
-    options.renderer?.resume?.()
+    await options.renderer?.resume?.()
   }
   return undefined
 }

@@ -66,9 +66,8 @@ export function badgeLine(block: { label: string }): string {
   return `[${stripControlChars(block.label)}]`
 }
 
-/** One image block's text line — the whole block: there is no byte channel to fetch the
- * picture over yet. Falls back through caption -> alt -> the short hash so the line is never
- * empty. */
+/** One image block's text line: its caption, else its alt text, else the short hash, so the line
+ * is never empty. Selecting it in the game view fetches the picture over the byte channel. */
 export function imageLine(block: UiImageBlock, locale?: string): string {
   const text = stripControlChars(block.caption || block.alt || "").trim()
   return tt(locale, "ui.image", { text: text || block.hash.slice(0, 12) })
@@ -104,6 +103,8 @@ export interface UiBlocksViewProps {
   // option's command with `command.run`). Without it, choices render as a static option list.
   interactive?: UiChoicesInteraction
   meterWidth?: number
+  /** Image blocks as pictures: each one's key (by block index), the selected key, and a click. */
+  images?: { key: (index: number) => string; selected?: string; onOpen?: (key: string) => void }
 }
 
 /** Renders one `blocks` event's list. The protocol library validated every block's shape
@@ -115,6 +116,7 @@ export function UiBlocksView({
   locale,
   interactive,
   meterWidth = METER_BAR_WIDTH,
+  images,
 }: UiBlocksViewProps) {
   const lastChoicesIndex = blocks.reduce(
     (last, block, index) => (block.kind === "choices" ? index : last),
@@ -153,10 +155,16 @@ export function UiBlocksView({
           )
         }
         if (block.kind === "image") {
+          const pictureKey = images?.key(index)
+          const selected = pictureKey !== undefined && pictureKey === images?.selected
+          const onOpen = images?.onOpen
           return (
-            <text key={key} fg={theme.system}>
-              {imageLine(block, locale)}
-            </text>
+            <box key={key} width="100%" flexShrink={0} backgroundColor={selected ? theme.accent : undefined} onMouseDown={pictureKey !== undefined && onOpen ? () => onOpen(pictureKey) : undefined}>
+              <text fg={selected ? theme.bg : theme.system}>
+                {imageLine(block, locale)}
+                {selected ? `  ${tt(locale, "log.pictureOpen")}` : ""}
+              </text>
+            </box>
           )
         }
         if (block.kind === "letter" || block.kind === "clipping" || block.kind === "title_card") {

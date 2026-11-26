@@ -4,18 +4,24 @@
 // dials again. Every redial attaches the SAME `Session`, which resumes the log it holds.
 //
 // Server state lives in the session's snapshot alone. What this class keeps besides is the
-// client's own: the transport's phase, and the local lines a person sees but the room's log does
-// not hold — a command's answer (which goes to the caller alone), a refusal, a notice.
+// client's own: the transport's phase, the local lines a person sees but the room's log does not
+// hold — a command's answer (which goes to the caller alone), a refusal, a notice — and the byte
+// channel's client state: files fetched (and the on-disk cache behind them) and an upload's progress.
 import {
+  decodeMediaOfferResult,
+  isContentHash,
   Session,
   SessionError,
   type BuiltInViewName,
+  type ByteFile,
   type Result,
   type SessionSnapshot,
   type SignalPayloads,
   type Timers,
+  type UploadPurpose,
 } from "loreweaver-protocol/v3"
-import type { Dialer, Transport } from "./irohLink"
+import { ByteError, type Dialer, type Transport } from "./irohLink"
+import { cachedMediaPath, readCachedMedia, sha256Hex, sniffImageMime, writeCachedMedia, type LocalFile } from "./media"
 
 /** Every built-in view the client shows. */
 export const CLIENT_VIEWS: readonly BuiltInViewName[] = ["me", "party", "scene", "variables", "characters", "commands", "room", "usage"]
@@ -46,6 +52,36 @@ export interface LocalLine {
   readonly spinner?: boolean
 }
 
+/** A file fetched over the byte channel (or read back from the cache). */
+export interface FetchedMedia {
+  readonly hash: string
+  readonly bytes: Uint8Array
+  readonly mime: string
+  readonly name: string
+  /** The cache file holding it; undefined when the cache could not be written. */
+  readonly path?: string
+}
+
+export type FetchState =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly file: FetchedMedia }
+  /** `message`: the server's words (already in this member's language), or "" for a client-side failure. */
+  | { readonly status: "failed"; readonly code: string; readonly message: string }
+
+/** The upload under way. */
+export interface UploadProgress {
+  readonly name: string
+  readonly purpose: UploadPurpose
+  readonly size: number
+  readonly sent: number
+}
+
+/**
+ * Why the client stopped trying to reach the server: `redials` — the redials ran out;
+ * `server_exited` — the server this client started itself has exited.
+ */
+export type LostReason = "redials" | "server_exited"
+
 export interface ConnectionState {
   readonly phase: ConnectionPhase
   /** Redials since the last welcome. */
@@ -55,7 +91,17 @@ export interface ConnectionState {
   /** Requests sent and not yet answered: the client's own "working" signal before the turn's. */
   readonly pending: number
   readonly lines: readonly LocalLine[]
+  /** Files asked for by hash, the newest last; at most `MAX_HELD_FETCHES`. */
+  readonly fetches: ReadonlyMap<string, FetchState>
+  readonly upload: UploadProgress | null
+  /** Set when the client gave up on a server it had been playing on. */
+  readonly lost: LostReason | null
 }
+
+/** Fetched files held in memory; the oldest go first (the disk cache keeps them). */
+export const MAX_HELD_FETCHES = 16
+/** Redials after a drop before the client gives up and says so. */
+export const DEFAULT_MAX_REDIALS = 10
 
 export interface ConnectionOptions {
   readonly ticket: string
@@ -72,6 +118,10 @@ export interface ConnectionOptions {
   readonly redialBaseMs?: number
   readonly redialMaxMs?: number
   readonly views?: readonly string[]
+  /** Redials after a drop before giving up (default `DEFAULT_MAX_REDIALS`). */
+  readonly maxRedials?: number
+  /** Where fetched media is cached; the client's own cache folder when absent. */
+  readonly mediaCacheDir?: string
 }
 
 const DEFAULT_PING_EVERY_MS = 15_000
@@ -87,10 +137,13 @@ const GLOBAL_TIMERS: Timers = {
 export class Connection {
   readonly session: Session
   readonly ticket: string
+  /** The language this connection said in `hello`: what the server words this member's answers in. */
+  readonly locale: string
   readonly #options: ConnectionOptions
   readonly #timers: Timers
   #transport: Transport | null = null
-  #state: ConnectionState = { phase: "dialing", attempt: 0, dialError: null, pending: 0, lines: [] }
+  #state: ConnectionState = { phase: "dialing", attempt: 0, dialError: null, pending: 0, lines: [], fetches: new Map(), upload: null, lost: null }
+  readonly #inflight = new Map<string, Promise<FetchedMedia>>()
   readonly #listeners = new Set<() => void>()
   #lineId = 0
   #established = false
@@ -103,6 +156,7 @@ export class Connection {
   constructor(options: ConnectionOptions) {
     this.#options = options
     this.ticket = options.ticket
+    this.locale = options.locale
     this.#timers = options.timers ?? GLOBAL_TIMERS
     this.session = new Session({
       key: options.key,
@@ -182,6 +236,16 @@ export class Connection {
     this.#set({ phase: "ended" })
   }
 
+  /**
+   * Stop trying to reach the server and say why (`state.lost`): the redials ran out, or the
+   * server this client started has exited. The session ends; nothing is dialled again.
+   */
+  giveUp(reason: LostReason): void {
+    if (this.#state.lost !== null || this.#state.phase === "ended") return
+    this.#set({ lost: reason })
+    this.stop()
+  }
+
   #adopt(transport: Transport): void {
     this.#transport = transport
     this.#set({ phase: "online" })
@@ -210,6 +274,10 @@ export class Connection {
 
   #scheduleRedial(): void {
     const attempt = this.#state.attempt
+    if (attempt >= (this.#options.maxRedials ?? DEFAULT_MAX_REDIALS)) {
+      this.giveUp("redials")
+      return
+    }
     const base = this.#options.redialBaseMs ?? DEFAULT_REDIAL_BASE_MS
     const max = this.#options.redialMaxMs ?? DEFAULT_REDIAL_MAX_MS
     const delay = Math.min(max, base * 2 ** Math.min(attempt, 16))
@@ -327,6 +395,101 @@ export class Connection {
     return this.#track(this.session.runCommand(id, args))
   }
 
+  // --- the byte channel --------------------------------------------------------------------
+
+  #setFetch(hash: string, state: FetchState): void {
+    const fetches = new Map(this.#state.fetches)
+    fetches.delete(hash)
+    fetches.set(hash, state)
+    for (const key of fetches.keys()) {
+      if (fetches.size <= MAX_HELD_FETCHES) break
+      if (key !== hash) fetches.delete(key)
+    }
+    this.#set({ fetches })
+  }
+
+  /**
+   * A file by its content hash: from the disk cache when it holds it intact, else over a byte
+   * stream (then kept in the cache). `hint` is what the log said about it (an event's `mime` and
+   * `name`); a cached file has no other record of them. The progress shows in `state.fetches`;
+   * a failure rejects with a `ByteError` (`server`: its message is the server's own words).
+   */
+  fetchMedia(hash: string, hint: { mime?: string; name?: string } = {}): Promise<FetchedMedia> {
+    if (!isContentHash(hash)) return Promise.reject(new ByteError("bad_hash"))
+    const running = this.#inflight.get(hash)
+    if (running) return running
+    const fetching = this.#fetch(hash, hint).finally(() => {
+      this.#inflight.delete(hash)
+    })
+    this.#inflight.set(hash, fetching)
+    return fetching
+  }
+
+  async #fetch(hash: string, hint: { mime?: string; name?: string }): Promise<FetchedMedia> {
+    this.#setFetch(hash, { status: "loading" })
+    const dir = this.#options.mediaCacheDir
+    try {
+      let file: FetchedMedia
+      const cached = await readCachedMedia(hash, dir)
+      if (cached !== null) {
+        const path = cachedMediaPath(hash, dir)
+        file = { hash, bytes: cached, mime: hint.mime || sniffImageMime(cached) || "application/octet-stream", name: hint.name || hash.slice(0, 12), ...(path ? { path } : {}) }
+      } else {
+        const transport = this.#transport
+        if (transport === null || this.session.status !== "online") throw new ByteError("not_connected")
+        const got = await transport.fetch(hash)
+        const path = await writeCachedMedia(hash, got.bytes, dir)
+        file = { hash, bytes: got.bytes, mime: got.mime, name: got.name, ...(path ? { path } : {}) }
+      }
+      this.#setFetch(hash, { status: "ready", file })
+      return file
+    } catch (error) {
+      const failure = toByteError(error)
+      this.#setFetch(hash, { status: "failed", code: failure.code, message: failure.server ? failure.message : "" })
+      throw failure
+    }
+  }
+
+  /**
+   * Upload a file: `media.offer` on the control stream, then — unless the server already holds
+   * the bytes (`existing`) — the bytes on a PUT stream. Resolves with the stored file (its hash
+   * is what `import {file}` names). One upload at a time; its progress is `state.upload`. A
+   * refusal rejects with a `ByteError` carrying the server's code and words.
+   */
+  async upload(file: LocalFile, purpose: UploadPurpose = "share"): Promise<ByteFile> {
+    if (this.#state.upload !== null) throw new ByteError("upload_busy")
+    const sha256 = sha256Hex(file.bytes)
+    const size = file.bytes.length
+    this.#set({ upload: { name: file.name, purpose, size, sent: 0 } })
+    this.#set({ pending: this.#state.pending + 1 })
+    try {
+      let result: Result
+      try {
+        result = await this.session.call("media.offer", { name: file.name, mime: file.mime, size, sha256, purpose })
+      } catch (error) {
+        throw toByteError(error)
+      }
+      if (!result.ok) throw new ByteError(result.error.code, result.error.message, true)
+      const offer = decodeMediaOfferResult(result.data)
+      if (offer === null) throw new ByteError("bad_reply")
+      if ("existing" in offer) {
+        const { hash, size: stored, mime, name } = offer.existing
+        if (hash !== sha256) throw new ByteError("bad_reply")
+        return { hash, size: stored, mime, name }
+      }
+      const transport = this.#transport
+      if (transport === null) throw new ByteError("not_connected")
+      const receipt = await transport.put(offer.upload_id, file.bytes, (sent) => {
+        const current = this.#state.upload
+        if (current !== null) this.#set({ upload: { ...current, sent } })
+      })
+      if (receipt.hash !== sha256 || receipt.size !== size) throw new ByteError("bad_reply")
+      return receipt
+    } finally {
+      this.#set({ upload: null, pending: Math.max(0, this.#state.pending - 1) })
+    }
+  }
+
   async #track(request: Promise<Result>): Promise<Result | null> {
     this.#set({ pending: this.#state.pending + 1 })
     try {
@@ -345,4 +508,11 @@ export class Connection {
       this.#set({ pending: Math.max(0, this.#state.pending - 1) })
     }
   }
+}
+
+/** Whatever a byte operation threw, as a coded `ByteError`. */
+function toByteError(error: unknown): ByteError {
+  if (error instanceof ByteError) return error
+  if (error instanceof SessionError) return new ByteError(error.code === "link_closed" || error.code === "session_ended" ? "not_connected" : error.code)
+  return new ByteError("failed", error instanceof Error ? error.message : String(error))
 }

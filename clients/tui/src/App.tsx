@@ -12,6 +12,8 @@ import { CharacterScreen } from "./screens/CharacterScreen"
 import { CommandsScreen } from "./screens/CommandsScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { HostLocalScreen } from "./screens/HostLocalScreen"
+import { ImportWorldScreen } from "./screens/ImportWorldScreen"
+import { LostScreen } from "./screens/LostScreen"
 import { MainMenu } from "./screens/MainMenu"
 import { SettingsScreen } from "./screens/SettingsScreen"
 import { defaultTuiLocale, tt, type TuiLocale } from "./i18n"
@@ -54,7 +56,7 @@ export interface AppProps {
   platform?: string
 }
 
-type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands"
+type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world"
 
 // F1..F5 select a theme by its position in themeOrder.
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
@@ -63,6 +65,8 @@ interface Attempt {
   id: number
   connection: Connection
   remember: { host: string; key: string; name?: string } | null
+  /** The connection is to the server this client started. */
+  local: boolean
 }
 
 export function App({
@@ -98,8 +102,12 @@ export function App({
     return localStopping.current
   }
   const current = useRef<Connection | null>(null)
+  const currentIsLocal = useRef(false)
   const attempts = useRef(0)
   current.current = attempt?.connection ?? null
+  currentIsLocal.current = attempt?.local ?? false
+  // A picture or a form in the game view that owns Esc while it is open.
+  const modalOpen = useRef(false)
 
   // A transient confirmation for a Ctrl+C copy, shown in the game view.
   const [copyNotice, setCopyNotice] = useState<string>()
@@ -146,7 +154,7 @@ export function App({
     const name = typeof event.name === "string" ? event.name.toLowerCase() : ""
     const index = themeKeyIndex[name]
     if (index !== undefined && themeOrder[index]) setThemeName(themeOrder[index])
-    if (name === "escape") setScreen((prev) => (prev === "game" || prev === "commands" ? "menu" : prev))
+    if (name === "escape" && !modalOpen.current) setScreen((prev) => (prev === "game" || prev === "commands" ? "menu" : prev))
     if (event.ctrl && name === "c") {
       const copyable = screen === "game" && usesAppClipboardCopy(platform)
       const outcome = copyable ? copySelection(renderer) : { kind: "empty" as const }
@@ -155,7 +163,7 @@ export function App({
     }
   })
 
-  const connect = async (host: string, key: string, name: string, mode: IrohMode, remember: boolean) => {
+  const connect = async (host: string, key: string, name: string, mode: IrohMode, remember: boolean, local = false) => {
     const ticket = host.trim()
     if (!key) {
       setError(tt(locale, "app.error.keyRequired"))
@@ -177,7 +185,18 @@ export function App({
       setScreen("connect")
       return
     }
-    setAttempt({ id: ++attempts.current, connection, remember: remember ? { host: ticket, key, ...(name ? { name } : {}) } : null })
+    setAttempt({ id: ++attempts.current, connection, remember: remember ? { host: ticket, key, ...(name ? { name } : {}) } : null, local })
+  }
+
+  /** Leave the server by choice: back to the connect screen; a server this client started is stopped. */
+  const disconnect = () => {
+    current.current?.stop()
+    void stopLocal()
+    modalOpen.current = false
+    setAttempt(null)
+    setConnecting(false)
+    setError(undefined)
+    setScreen("connect")
   }
 
   /** The session is over: back to the connect screen, saying why. */
@@ -247,12 +266,19 @@ export function App({
         after={localStopping.current}
         onReady={(handle) => {
           localServer.current = handle
+          // The server this client started went away on its own (not stopped from here): the
+          // connection to it gives up instead of redialling a ticket that is gone for good.
+          void handle.exited?.then(() => {
+            if (localServer.current !== handle) return
+            localServer.current = undefined
+            if (currentIsLocal.current) current.current?.giveUp("server_exited")
+          })
           if (handle.newKey) {
             const entry = { home: localServerHome, key: handle.key }
             setLocalKeys((keys) => rememberLocalKey(keys, entry))
             onLocalKey?.(entry)
           }
-          void connect(handle.ticket, handle.key, prefill?.name ?? "", "local", false)
+          void connect(handle.ticket, handle.key, prefill?.name ?? "", "local", false, true)
         }}
         onBack={() => setScreen("connect")}
       />
@@ -276,6 +302,10 @@ export function App({
       platform={platform}
       onWelcome={welcomed}
       onEnded={ended}
+      onDisconnect={disconnect}
+      onModalChange={(open) => {
+        modalOpen.current = open
+      }}
       onQuit={handleQuit}
       waiting={connectScreen}
     />
@@ -295,13 +325,15 @@ interface TableProps {
   platform: string
   onWelcome: () => void
   onEnded: (message: string | undefined) => void
+  onDisconnect: () => void
+  onModalChange: (open: boolean) => void
   onQuit: () => void
   /** What shows before the welcome: the connect screen, busy. */
   waiting: ReactNode
 }
 
 /** Everything behind a connection: it reads the session and routes the screens. */
-function Table({ connection, screen, setScreen, theme, themeName, setThemeName, locale, onLocaleChange, copyNotice, platform, onWelcome, onEnded, onQuit, waiting }: TableProps) {
+function Table({ connection, screen, setScreen, theme, themeName, setThemeName, locale, onLocaleChange, copyNotice, platform, onWelcome, onEnded, onDisconnect, onModalChange, onQuit, waiting }: TableProps) {
   const snapshot = useSnapshot(connection)
   const state = useConnectionState(connection)
   const welcome = snapshot.welcome
@@ -332,6 +364,11 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
 
   if (!welcome) return <>{waiting}</>
 
+  // The client stopped trying to reach the server: say why and offer the way out.
+  if (state.lost !== null) {
+    return <LostScreen reason={state.lost} theme={theme} locale={locale} onBack={onDisconnect} onQuit={onQuit} />
+  }
+
   if (screen === "settings") {
     return (
       <SettingsScreen
@@ -355,11 +392,15 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
         copyNotice={copyNotice}
         platform={platform}
         onCommands={() => setScreen("commands")}
+        onModalChange={onModalChange}
       />
     )
   }
   if (screen === "character") {
     return <CharacterScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
+  }
+  if (screen === "import_world") {
+    return <ImportWorldScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
   if (screen === "commands") {
     return <CommandsScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
@@ -374,6 +415,8 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
       onCharacter={() => setScreen("character")}
       onCommands={() => setScreen("commands")}
       onSettings={() => setScreen("settings")}
+      onImportWorld={() => setScreen("import_world")}
+      onDisconnect={onDisconnect}
       onQuit={onQuit}
     />
   )
