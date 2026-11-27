@@ -135,3 +135,22 @@ test("a keeper command is no player's: refused like a role they lack, nothing ap
   expect(resultFor(root.sent, "admin")).toMatchObject({ ok: true, text: expect.stringContaining("member for Root") });
   expect(b.store.moduleStates(ROOM).get("omens")).toEqual({ hours: 1 });
 });
+
+test("a module view follows a command: its subscriber is sent the new value without waiting for a Keeper turn", async () => {
+  const b = setup();
+  const ada = b.join(KEYS.ada);
+  const bao = b.join(KEYS.bao);
+  ada.receive({ type: "call", rid: "s", method: "view.subscribe", params: { names: ["kitchen/status"] } });
+  await b.settled();
+  expect(views(ada.sent, "kitchen/status").at(-1)?.data).toMatchObject({ hp: 1010, viewer: "Ada" });
+  // Another member's command changes what the module holds: a panel fed by the view must show it.
+  bao.receive({ type: "call", rid: "c", method: "command.run", params: { id: "kitchen/hit", args: { amount: 3 } } });
+  await b.settled();
+  expect(resultFor(bao.sent, "c")).toMatchObject({ ok: true, data: { hp: 7 } });
+  expect(views(ada.sent, "kitchen/status").at(-1)?.data).toMatchObject({ hp: 1007, viewer: "Ada" });
+  // A refused command changed nothing and renders nothing again.
+  const before = views(ada.sent, "kitchen/status").length;
+  bao.receive({ type: "call", rid: "x", method: "command.run", params: { id: "kitchen/nope", args: {} } });
+  await b.settled();
+  expect(views(ada.sent, "kitchen/status")).toHaveLength(before);
+});

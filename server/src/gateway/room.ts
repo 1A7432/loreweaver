@@ -486,6 +486,11 @@ export class Room {
         if (!(error instanceof StaleGeneration)) throw error;
       }
     }
+    // A command may have changed what a module view shows — the module's own state, a variable,
+    // a character — so the module views are rendered again for whoever watches one; without
+    // this a panel fed by a module view stayed as it was until the next Keeper turn. (With no
+    // rendering yet, the refresh below makes the first one.)
+    if (published && this.#moduleViews !== null && this.views.moduleViewers().length > 0) await this.#renderModules();
     await this.refreshViews();
     if (locked && published) await this.#maybeNarrateNow(context, action, actorName(context));
   }
