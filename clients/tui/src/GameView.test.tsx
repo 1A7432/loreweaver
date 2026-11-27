@@ -386,8 +386,12 @@ describe("GameView", () => {
     harness.mockInput.pressArrow("up")
     await screen("the shared picture selected", (text) => text.includes("map.png — shared by Bao  Enter: view"))
     harness.mockInput.pressEnter()
-    const shown = await screen("the preview", (text) => text.includes("▀") && text.includes("Enter / Esc / q close"))
-    expect(shown).toContain("🖼 map.png · shared by Bao")
+    // The viewer opens at once and draws the picture when its bytes have come: wait for the
+    // fetch itself. (The frame alone cannot tell: the close hint is there while it loads, and
+    // the half blocks a picture is drawn with are also in the header's logo — the test once
+    // went on with the fetch still loading, on a slow runner.)
+    await waitFor("the picture's bytes", () => connection.getState().fetches.get(hash)?.status === "ready")
+    await screen("the preview", (text) => text.includes("🖼 map.png · shared by Bao") && text.includes("Enter / Esc / q close"))
     expect(connection.getState().fetches.get(hash)).toMatchObject({ status: "ready" })
     expect(modal.at(-1)).toBe(true)
     harness.mockInput.pressEscape()
