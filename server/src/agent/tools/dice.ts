@@ -292,7 +292,8 @@ export const skillCheckTool = defineTool({
     const data: DiceData = {
       actor: displayActor,
       kind: "check",
-      expr: skillLabel,
+      // The notation rolled; what it was rolled FOR is `label` (a client shows both).
+      expr: rolled.notation,
       rolls: [...rolled.dice],
       total,
       target,

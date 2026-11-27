@@ -61,6 +61,13 @@ test("the model is read off the log: who played, their dice, the lines in order"
   expect(m.dice[0]).toMatchObject({ what: "Spot Hidden", target: 25, graded: true, tone: "success" });
 });
 
+test("a roll is named as the table read it: its label in the room's language before the rule system's own word", () => {
+  const data = { actor: "Ada", kind: "check", expr: "1d100", rolls: [14], total: 14, target: 25, label: "Spot Hidden", outcome: { id: "regular", label: "Success", success: true, critical: false, fumble: false, tier: 2 }, detail: { skill: "侦查" } };
+  expect(model([event("dice", data, 1)]).dice[0]).toMatchObject({ what: "Spot Hidden", expr: "1d100" });
+  const { label: _label, ...unlabelled } = data;
+  expect(model([event("dice", unlabelled, 1)]).dice[0]).toMatchObject({ what: "侦查" });
+});
+
 test("the score is the 2.6 formula", () => {
   expect(scoreOf({ rolls: 0, checks: 0, passed: 0, criticals: 0 })).toEqual({ score: 60, rating: "qualified" });
   // 60 + min(4·2, 20) + floor(2/3·20) + 1·2

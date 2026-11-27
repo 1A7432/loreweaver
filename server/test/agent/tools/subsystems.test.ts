@@ -22,7 +22,7 @@ describe("the coc7 subsystem tools", () => {
     expect(attribute(room, "SAN")).toBe(56);
     const event = outcome.events[0];
     if (event?.kind !== "dice") throw new Error("expected a dice event");
-    expect([event.data.kind, event.data.subsystem, event.data.subsystemLabel, event.data.expr]).toEqual(["subsystem", "sanity_check", "理智", "理智"]);
+    expect([event.data.kind, event.data.subsystem, event.data.subsystemLabel, event.data.expr, event.data.label]).toEqual(["subsystem", "sanity_check", "理智", "1d100", "理智"]);
     expect(event.data.outcome?.success).toBe(false);
     expect(outcome.bookkeeping.dice).toBe(true);
   });

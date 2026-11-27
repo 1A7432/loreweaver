@@ -192,7 +192,7 @@ function lossTool(pack: RulePack, spec: Extract<SubsystemSpec, { template: "chec
         text: lines.join("\n"),
         events: subsystemEvent(context, pack, spec, {
           actor: name,
-          expr: stat,
+          expr: r.check.notation,
           rolls: [r.check.total],
           total: r.check.total,
           target: r.statBefore,
@@ -253,7 +253,7 @@ function improvementTool(pack: RulePack, spec: Extract<SubsystemSpec, { template
         text,
         events: subsystemEvent(context, pack, spec, {
           actor: name,
-          expr: shown,
+          expr: r.roll.notation,
           rolls: [r.roll.total],
           total: r.roll.total,
           target: r.before,
@@ -435,7 +435,7 @@ function opposedTool(pack: RulePack, spec: Extract<SubsystemSpec, { template: "o
         events: subsystemEvent(context, pack, spec, {
           kind: "opposed",
           actor: loaded?.character.sheet.name ?? context.who.character?.name ?? "",
-          expr: `${args.skill1} vs ${args.skill2}`,
+          expr: active.check.notation,
           rolls: [active.check.total, r.passive.check.total],
           total: active.total,
           label: first.skill,

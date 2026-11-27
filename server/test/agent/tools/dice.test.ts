@@ -48,7 +48,9 @@ describe("skill_check", () => {
     expect(event.data.outcome?.success).toBe(true);
     // The table's label is the pack's, in the room's language.
     expect(event.data.outcome?.label).not.toBe(event.data.outcome?.id);
-    expect(event.data.expr).toBe("侦查");
+    // `expr` is the notation rolled and `label` what it was rolled for (protocol 8.2): a client
+    // prints both, so the skill in `expr` too read "侦查 侦查 12" at the table.
+    expect([event.data.expr, event.data.label]).toEqual(["1d100", "侦查"]);
   });
 
   test("refuses an unknown skill rather than rolling against 0", async () => {

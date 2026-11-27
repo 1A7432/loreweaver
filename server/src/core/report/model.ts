@@ -124,7 +124,9 @@ function readDie(event: StoredEvent): ReportDie | null {
   const outcome = own(data, "outcome");
   const detail = own(data, "detail");
   const target = own(data, "target");
-  const what = text(own(data, "subsystemLabel")) || (isRecord(detail) ? text(own(detail, "skill")) : "");
+  // What was rolled for, as the table read it: the event's own label (the skill or stat in the
+  // room's language), else the subsystem's name, else the rule system's canonical skill name.
+  const what = text(own(data, "label")) || text(own(data, "subsystemLabel")) || (isRecord(detail) ? text(own(detail, "skill")) : "");
   const base = { ts: event.ts, actor, what, expr: text(own(data, "expr")), total, target: typeof target === "number" ? target : null };
   if (!isRecord(outcome)) return { ...base, graded: false, label: "", tone: "plain", tier: null };
   const tier = own(outcome, "tier");
