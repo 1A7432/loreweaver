@@ -1,4 +1,0 @@
-{
-  "ops.censor.mask": "[filtered]",
-  "ops.sanitizer.url": "[link: {url}]"
-}

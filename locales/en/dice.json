@@ -1,6 +1,0 @@
-{
-  "dice.result": "{expression} = {roll_str} = {total}",
-  "dice.result_simple": "Result: {total}",
-  "dice.error.invalid_expression": "Invalid dice expression: {expression}",
-  "dice.error.invalid_repeat_times": "Repeat count must be between 1 and 20, got {times}"
-}

@@ -5,13 +5,13 @@ import { CondExprError, evaluateBool, isVisible } from "./condexpr"
 
 // The TypeScript half of the `visible_when` conformance suite (M19 item 7).
 //
-// `tests/fixtures/visible_when_vectors.json` is the SHARED table: the same rows run
-// here and in `tests/core/test_visible_when_vectors.py`. `visible_when` is evaluated
+// `condexpr.vectors.json` is the SHARED table: the same rows run
+// here and in the server's `server/test/core/condexpr_vectors.test.ts`. `visible_when` is evaluated
 // client-side, so "every implementation agrees with the reference" is a promise only a
 // shared fixture can keep — a row that moves breaks both suites at once. This is
 // deliberately the first brick of the LWF conformance suite.
 
-const VECTORS_PATH = fileURLToPath(new URL("../../../tests/fixtures/visible_when_vectors.json", import.meta.url))
+const VECTORS_PATH = fileURLToPath(new URL("./condexpr.vectors.json", import.meta.url))
 const vectors = JSON.parse(readFileSync(VECTORS_PATH, "utf-8")) as {
   cases: Array<{ expr: string; vars: Record<string, unknown>; expect: boolean | "error"; why?: string }>
   rejected: Array<{ expr: string; why: string }>

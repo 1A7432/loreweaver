@@ -402,13 +402,12 @@ describe("text", () => {
     // Keys edited to drop a mention of something 3.0 no longer has; every other copied key is verbatim.
     const edited = new Set(["prompt.keeper_discipline", "prompt.system.guidelines", "prompt.style.freshness"]);
     const added = new Set(["prompt.commands_header", "prompt.command_line"]);
-    const root = join(import.meta.dir, "../../../..");
+    // The 2.6 originals of every key the Keeper's catalog carries, exported from the Python
+    // server's catalogs (prompt, worldbook, relationships, modvars, common) before it was removed:
+    // the tuned wording stays pinned to what was tuned.
     for (const locale of ["en", "zh"]) {
-      const ours = JSON.parse(readFileSync(join(root, "server/locales", locale, "prompt.json"), "utf8")) as Record<string, string>;
-      const frozen: Record<string, string> = {};
-      for (const area of ["prompt", "worldbook", "relationships", "modvars", "common"]) {
-        Object.assign(frozen, JSON.parse(readFileSync(join(root, "locales", locale, `${area}.json`), "utf8")) as Record<string, string>);
-      }
+      const ours = JSON.parse(readFileSync(join(import.meta.dir, "../../../locales", locale, "prompt.json"), "utf8")) as Record<string, string>;
+      const frozen = JSON.parse(readFileSync(join(import.meta.dir, "../../fixtures/reference", `keeper_prompt_2_6.${locale}.json`), "utf8")) as Record<string, string>;
       for (const [key, text] of Object.entries(ours)) {
         if (added.has(key)) continue;
         expect([locale, key, Object.hasOwn(frozen, key)]).toEqual([locale, key, true]);

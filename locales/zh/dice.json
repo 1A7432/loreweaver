@@ -1,6 +1,0 @@
-{
-  "dice.result": "{expression} = {roll_str} = {total}",
-  "dice.result_simple": "结果: {total}",
-  "dice.error.invalid_expression": "无效的骰子表达式：{expression}",
-  "dice.error.invalid_repeat_times": "重复次数必须在 1-20 之间，收到 {times}"
-}

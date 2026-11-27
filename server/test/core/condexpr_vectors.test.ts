@@ -1,5 +1,5 @@
 // The server's evaluator against the shared `visible_when` conformance table
-// (`tests/fixtures/visible_when_vectors.json`), which the client-side evaluator
+// (`clients/protocol/src/condexpr.vectors.json`), which the client-side evaluator
 // (`clients/protocol/src/condexpr.ts`) runs too. `visible_when` is evaluated by clients,
 // so the server — which decides at pack build time what a gate may contain — must agree
 // with them on every row, in full mode and in portable mode alike.
@@ -28,7 +28,7 @@ interface Rejected {
 }
 
 const VECTORS = JSON.parse(
-  readFileSync(join(import.meta.dir, "../../../tests/fixtures/visible_when_vectors.json"), "utf8"),
+  readFileSync(join(import.meta.dir, "../../../clients/protocol/src/condexpr.vectors.json"), "utf8"),
 ) as { cases: Case[]; rejected: Rejected[] };
 
 const MODES = [

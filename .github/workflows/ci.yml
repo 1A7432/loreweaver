@@ -14,33 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  frozen:
-    # The Python server is frozen on this branch: it is the reference the rewrite reads,
-    # and it is deleted when 3.0 ships. Its own tests no longer run here (they can only
-    # change if its files do); instead this job fails when the branch differs from main
-    # anywhere in the frozen tree.
-    name: Frozen Python tree untouched
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: No frozen path differs from main
-        run: |
-          git fetch --no-tags origin main
-          base=$(git merge-base origin/main HEAD)
-          changed=$(git diff --name-only "$base" HEAD -- \
-            core infra agent gateway net adapters tests \
-            app.py lw_versioning.py conftest.py pyproject.toml uv.lock loreweaver-server.spec \
-            scripts/i18n_lint.py scripts/i18n_allowlist.txt scripts/package_server.py \
-            scripts/playtest.py scripts/longrun.py scripts/coverage_sweep.py)
-          if [ -n "$changed" ]; then
-            echo "These frozen files differ from main:"
-            echo "$changed"
-            exit 1
-          fi
-          echo "The frozen tree is identical to main."
-
   clients:
     name: Clients — TypeScript (bun)
     runs-on: ubuntu-latest

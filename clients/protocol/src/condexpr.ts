@@ -19,7 +19,7 @@
 //
 // Semantics MATCH the reference implementation (`core/condexpr.py`) rather than
 // JavaScript's own operators — notably `"abc" > 5` THROWS here (JS would answer false),
-// and a bool is never `===` a number. `tests/fixtures/visible_when_vectors.json` is the
+// and a bool is never `===` a number. `condexpr.vectors.json` is the
 // shared conformance table both sides run.
 
 export class CondExprError extends Error {}
