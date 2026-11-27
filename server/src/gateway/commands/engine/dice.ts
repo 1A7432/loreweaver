@@ -65,13 +65,16 @@ function parseNotation(expr: string): DiceExpression | Refused {
 }
 
 function diceEvent(call: CommandCall, roll: Roll, extra: Record<string, unknown> = {}): CommandEvent {
+  const text = renderRoll(roll);
+  // `detail.text` is the same line, kept where 3.0 clients first read it.
   const data: DiceData = {
     actor: actorName(call.context),
     kind: "roll",
     expr: roll.notation,
     rolls: facesOf(roll),
     total: roll.total,
-    detail: { text: renderRoll(roll), ...extra },
+    text,
+    detail: { text, ...extra },
   };
   return { kind: "dice", data };
 }

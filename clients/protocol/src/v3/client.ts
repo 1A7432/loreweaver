@@ -479,6 +479,12 @@ export class Session {
    * Load older events into the window: into the gap when there is one (what a resume could
    * not replay), else before the oldest event held — while the window has room. Resolves
    * with how many events were added. One load at a time: a second call shares the first.
+   *
+   * 0 does not by itself mean "nothing older": a `log.page` the server refused also resolves
+   * 0, leaves `gap` and `complete` as they were, and puts the refusal on the snapshot as
+   * `lastError` (`{code, message, fatal: false}`, a new object), where every non-fatal
+   * refusal of the session goes. Nothing older is `complete: true` with no `gap`. Without a
+   * connection it rejects, as every request does.
    */
   loadOlder(options: RequestOptions = {}): Promise<number> {
     if (this.#loading !== null) return this.#loading;

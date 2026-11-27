@@ -18,11 +18,13 @@ import {
   findTable,
 } from "../../core/subsystems/index.ts";
 import { type RulePack, subsystemName, tableName } from "../../core/rulepacks/index.ts";
+import { renderRoll } from "../../core/dice/index.ts";
 import { displayName, resolveName, type SheetSpec } from "../../core/sheets/index.ts";
 import type { RoomContext } from "../context.ts";
 import { outcomeData, recordedCheckDetail } from "./dice.ts";
 import { type ParamSet, param } from "./params.ts";
 import { activeCharacter, type LoadedCharacter, refuse, saveSheet, violationNotice } from "./shared.ts";
+import { tableLine } from "./tools_catalog.ts";
 import { type AnyTool, defineTool, type RecordedCheckState, type ToolResult, type ToolTurn } from "./types.ts";
 
 /** How far back in the room's log a spend looks for the check it adjusts. */
@@ -85,6 +87,27 @@ function subsystemCharacter(context: RoomContext, pack: RulePack, label: string)
 
 function subsystemEvent(context: RoomContext, pack: RulePack, spec: SubsystemSpec, data: Omit<DiceData, "kind" | "subsystem" | "subsystemLabel"> & { kind?: DiceData["kind"] }): ToolResult["events"] {
   return [{ kind: "dice", data: { ...data, kind: data.kind ?? "subsystem", subsystem: spec.id, subsystemLabel: subsystemName(spec, context.locale) } }];
+}
+
+/** One side of an opposed roll as the table reads it. */
+interface SideLine {
+  readonly skill: string;
+  readonly total: number;
+  readonly outcome: string | null;
+}
+
+function sideLine(context: RoomContext, side: SideLine): string {
+  return side.outcome === null ? tableLine(context, "dice.side_plain", { skill: side.skill, total: side.total }) : tableLine(context, "dice.side", { skill: side.skill, total: side.total, outcome: side.outcome });
+}
+
+/** An opposed roll in one line for the table: both sides, and who won or that it tied. */
+function opposedLine(context: RoomContext, a: SideLine, b: SideLine, winner: "active" | "passive" | "tie", decidedBy: string | null): string {
+  let result: string;
+  if (winner === "tie") result = tableLine(context, "dice.opposed_tie");
+  else if (a.skill === b.skill) result = tableLine(context, winner === "active" ? "dice.opposed_won_first" : "dice.opposed_won_second");
+  else result = tableLine(context, "dice.opposed_won", { side: winner === "active" ? a.skill : b.skill });
+  if (winner !== "tie" && decidedBy === "value") result = tableLine(context, "dice.opposed_by_value", { won: result });
+  return tableLine(context, "dice.opposed", { a: sideLine(context, a), b: sideLine(context, b), result });
 }
 
 function rollFailed(label: string, code: string): ToolResult {
@@ -153,16 +176,30 @@ function lossTool(pack: RulePack, spec: Extract<SubsystemSpec, { template: "chec
       if (r.ceiling !== null) detail.lossCeiling = r.ceiling;
       if (r.statMax !== null) detail.resourceMax = r.statMax;
       const effective = r.outcome.effectiveTarget;
+      const stat = statLabel(pack.sheet, spec.stat, context.locale);
+      const outcome = outcomeData(pack, r.outcome, context.locale);
+      const table = tableLine(context, r.writeRefused === null ? "dice.loss" : "dice.loss_kept", {
+        stat,
+        total: r.check.total,
+        target: r.statBefore,
+        outcome: outcome.label,
+        loss: r.loss,
+        lossRoll: renderRoll(r.lossRoll),
+        before: r.statBefore,
+        after: r.statAfter,
+      });
       return {
         text: lines.join("\n"),
         events: subsystemEvent(context, pack, spec, {
           actor: name,
-          expr: statLabel(pack.sheet, spec.stat, context.locale),
+          expr: stat,
           rolls: [r.check.total],
           total: r.check.total,
           target: r.statBefore,
           ...(effective === null ? {} : { effectiveTarget: effective }),
-          outcome: outcomeData(pack, r.outcome, context.locale),
+          outcome,
+          label: stat,
+          text: table,
           detail,
         }),
         bookkeeping: { dice: true },
@@ -210,14 +247,18 @@ function improvementTool(pack: RulePack, spec: Extract<SubsystemSpec, { template
       } else {
         text = `${name}'s ${skill} ${label}\nRolled: ${r.roll.total} ≤ ${r.before} → no growth`;
       }
+      const shown = displayName(pack.sheet, r.skill, context.locale);
+      const key = !r.grew ? "dice.no_growth" : r.writeRefused === null ? "dice.growth" : "dice.growth_kept";
       return {
         text,
         events: subsystemEvent(context, pack, spec, {
           actor: name,
-          expr: displayName(pack.sheet, r.skill, context.locale),
+          expr: shown,
           rolls: [r.roll.total],
           total: r.roll.total,
           target: r.before,
+          label: shown,
+          text: tableLine(context, key, { skill: shown, total: r.roll.total, before: r.before, after: r.after, gain: r.after - r.before }),
           detail: { grew: r.grew, before: r.before, after: r.after },
         }),
         bookkeeping: { dice: true },
@@ -298,15 +339,20 @@ function spendTool(pack: RulePack, spec: Extract<SubsystemSpec, { template: "res
       turn.ledger.checks.set(loaded.id, adjusted);
       const name = loaded.character.sheet.name;
       const level = outcomeData(pack, r.outcome, "en").label;
+      const stat = statLabel(pack.sheet, spec.stat, context.locale);
+      const outcome = outcomeData(pack, r.outcome, context.locale);
+      const skill = displayName(pack.sheet, adjusted.skill, context.locale);
       return {
         text: `${name} spent ${r.points} ${label} on ${adjusted.skill}: ${r.spend.beforeRoll} → ${r.spend.afterRoll} (${level}). Remaining ${label}: ${r.statAfter}`,
         events: subsystemEvent(context, pack, spec, {
           actor: name,
-          expr: statLabel(pack.sheet, spec.stat, context.locale),
+          expr: stat,
           rolls: [r.spend.afterRoll],
           total: r.spend.afterRoll,
           target: adjusted.target,
-          outcome: outcomeData(pack, r.outcome, context.locale),
+          outcome,
+          label: skill,
+          text: tableLine(context, "dice.spend", { stat, points: r.points, skill, before: r.spend.beforeRoll, after: r.spend.afterRoll, outcome: outcome.label, remaining: r.statAfter }),
           detail: { points: r.points, rawRoll: r.check.rawRoll, remaining: r.statAfter, character: loaded.id, recordedCheck: recordedCheckDetail(adjusted) },
         }),
         bookkeeping: { dice: true },
@@ -378,6 +424,12 @@ function opposedTool(pack: RulePack, spec: Extract<SubsystemSpec, { template: "o
         ...(result.outcome === null ? {} : { outcome: outcomeData(pack, result.outcome, context.locale) }),
       });
       const active = r.active;
+      const shown = (typed: string, result: typeof r.active): SideLine => ({
+        skill: displayName(pack.sheet, resolveName(pack.sheet, typed) ?? typed, context.locale),
+        total: result.total,
+        outcome: result.outcome === null ? null : outcomeData(pack, result.outcome, context.locale).label,
+      });
+      const first = shown(args.skill1, active);
       return {
         text: lines.join("\n"),
         events: subsystemEvent(context, pack, spec, {
@@ -386,6 +438,8 @@ function opposedTool(pack: RulePack, spec: Extract<SubsystemSpec, { template: "o
           expr: `${args.skill1} vs ${args.skill2}`,
           rolls: [active.check.total, r.passive.check.total],
           total: active.total,
+          label: first.skill,
+          text: opposedLine(context, first, shown(args.skill2, r.passive), r.winner, r.decidedBy),
           ...(active.outcome === null ? {} : { outcome: outcomeData(pack, active.outcome, context.locale) }),
           detail: { active: side(active), passive: side(r.passive), winner: r.winner },
         }),

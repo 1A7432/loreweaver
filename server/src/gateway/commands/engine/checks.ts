@@ -212,6 +212,7 @@ function checkEvent(call: CommandCall, pack: RulePack, performed: PerformedCheck
     expr: rolled.notation,
     rolls: rolled.percentile !== null ? [rolled.percentile.total] : rolled.roll !== null ? facesOf(rolled.roll) : [rolled.total],
     total: performed.total,
+    ...(label === null ? {} : { label }),
     detail: {
       ...(label === null ? {} : { skill: label }),
       modifier,
@@ -237,6 +238,30 @@ function favorCounts(args: Args): readonly [number, number] {
 
 function statLabel(pack: RulePack, name: string, locale: string): string {
   return displayName(pack.sheet, resolveName(pack.sheet, name) ?? stripSpace(name), locale);
+}
+
+/** One side of an opposed roll as the table reads it: its skill, its total, its outcome when graded. */
+interface OpposedSideText {
+  readonly skill: string;
+  readonly total: number;
+  readonly outcome?: { readonly label: string };
+}
+
+function sideText(call: CommandCall, side: OpposedSideText): string {
+  return side.outcome === undefined ? call.tell("dice.side_plain", { skill: side.skill, total: side.total }) : call.tell("dice.side", { skill: side.skill, total: side.total, outcome: side.outcome.label });
+}
+
+/**
+ * An opposed roll in one line for the table: both sides, and who won or that it tied. A
+ * winner is named by its skill, or by its place when both sides rolled the same skill.
+ */
+function opposedText(call: CommandCall, a: OpposedSideText, b: OpposedSideText, winner: "a" | "b" | "tie", decidedBy: string | null): string {
+  let result: string;
+  if (winner === "tie") result = call.tell("dice.opposed_tie");
+  else if (a.skill === b.skill) result = call.tell(winner === "a" ? "dice.opposed_won_first" : "dice.opposed_won_second");
+  else result = call.tell("dice.opposed_won", { side: winner === "a" ? a.skill : b.skill });
+  if (winner !== "tie" && decidedBy === "value") result = call.tell("dice.opposed_by_value", { won: result });
+  return call.tell("dice.opposed", { a: sideText(call, a), b: sideText(call, b), result });
 }
 
 /** A stat the caller's check rolls on, refused when nothing knows the name. */
@@ -389,6 +414,8 @@ function runOpposed(call: CommandCall, args: Args, subsystem: string | null): Do
     ...(entry.outcome === null ? {} : { outcome: wireOutcome(pack, entry.outcome, locale) }),
   });
   const winner = result.winner === "active" ? "a" : result.winner === "passive" ? "b" : "tie";
+  const first = sideView(result.active);
+  const second = sideView(result.passive);
   const data: { -readonly [K in keyof DiceData]: DiceData[K] } = {
     actor: actorName(call.context),
     kind: "opposed",
@@ -397,7 +424,9 @@ function runOpposed(call: CommandCall, args: Args, subsystem: string | null): Do
     expr: result.active.check.notation,
     rolls: [result.active.check.total, result.passive.check.total],
     total: result.active.total,
-    detail: { winner, decidedBy: result.decidedBy, settle: result.settle, a: sideView(result.active), b: sideView(result.passive) },
+    label: first.skill,
+    text: opposedText(call, first, second, winner, result.decidedBy),
+    detail: { winner, decidedBy: result.decidedBy, settle: result.settle, a: first, b: second },
   };
   if (result.active.outcome !== null) data.outcome = wireOutcome(pack, result.active.outcome, locale);
   return { data: { winner }, events: [{ kind: "dice", data }] };
@@ -496,6 +525,18 @@ function runLoss(call: CommandCall, pack: RulePack, spec: SubsystemSpec, args: A
   const problem = saveSheet(call, character, result.sheet);
   if (problem !== null) return problem;
   const rolled = result.check;
+  const outcome = wireOutcome(pack, result.outcome, call.context.locale);
+  const stat = statLabel(pack, result.stat, call.context.locale);
+  const lossText = {
+    stat,
+    total: rolled.total,
+    target: result.statBefore,
+    outcome: outcome.label,
+    loss: result.loss,
+    lossRoll: renderRoll(result.lossRoll),
+    before: result.statBefore,
+    after: result.statAfter,
+  };
   return {
     data: { loss: result.loss, before: result.statBefore, after: result.statAfter },
     events: [
@@ -504,7 +545,9 @@ function runLoss(call: CommandCall, pack: RulePack, spec: SubsystemSpec, args: A
         rolls: rolled.percentile !== null ? [rolled.percentile.total] : [rolled.total],
         total: rolled.total,
         target: result.statBefore,
-        outcome: wireOutcome(pack, result.outcome, call.context.locale),
+        outcome,
+        label: stat,
+        text: call.tell(result.writeRefused === null ? "dice.loss" : "dice.loss_kept", lossText),
         detail: {
           stat: result.stat,
           loss: result.loss,
@@ -533,6 +576,8 @@ function runGrowth(call: CommandCall, pack: RulePack, spec: SubsystemSpec, args:
     const problem = saveSheet(call, character, result.sheet);
     if (problem !== null) return problem;
   }
+  const skill = displayName(pack.sheet, result.skill, call.context.locale);
+  const growthKey = !result.grew ? "dice.no_growth" : result.writeRefused === null ? "dice.growth" : "dice.growth_kept";
   return {
     data: { before: result.before, after: result.after, grew: result.grew },
     events: [
@@ -541,8 +586,10 @@ function runGrowth(call: CommandCall, pack: RulePack, spec: SubsystemSpec, args:
         rolls: [result.roll.total],
         total: result.roll.total,
         target: result.before,
+        label: skill,
+        text: call.tell(growthKey, { skill, total: result.roll.total, before: result.before, after: result.after, gain: result.after - result.before }),
         detail: {
-          skill: displayName(pack.sheet, result.skill, call.context.locale),
+          skill,
           before: result.before,
           after: result.after,
           grew: result.grew,
@@ -558,6 +605,7 @@ function runDraw(call: CommandCall, pack: RulePack, spec: SubsystemSpec, args: A
   if (!result.ok) return refuse("unknown_table", { table: (args.table as string | undefined) ?? "" });
   if (!("entry" in result)) return refuse("roll_failed", { code: "template" });
   const table = findTable(spec as TableDrawSpec, result.table);
+  const tableLabel = table === null ? result.table : tableName(table, call.context.locale);
   return {
     data: { table: result.table, index: result.index, entry: result.entry },
     events: [
@@ -565,7 +613,9 @@ function runDraw(call: CommandCall, pack: RulePack, spec: SubsystemSpec, args: A
         expr: result.roll.notation,
         rolls: [result.roll.total],
         total: result.roll.total,
-        detail: { table: result.table, tableLabel: table === null ? result.table : tableName(table, call.context.locale), index: result.index, entry: result.entry },
+        label: tableLabel,
+        text: call.tell("dice.draw", { table: tableLabel, total: result.roll.total, entry: result.entry }),
+        detail: { table: result.table, tableLabel, index: result.index, entry: result.entry },
       }),
     ],
   };
@@ -734,7 +784,12 @@ export const initCommand: CommandSpec = {
     putDocument(call, INITIATIVE_TYPE, INITIATIVE_ID, initiativeData(added.data));
     return {
       data: { name, value },
-      events: [{ kind: "dice", data: { actor: actorName(call.context), kind: "init", expr: notation ?? String(value), rolls: notation === null ? [value] : rolls, total: value, detail: { name } } }],
+      events: [
+        {
+          kind: "dice",
+          data: { actor: actorName(call.context), kind: "init", expr: notation ?? String(value), rolls: notation === null ? [value] : rolls, total: value, label: call.tell("dice.initiative"), detail: { name } },
+        },
+      ],
     };
   },
 };

@@ -17,7 +17,7 @@ describe("roll_dice", () => {
     expect(outcome.status).toBe("ok");
     expect(outcome.text).toContain("= 11");
     expect(outcome.bookkeeping.dice).toBe(true);
-    expect(outcome.events).toEqual([{ kind: "dice", data: { actor: "Ada", kind: "roll", expr: "2d6 + 1", rolls: [4, 6], total: 11, detail: { criticalSuccess: false, criticalFailure: false } } }]);
+    expect(outcome.events).toEqual([{ kind: "dice", data: { actor: "Ada", kind: "roll", expr: "2d6 + 1", rolls: [4, 6], total: 11, text: "2d6 (4, 6) + 1 = 11", detail: { criticalSuccess: false, criticalFailure: false } } }]);
   });
 
   test("names a non-player actor, and refuses bad notation", async () => {

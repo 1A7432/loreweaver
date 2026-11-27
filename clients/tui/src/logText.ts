@@ -12,13 +12,19 @@ export function speakerLabel(data: NarrativeData, locale?: string): string {
   return tt(locale, data.speaker === "player" ? "log.speaker.player" : "log.speaker.system")
 }
 
-/** One roll as a line. `rolling` shows the die still tumbling (the reveal animation). */
+/**
+ * One roll as a line. `rolling` shows the die still tumbling (the reveal animation). The
+ * server's own line (`text`) when it sent one — an opposed roll, a roll with a consequence, a
+ * plain roll; otherwise what was rolled for (`label`) before the numbers.
+ */
 export function diceText(dice: DiceData, rolling = false): string {
-  const target = typeof dice.effectiveTarget === "number" ? ` vs ${dice.effectiveTarget}` : typeof dice.target === "number" ? ` vs ${dice.target}` : ""
-  const outcome = dice.outcome?.label ? ` -> ${dice.outcome.label}` : ""
   const subsystem = dice.subsystemLabel ? `${dice.subsystemLabel} · ` : ""
   const prefix = rolling ? "⚄ ..." : "⚄"
-  return stripControlChars(`${prefix} ${subsystem}${dice.actor} ${dice.expr} ${dice.total}${target}${outcome}`)
+  if (dice.text) return stripControlChars(`${prefix} ${subsystem}${dice.actor}: ${dice.text}`)
+  const target = typeof dice.effectiveTarget === "number" ? ` vs ${dice.effectiveTarget}` : typeof dice.target === "number" ? ` vs ${dice.target}` : ""
+  const outcome = dice.outcome?.label ? ` -> ${dice.outcome.label}` : ""
+  const label = dice.label ? `${dice.label} ` : ""
+  return stripControlChars(`${prefix} ${subsystem}${dice.actor} ${label}${dice.expr} ${dice.total}${target}${outcome}`)
 }
 
 /** A local line's text: the server's words, or — for a request that got no answer — ours. */

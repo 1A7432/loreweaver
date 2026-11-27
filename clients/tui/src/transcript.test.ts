@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { EventFrame } from "loreweaver-protocol/v3"
+import type { DiceData, EventFrame } from "loreweaver-protocol/v3"
 import { logItems, type LogItem } from "./log"
 import { itemsToTranscript, resolveTranscriptDir, slugifyRoom, transcriptFileName, transcriptLine, transcriptStamp, writeTranscript } from "./transcript"
 
@@ -32,6 +32,26 @@ describe("transcriptLine", () => {
       transcriptLine(one(event(5, { kind: "dice", data: { actor: "Liu", kind: "check", expr: "1d100", rolls: [24], total: 24, target: 70, effectiveTarget: 35, outcome: { id: "hard", label: "HARD SUCCESS", success: true, critical: false, fumble: false, tier: 3 } } }))),
     ).toBe("⚄ Liu 1d100 24 vs 35 -> HARD SUCCESS")
     expect(transcriptLine(one(event(6, { kind: "dice", data: { actor: "Goblin", kind: "roll", expr: "1d6", rolls: [4], total: 4 } })))).toBe("⚄ Goblin 1d6 4")
+  })
+
+  test("a dice line shows what was rolled for before the numbers, and the server's own line when it sent one", () => {
+    const check: DiceData = { actor: "Alice", kind: "check", expr: "1d100", rolls: [19], total: 19, target: 25, label: "Spot Hidden", outcome: { id: "regular", label: "Success", success: true, critical: false, fumble: false, tier: 2 } }
+    expect(transcriptLine(one(event(7, { kind: "dice", data: check })))).toBe("⚄ Alice Spot Hidden 1d100 19 vs 25 -> Success")
+    const opposed: DiceData = {
+      actor: "Alice",
+      kind: "opposed",
+      subsystem: "opposed_check",
+      subsystemLabel: "Opposed check",
+      expr: "1d100",
+      rolls: [28, 53],
+      total: 28,
+      label: "Fighting (Brawl)",
+      text: "Fighting (Brawl) 28 (Failure) vs Dodge 53 (Failure): Dodge wins (higher value)",
+      detail: { winner: "b" },
+    }
+    expect(transcriptLine(one(event(8, { kind: "dice", data: opposed })))).toBe("⚄ Opposed check · Alice: Fighting (Brawl) 28 (Failure) vs Dodge 53 (Failure): Dodge wins (higher value)")
+    const plain: DiceData = { actor: "Ada", kind: "roll", expr: "2d6", rolls: [4, 3], total: 7, text: "2d6 (4, 3) = 7\u001b[31m" }
+    expect(transcriptLine(one(event(9, { kind: "dice", data: plain })))).toBe("⚄ Ada: 2d6 (4, 3) = 7[31m")
   })
 
   test("local lines are kept, a spinner and a draft are not; control characters are stripped", () => {

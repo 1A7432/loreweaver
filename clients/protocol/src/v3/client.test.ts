@@ -324,6 +324,31 @@ test("loadOlder pages history before the oldest event while the window has room,
   expect(link.calls("log.page").length).toBe(1);
 });
 
+test("a refused log.page resolves 0 like nothing older, but leaves the gap and puts the refusal on the snapshot's lastError", async () => {
+  const { session, link } = online({}, 1, 300);
+  for (let seq = 101; seq <= 300; seq++) session.receive(narrative(seq));
+  const before = session.getSnapshot();
+  expect(before).toMatchObject({ complete: false, lastError: null });
+  const load = session.loadOlder();
+  session.receive({ type: "result", rid: link.last("call").rid, ok: false, error: { code: "invalid_params", message: "No." } });
+  expect(await load).toBe(0);
+  const after = session.getSnapshot();
+  expect(after.lastError).toEqual({ code: "invalid_params", message: "No.", fatal: false });
+  expect(after.complete).toBe(false);
+  expect(after.gap).toBe(before.gap);
+  expect(seqs(session)[0]).toBe(101);
+
+  // Nothing older is told apart by the window, not by the number: complete, no error added.
+  const again = session.loadOlder();
+  session.receive({ type: "result", rid: link.last("call").rid, ok: true, data: { events: Array.from({ length: 100 }, (_, i) => narrative(1 + i)) } });
+  expect(await again).toBe(100);
+  const last = session.loadOlder();
+  session.receive({ type: "result", rid: link.last("call").rid, ok: true, data: { events: [] } });
+  expect(await last).toBe(0);
+  expect(session.getSnapshot()).toMatchObject({ complete: true, gap: null });
+  expect(session.getSnapshot().lastError).toBe(after.lastError);
+});
+
 test("a page that arrives after the log was cut is void", async () => {
   const { session, link } = online({}, 1, 300);
   for (let seq = 101; seq <= 300; seq++) session.receive(narrative(seq));

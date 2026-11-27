@@ -404,7 +404,7 @@ this viewer may use them now:
 | `role` | `player` (players and admins) or `admin` (admins only). |
 | `danger` | Present and `true` for a destructive command: ask before running it (`undo`, `reset`, `save`). |
 | `available` | Whether this viewer can run it here now. |
-| `reason` | When not available: `observer`, `no_rule_system`, `not_in_system`, `no_media`, or a module's own reason code. |
+| `reason` | When not available, one of: `observer` (the viewer is an observer and the command is not one observers may run), `no_rule_system` (`check`: the room's rule system grades no checks), `not_in_system` (`opposed`: the room's rule system has no contest), `no_media` (`uploads`, `audio`, `bgm`, `ambience`, `sfx`: the server keeps no files; `import`: no files and no pack installed), `settings_unavailable` (`model`, `imagegen`, `key`: the server runs without run-time settings). A module command is available to every player (below). |
 
 - An admin command is not listed to a non-admin at all.
 - Some player commands need the admin for certain arguments (`bot` with `on`, `rule` with
@@ -475,10 +475,10 @@ argument. Text forms are given as English table / Chinese table; with any of the
 | `rename` | player | `rename`, `nn` / `nn` | `name` (1–64) | Renames the character you play. |
 | `new_character` | player | the creation words of the installed rule systems (with the built-in ones: `coc`, `coc7`, `dnd`, `dnd5e`) | `system`, `name?` | Makes and seats a character; a `narrative` system event; `data {id, name, system, violations}`. |
 | `genchar` | player | `genchar` / `genchar`, `生卡`, `生成角色` | `description` (a string; empty is `genchar_empty`, over 2000 code points `genchar_too_long`), `name?` (1–64; default as `new_character`'s), `system?` (1–64: a rule system's id or name; default the room's) | A character from a description. The server's model reads the description as data and proposes a concept — an occupation or class, attributes to favour, a few skills, a line of backstory — in one call; the sheet is rolled and the numbers placed by the rule system (the model writes none), what the model wrote passes the server's word filter, and the character is made and seated as `new_character` makes it (the same one `narrative` system event; a room without a rule system takes this one). `text` is the sheet in words; `data {id, name, system, method: "rolled"\|"standard_array", violations, dropped}` (`dropped`: parts of the model's answer over a cap). Runs without queuing behind the room's turns. At most 5 an hour per member, character imports included (`genchar_rate_limited`). Refusals: `genchar_no_system`, `unknown_system`, `name_taken`, `genchar_no_model` (no model configured), `genchar_failed` (the model failed, or its answer was unusable; the message says which). Text forms: `genchar [system] [name] \| <description>`, `genchar [system] <description>` (a first word naming a rule system selects it; `｜` works as `\|`). |
-| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op` (`list`\|`claim`\|`release`), `name?` (≤128) | The roster of characters on offer. |
+| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op` (`list`\|`claim`\|`release`), `name?` (≤128) | The roster of characters on offer. `claim` finds `name` (trimmed) as the id of a character on offer (as the `characters` view lists it) first, then as its name, case-insensitively (`unknown_character`). |
 | `recap` | player, observer | `recap` / `recap`, `前情提要`, `前情` | — | The spoiler-free story so far. |
 | `lore` | player; all but `list`, and `list` with `disabled`: admin | `lore` / `lore`, `设定`, `設定` | `op` (`list`\|`add`\|`enable`\|`disable`\|`bind`\|`unbind`\|`restore`), `title?` (≤200), `content?` (≤16000), `condition?` (≤500), `disabled?` | The room's lore. |
-| `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op` (`list`\|`expose`\|`hide`\|`set`\|`add`), `path?` (≤200), `value?` (≤4000), `delta?` | The room's variables; `expose` shows a branch to players. |
+| `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op` (`list`\|`expose`\|`hide`\|`set`\|`add`), `path?` (≤200), `value?` (≤4000), `delta?` | The room's variables; `expose` shows a branch to players. `set` and `add` write an existing leaf only: a path that names a branch is refused (`var_branch`, the message naming leaves under it) — a branch is never replaced by a value. `set` reads `value`, a string (in the text form, the rest of the line after the path), by the first rule that fits: the words `true`, `false`, `null`; JSON (`42`, `-3.5`, `1e3`, `"42"`, `[1, 2]`, `{"a": 1}`); a JSON5 object or list in its brackets (`{a: 1}`); a text in single quotes (`'42'` is the text `42`, `''` inside is one quote); arithmetic on numbers with `+ - * / ^` and parentheses (`2*3+1` is 7 — and `2026-11-27` is 1988); YAML (`TRUE` is true, `~` is null, `0x10` is 16, `time: dusk` is a mapping, a value starting with `#` is null); else the text itself, with quotes, backquotes, backslashes and spaces trimmed from its ends. `undefined` is refused (`var_refused`). To set a text that looks like a number, put it in quotes: `'42'` or `"42"`. A leaf holding a number takes a text as a number (`not_a_number` when it is none); a declared variable checks the value against its kind. |
 | `npc` | admin | `npc` / `npc`, `角色` | `op` (`list`\|`show`\|`delete`), `name?` | The answer is the caller's alone. |
 | `chronicle` | admin | `chronicle` / `chronicle`, `编年史`, `年史` | `op` (`list`\|`summary`\|`threads`\|`note`), `text?` | The answer is the caller's alone. |
 | `habits` | admin | `habits` / `habits`, `习惯`, `習慣` | `op` (`show`\|`forget`), `text?` (≤200) | What the Keeper learned about this table. |
@@ -606,6 +606,12 @@ than `limit` events back means the log has nothing older. Paged events are histo
 `rewind` or `reset` among them has already been applied by the server and changes nothing
 for the client.
 
+A refused page is an ordinary refusal. The reference client's `loadOlder()` resolves with the
+number of events it added, so 0 both when there is nothing older and when the server refused
+the page; the snapshot tells them apart. A refusal leaves `gap` and `complete` as they were and
+sets `lastError` to `{code, message, fatal: false}`, where every non-fatal refusal of the
+session goes. Nothing older sets `complete` (or, while filling a gap, clears `gap`).
+
 ### 7.6 Keeping a local log
 
 The reference client (`client.ts`) does this, and a client that keeps a log should do the same:
@@ -654,10 +660,13 @@ A client renders the kinds it knows and skips the others ([12.1](#121-forward-co
 
 ### 8.2 `dice`
 
-One roll or check as the table saw it. It never carries Keeper-only information.
+One roll or check as the table saw it. It never carries Keeper-only information. Three
+examples from one table: a check, an opposed roll, a sanity roll.
 
 ```json
-{"actor":"Alice","kind":"check","expr":"1d100","rolls":[19],"total":19,"target":25,"effectiveTarget":25,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":6},"detail":{"skill":"Spot Hidden","modifier":0,"modifiers":[],"params":[]}}
+{"actor":"Alice","kind":"check","expr":"1d100","rolls":[19],"total":19,"label":"Spot Hidden","detail":{"skill":"Spot Hidden","modifier":0,"modifiers":[],"params":[]},"target":25,"effectiveTarget":25,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":6}}
+{"actor":"Alice","kind":"opposed","subsystem":"opposed_check","subsystemLabel":"Opposed check","expr":"1d100","rolls":[28,53],"total":28,"label":"Fighting (Brawl)","text":"Fighting (Brawl) 28 (Failure) vs Dodge 53 (Failure): Dodge wins (higher value)","detail":{"winner":"b","decidedBy":"value","settle":"outcome","a":{"skill":"Fighting (Brawl)","value":20,"total":28,"outcome":{"id":"fail","label":"Failure","success":false,"critical":false,"fumble":false,"tier":1,"margin":-8}},"b":{"skill":"Dodge","value":25,"total":53,"outcome":{"id":"fail","label":"Failure","success":false,"critical":false,"fumble":false,"tier":1,"margin":-28}}},"outcome":{"id":"fail","label":"Failure","success":false,"critical":false,"fumble":false,"tier":1,"margin":-8}}
+{"actor":"Alice","kind":"subsystem","subsystem":"sanity_check","subsystemLabel":"Sanity","expr":"1d100","rolls":[55],"total":55,"target":75,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":20},"label":"Sanity","text":"Sanity 55 vs 75 (Success): loses 1 (1 = 1), Sanity 75 → 74","detail":{"stat":"SAN","loss":1,"lossNotation":"1","lossRoll":"1 = 1","before":75,"after":74,"max":99}}
 ```
 
 | field | meaning |
@@ -669,8 +678,14 @@ One roll or check as the table saw it. It never carries Keeper-only information.
 | `total` | The result. |
 | `target`, `effectiveTarget` | For a check: the value rolled against, and the value after difficulty and modifiers. |
 | `subsystem`, `subsystemLabel` | For `subsystem`: its stable id and its name in the room's language. |
+| `label` | What was rolled for, in the room's language: the skill or stat as the rule system names it, the initiative word, a subsystem's own name for this roll (the stat a sanity roll is against, the skill a growth roll is for, the table a draw is from; an opposed roll's first side). Absent for a bare roll. |
+| `text` | The whole roll as one line for a person, in the room's language, for the kinds whose result is more than total, target and outcome: an opposed roll (both sides with their totals and outcomes, and who won or that it tied), a subsystem roll with a consequence (what it changed, from what to what; a table's entry), a plain roll. |
 | `outcome` | For a graded roll: see below. |
-| `detail` | Extras declared by the rule system (an object). Show them verbatim if you like; never branch on them. A plain roll carries `detail.text`, a readable rendering such as `"2d6 (5, 5) = 10"`. |
+| `detail` | Extras declared by the rule system (an object). Show them verbatim if you like; never branch on them. A plain roll also carries `detail.text`, the same line as `text`, for clients written before `text`. |
+
+**Showing a roll** needs no knowledge of the rule system: show `text` when present; otherwise
+compose from `label`, `total`, `target` (or `effectiveTarget`) and `outcome.label`, as in
+`Spot Hidden 19 vs 25: Success`. Never read `detail` to learn what was rolled or who won.
 
 **The outcome contract** is neutral to the rule system, so one client renders every system:
 
@@ -914,7 +929,7 @@ The JSON Schemas are in the protocol package (`BUILT_IN_VIEW_SCHEMAS`) and in `v
 | `character.id`, `.name`, `.pack` | string | `pack` is the character's rule system id. |
 | `character.status` | string[] | Conditions. |
 | `character.resources` | `[{id, label, value, max}]` | Meters such as HP and sanity. |
-| `character.attributes`, `.skills` | `[{key, label, value}]` | `value` is a number or a string. Filled only when the sheet is the viewer's own. |
+| `character.attributes`, `.skills` | `[{key, label, value, derived?}]` | `value` is a number or a string. Filled only when the sheet is the viewer's own. `derived: true` marks a value the rule system computes from others and the sheet does not store (listed after the stored ones). Do not offer to edit a derived attribute: setting it is refused (`sheet_write`). Setting a derived skill gives the skill a value of its own, listed from then on without the flag. |
 
 **`party`**: who is at the table, what they play, and the fight's order.
 
@@ -965,14 +980,17 @@ ones players do not see marked `hidden: true`.
 | `keeperMuted` | boolean | The Keeper does not answer while `true`. |
 | `uploads` | boolean | Whether members may upload files. `false` on a server that keeps no files. |
 
-**`usage`**: the token figures of the room's last Keeper turn.
+**`usage`**: the token figures of the room's last Keeper turn, and the Keeper model's context
+window. How full the Keeper's context is: `last.inputTokens / contextWindow`.
 
 | field | type | meaning |
 |---|---|---|
 | `last` | object or `null` | `null` before the first turn (and after a story reset). |
 | `last.turn` | integer | The turn. |
-| `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | As the provider reported them, summed over the turn. |
+| `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | As the provider reported them. `inputTokens`, `cachedInputTokens` and `cacheWriteTokens` are the Keeper's last model call of the turn (its prompt is the whole context at that point); `outputTokens` and `reasoningTokens` are summed over the turn's calls. |
 | `last.estimated` | boolean | The prompt size was estimated by the engine: the provider reported none. |
+| `contextWindow` | integer | Optional. In tokens: the context window of the model the Keeper's next turn uses. It follows an admin's `model set`. |
+| `contextWindowKnown` | `false` | Present when the server does not know that model's window and `contextWindow` is its default (32,000); an admin gives the real one with `model set … context=N`. |
 
 **`packs`**: the content packs, by name.
 
@@ -1212,8 +1230,8 @@ Minor versions within a major are additive. A client:
   exception is `turn.activity`, which is presentation only: an unknown value is left out;
 - **caps** what it accepts and drops a frame over a cap rather than truncating it. The reference
   decoder (`decode.ts`) uses: 256 characters for short strings (ids, codes, names, view names,
-  locales, hashes), 200,000 for texts (a narrative, a draft slice, a notice, a result's text, a
-  block's body), 1024 for a dice expression, 10,000 dice per roll, 256 blocks per event, 64
+  locales, hashes, a dice `label`), 200,000 for texts (a narrative, a draft slice, a notice, a
+  result's text, a block's body, a dice `text`), 1024 for a dice expression, 10,000 dice per roll, 256 blocks per event, 64
   options per `choices` block, 1000 events per `log.page` answer, 4096 entries in a rewind's
   `kept`;
 - passes opaque values through: `view.data` of module views, `result.data`, a dice `detail`.
@@ -1320,7 +1338,7 @@ The Keeper's turn follows: `busy`, two draft slices, the `narrative` event that 
 ```json
 {"type":"input","rid":"r2","text":"I light the lantern. [[1d6]]"}
 {"type":"event","seq":3,"id":"5e4d3c2b-1a0f-4e9d-8c7b-6a5f4e3d2c1b","ts":1764240010000,"kind":"narrative","turn":2,"data":{"speaker":"player","name":"Ada","member":"m:15b5f3445045","text":"I light the lantern. [[1d6]]","format":"plain"}}
-{"type":"event","seq":4,"id":"0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d","ts":1764240010001,"kind":"dice","turn":2,"data":{"actor":"Ada","kind":"roll","expr":"1d6","rolls":[6],"total":6,"detail":{"text":"1d6 (6) = 6","inline":true}}}
+{"type":"event","seq":4,"id":"0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d","ts":1764240010001,"kind":"dice","turn":2,"data":{"actor":"Ada","kind":"roll","expr":"1d6","rolls":[6],"total":6,"text":"1d6 (6) = 6","detail":{"text":"1d6 (6) = 6","inline":true}}}
 {"type":"result","rid":"r2","ok":true}
 {"type":"signal","kind":"turn","data":{"status":"busy","actor":"Ada"}}
 {"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"The lantern catches, "}}
@@ -1335,10 +1353,10 @@ Keeper turn opens.
 
 ```json
 {"type":"input","rid":"r3","text":".r 2d6"}
-{"type":"event","seq":6,"id":"3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f","ts":1764240020000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[5,5],"total":10,"detail":{"text":"2d6 (5, 5) = 10"}}}
+{"type":"event","seq":6,"id":"3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f","ts":1764240020000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[5,5],"total":10,"text":"2d6 (5, 5) = 10","detail":{"text":"2d6 (5, 5) = 10"}}}
 {"type":"result","rid":"r3","ok":true,"data":{"totals":[10]}}
 {"type":"call","rid":"r4","method":"command.run","params":{"id":"roll","args":{"expr":"2d6"}}}
-{"type":"event","seq":7,"id":"8f7e6d5c-4b3a-4f2e-9d1c-0b9a8f7e6d5c","ts":1764240025000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[3,4],"total":7,"detail":{"text":"2d6 (3, 4) = 7"}}}
+{"type":"event","seq":7,"id":"8f7e6d5c-4b3a-4f2e-9d1c-0b9a8f7e6d5c","ts":1764240025000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[3,4],"total":7,"text":"2d6 (3, 4) = 7","detail":{"text":"2d6 (3, 4) = 7"}}}
 {"type":"result","rid":"r4","ok":true,"data":{"totals":[7]}}
 ```
 

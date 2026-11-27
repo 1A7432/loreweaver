@@ -69,6 +69,19 @@ export function cacheRate(usage: NonNullable<UsageView["last"]>): number | null 
   return Math.min(100, Math.round((usage.cachedInputTokens / usage.inputTokens) * 100))
 }
 
+/**
+ * How full the Keeper's context was on the last turn, in percent (`last.inputTokens /
+ * contextWindow`), with `≈` when the prompt size was estimated or the window is the server's
+ * default for a model it does not know; null when the server sent no window or no turn ran.
+ */
+export function contextShare(usage: UsageView): string | null {
+  const last = usage.last
+  const window = usage.contextWindow
+  if (!last || typeof window !== "number" || window <= 0) return null
+  const percent = Math.round((last.inputTokens / window) * 100)
+  return `${last.estimated || usage.contextWindowKnown === false ? "≈" : ""}${percent}`
+}
+
 // A height=4 bordered row -- exactly the two inner rows the `tiny` ascii-font needs --
 // carrying room identity, scene + in-game clock and a ticking wall clock on the top row,
 // and liveness + the last turn's token figures (the `usage` view) on the bottom row.
@@ -83,6 +96,7 @@ export function HeaderBar({ room, scene, usage, online, theme, locale, link, aud
 
   const last = usage?.last ?? null
   const rate = last ? cacheRate(last) : null
+  const context = usage ? contextShare(usage) : null
 
   const sceneLine =
     visible.scene || visible.clock ? (
@@ -161,6 +175,7 @@ export function HeaderBar({ room, scene, usage, online, theme, locale, link, aud
               {visible.usage ? (
                 <text fg={theme.dim}>
                   {tt(locale, "hud.lastTurn")} ↑{fmtTokens(last.inputTokens)} ↓{fmtTokens(last.outputTokens)}
+                  {context !== null ? ` · ${tt(locale, "hud.context", { percent: context })}` : ""}
                 </text>
               ) : null}
               {visible.usage && visible.cache ? <text fg={theme.dim}> · </text> : null}

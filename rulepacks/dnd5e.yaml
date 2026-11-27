@@ -185,6 +185,11 @@ display:
   zh:
     advantage: 优势
     disadvantage: 劣势
+    ac: 护甲等级
+    hp: 生命值
+    hpmax: 生命值上限
+    dc: 难度等级
+    pp: 被动感知
   en:
     advantage: Advantage
     disadvantage: Disadvantage
@@ -214,6 +219,20 @@ display:
     欺瞒: Deception
     威吓: Intimidation
     表演: Performance
+    力量调整值: STR modifier
+    敏捷调整值: DEX modifier
+    体质调整值: CON modifier
+    智力调整值: INT modifier
+    感知调整值: WIS modifier
+    魅力调整值: CHA modifier
+    先攻修正: Initiative
+    速度: Speed
+    载重: Carrying Capacity
+    负重: Encumbrance
+    护甲等级: Armor Class
+    熟练加值: Proficiency Bonus
+    被动感知: Passive Perception
+    等级: Character Level
 
 subsystems:
   opposed_check:

@@ -28,6 +28,8 @@ export interface ViewStat {
   key: string;
   label: string;
   value: number | string;
+  /** The rule system computes this value from others and the sheet stores none: do not offer to edit it. */
+  derived?: true;
 }
 
 /** A member, as named in another view. */
@@ -148,7 +150,10 @@ export interface RoomView {
   uploads: boolean;
 }
 
-/** `usage`: the token figures of the room's last Keeper turn. */
+/**
+ * `usage`: the token figures of the room's last Keeper turn, and the Keeper model's context
+ * window. How full the Keeper's context is: `last.inputTokens / contextWindow`.
+ */
 export interface UsageView {
   last: {
     turn: number;
@@ -160,6 +165,10 @@ export interface UsageView {
     /** The prompt size was estimated by the engine: the provider reported none. */
     estimated: boolean;
   } | null;
+  /** The context window of the model the Keeper's next turn uses, in tokens. */
+  contextWindow?: number;
+  /** Present (`false`) when the model is unknown to the server and `contextWindow` is its default. */
+  contextWindowKnown?: false;
 }
 
 /**
@@ -350,7 +359,7 @@ function nullable(schema: ViewSchema): ViewSchema {
 }
 
 const RESOURCE = record({ id: STRING, label: STRING, value: NUMBER, max: NUMBER });
-const STAT = record({ key: STRING, label: STRING, value: { type: ["number", "string"] } });
+const STAT = record({ key: STRING, label: STRING, value: { type: ["number", "string"] }, derived: { const: true } }, ["derived"]);
 const PERSON = record({ id: STRING, name: STRING });
 const SCALAR = { type: ["null", "boolean", "number", "string"] } as const;
 
@@ -439,19 +448,24 @@ export const ROOM_VIEW_SCHEMA: ViewSchema = record({
   uploads: BOOLEAN,
 });
 
-export const USAGE_VIEW_SCHEMA: ViewSchema = record({
-  last: nullable(
-    record({
-      turn: INTEGER,
-      inputTokens: INTEGER,
-      outputTokens: INTEGER,
-      cachedInputTokens: INTEGER,
-      cacheWriteTokens: INTEGER,
-      reasoningTokens: INTEGER,
-      estimated: BOOLEAN,
-    }),
-  ),
-});
+export const USAGE_VIEW_SCHEMA: ViewSchema = record(
+  {
+    last: nullable(
+      record({
+        turn: INTEGER,
+        inputTokens: INTEGER,
+        outputTokens: INTEGER,
+        cachedInputTokens: INTEGER,
+        cacheWriteTokens: INTEGER,
+        reasoningTokens: INTEGER,
+        estimated: BOOLEAN,
+      }),
+    ),
+    contextWindow: INTEGER,
+    contextWindowKnown: { const: false },
+  },
+  ["contextWindow", "contextWindowKnown"],
+);
 
 export const PACKS_VIEW_SCHEMA: ViewSchema = record({
   packs: list(

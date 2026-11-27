@@ -97,6 +97,12 @@ export interface ViewSource {
   readonly media?: MediaStore | null;
   /** What the admin views read: the model settings and the access keys; absent or null: those views are empty. */
   readonly admin?: { readonly models: ModelSettings | null; readonly keys: KeyBook | null };
+  /**
+   * The context window of the Keeper model the room's next piece of work takes, in tokens, and
+   * whether the server knows that model's window (false: it is the server's default); absent:
+   * the `usage` view leaves both out.
+   */
+  readonly keeperContext?: { readonly window: number; readonly known: boolean };
 }
 
 export interface BuiltInView<N extends BuiltInViewName = BuiltInViewName> {
@@ -138,8 +144,8 @@ function pairs(value: unknown): [string, number | string][] {
 
 /**
  * The stats of one sheet section, labelled for `locale`: the stored slots in sheet order,
- * then the derived slots the sheet does not store. A storage key's label is the pack's
- * display name of its canonical name.
+ * then the derived slots the sheet does not store, marked `derived`. A storage key's label
+ * is the pack's display name of its canonical name.
  */
 function stats(
   spec: SheetSpec | null,
@@ -161,7 +167,7 @@ function stats(
   for (const [key, canonical] of derivedSlots ?? []) {
     const value = derived.get(canonical);
     if (seen.has(key) || value === undefined) continue;
-    out.push({ key, label: label(key, canonical), value });
+    out.push({ key, label: label(key, canonical), value, derived: true });
   }
   return out;
 }
@@ -350,7 +356,13 @@ function room(source: ViewSource, viewer: ViewerContext): RoomView {
 
 function usage(source: ViewSource, _viewer: ViewerContext): UsageView {
   const last = source.services.store.stateGet(source.room, LAST_TURN_USAGE);
-  return { last: last === null ? null : { ...last } };
+  const out: UsageView = { last: last === null ? null : { ...last } };
+  const context = source.keeperContext;
+  if (context !== undefined) {
+    out.contextWindow = context.window;
+    if (!context.known) out.contextWindowKnown = false;
+  }
+  return out;
 }
 
 /** An admin sees every installed pack; anyone else, the packs this room enabled. Names only. */

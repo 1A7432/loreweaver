@@ -309,7 +309,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 | `role` | `player`（玩家和管理员）或 `admin`（仅管理员）。 |
 | `danger` | 破坏性命令带这个字段且为 `true`：运行前先确认（`undo`、`reset`、`save`）。 |
 | `available` | 这个查看者此刻能否在这里运行它。 |
-| `reason` | 不可用时：`observer`、`no_rule_system`、`not_in_system`、`no_media`，或模组自己的理由代码。 |
+| `reason` | 不可用时，是下面之一：`observer`（查看者是旁观者，而这个命令旁观者不能用）、`no_rule_system`（`check`：房间的规则系统不评级检定）、`not_in_system`（`opposed`：房间的规则系统没有对抗）、`no_media`（`uploads`、`audio`、`bgm`、`ambience`、`sfx`：服务器不存文件；`import`：不存文件，也没装扩展包）、`settings_unavailable`（`model`、`imagegen`、`key`：服务器运行时不能改设置）。模组命令对任何玩家都可用（见下）。 |
 
 - 管理员命令根本不会列给非管理员。
 - 有些玩家命令的某些参数需要管理员（`bot` 带 `on`，`rule` 带 `variant` 或 `system`，`uploads` 带 `on`，`init` 带 `name`，`lore` 的 `list` 以外的任何用法以及带 `disabled` 的 `list`，`import` 带 `as: "world"`，`model` 除不带 `provider` 和 `lane` 的 `list` 以外的任何用法，`report` 带 `reveal`）。条目写的是 `role: "player"`；仅限管理员的参数以 `forbidden` 拒绝。见 [6.8](#68-引擎的命令) 的表。
@@ -352,10 +352,10 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 | `rename` | player | `rename`, `nn` / `nn` | `name`（1–64） | 给你扮演的角色改名。 |
 | `new_character` | player | 已安装规则系统的建卡词（内置的有：`coc`、`coc7`、`dnd`、`dnd5e`） | `system`、`name?` | 创建并入座一个角色；一个 `narrative` 系统事件；`data {id, name, system, violations}`。 |
 | `genchar` | player | `genchar` / `genchar`, `生卡`, `生成角色` | `description`（字符串；为空是 `genchar_empty`，超过 2000 个码点是 `genchar_too_long`）、`name?`（1–64；默认同 `new_character`）、`system?`（1–64：规则系统的 id 或名字；默认房间的） | 按描述生成角色。服务器的模型把描述当作数据读，用一次调用提出一个构想——职业或职阶、侧重的属性、几项技能、一行背景；角色卡由规则系统掷出、数值由它分配（模型一个数都不写），模型写的内容经过服务器的词语过滤，角色的创建和入座与 `new_character` 相同（同样一个 `narrative` 系统事件；没有规则系统的房间采用这次指定的系统）。`text` 是用文字写出的角色卡；`data {id, name, system, method: "rolled"\|"standard_array", violations, dropped}`（`dropped`：模型回答中超出上限的部分）。不排在房间的回合后面。每个成员每小时最多 5 次，角色导入也算在内（`genchar_rate_limited`）。拒绝：`genchar_no_system`、`unknown_system`、`name_taken`、`genchar_no_model`（没有配置模型）、`genchar_failed`（模型出错，或它的回答不能用；消息里说明是哪种）。文本形式：`genchar [system] [name] \| <description>`、`genchar [system] <description>`（第一个词是规则系统名时选中它；`｜` 等同 `\|`）。 |
-| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op`（`list`\|`claim`\|`release`）、`name?`（≤128） | 可供选用的角色池。 |
+| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op`（`list`\|`claim`\|`release`）、`name?`（≤128） | 可供选用的角色池。`claim` 先把 `name`（去掉首尾空白）当作角色池里某个角色的 id（`characters` 视图列出的那个）来找，找不到再当作它的名字找，不分大小写（`unknown_character`）。 |
 | `recap` | player, observer | `recap` / `recap`, `前情提要`, `前情` | — | 不剧透的前情提要。 |
 | `lore` | player；`list` 以外的全部，以及带 `disabled` 的 `list`：admin | `lore` / `lore`, `设定`, `設定` | `op`（`list`\|`add`\|`enable`\|`disable`\|`bind`\|`unbind`\|`restore`）、`title?`（≤200）、`content?`（≤16000）、`condition?`（≤500）、`disabled?` | 房间的设定。 |
-| `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op`（`list`\|`expose`\|`hide`\|`set`\|`add`）、`path?`（≤200）、`value?`（≤4000）、`delta?` | 房间的变量；`expose` 把一个分支展示给玩家。 |
+| `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op`（`list`\|`expose`\|`hide`\|`set`\|`add`）、`path?`（≤200）、`value?`（≤4000）、`delta?` | 房间的变量；`expose` 把一个分支展示给玩家。`set` 和 `add` 只写已有的叶子：路径指向一个分支时被拒绝（`var_branch`，消息里列出它下面的叶子），分支不会被一个值替换。`set` 读 `value`（一个字符串；文本形式里是路径后面的整行），按第一条合用的规则：`true`、`false`、`null` 这三个词；JSON（`42`、`-3.5`、`1e3`、`"42"`、`[1, 2]`、`{"a": 1}`）；带括号的 JSON5 对象或列表（`{a: 1}`）；单引号里的文本（`'42'` 是文本 `42`，里面的 `''` 是一个引号）；数的四则运算，用 `+ - * / ^` 和括号（`2*3+1` 是 7——`2026-11-27` 也就是 1988）；YAML（`TRUE` 是 true，`~` 是 null，`0x10` 是 16，`time: dusk` 是一个映射，以 `#` 开头的值是 null）；都不是，就是文本本身，去掉两端的引号、反引号、反斜杠和空格。`undefined` 被拒绝（`var_refused`）。要设一个看起来像数的文本，给它加引号：`'42'` 或 `"42"`。原来是数的叶子收到文本会当作数（不是数时为 `not_a_number`）；声明过的变量按它的类型检查值。 |
 | `npc` | admin | `npc` / `npc`, `角色` | `op`（`list`\|`show`\|`delete`）、`name?` | 回答只给调用者。 |
 | `chronicle` | admin | `chronicle` / `chronicle`, `编年史`, `年史` | `op`（`list`\|`summary`\|`threads`\|`note`）、`text?` | 回答只给调用者。 |
 | `habits` | admin | `habits` / `habits`, `习惯`, `習慣` | `op`（`show`\|`forget`）、`text?`（≤200） | 守秘人对这一桌了解到的习惯。 |
@@ -442,6 +442,8 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 
 `{"method":"log.page","params":{"before":<seq>,"limit":<1..100>}}` 回答 `{events: [...]}`：`seq < before` 的最新 `limit` 个事件，**最早的在前**，都是完整的事件帧（和实时事件形状相同）。`limit` 默认为 `PAGE_LIMIT` = **100**，最多也是这个数；要更多会被拒绝（`invalid_params`），不会截到 100。返回的事件少于 `limit` 个，说明日志里没有更早的了。分页拿到的事件是历史：其中的 `rewind` 或 `reset` 服务器已经执行过，对客户端没有任何影响。
 
+分页被拒绝就是普通的拒绝。参考客户端的 `loadOlder()` 返回它加进来的事件数，所以没有更早的事件和服务器拒绝了这一页都是 0；要靠快照区分。被拒绝时 `gap` 和 `complete` 保持原样，`lastError` 设为 `{code, message, fatal: false}`，会话里所有不致命的拒绝都放在这里。没有更早的事件时 `complete` 变为真（补缺口时则是 `gap` 被清掉）。
+
 ### 7.6 在本地保存日志
 
 参考客户端（`client.ts`）这样做，保存日志的客户端也应当这样做：
@@ -476,10 +478,12 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 
 ### 8.2 `dice`
 
-桌面看到的一次掷骰或检定。它从不带只给守秘人的信息。
+桌面看到的一次掷骰或检定。它从不带只给守秘人的信息。下面是同一桌的三个例子：一次检定、一次对抗、一次理智检定。
 
 ```json
-{"actor":"Alice","kind":"check","expr":"1d100","rolls":[19],"total":19,"target":25,"effectiveTarget":25,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":6},"detail":{"skill":"Spot Hidden","modifier":0,"modifiers":[],"params":[]}}
+{"actor":"Alice","kind":"check","expr":"1d100","rolls":[19],"total":19,"label":"Spot Hidden","detail":{"skill":"Spot Hidden","modifier":0,"modifiers":[],"params":[]},"target":25,"effectiveTarget":25,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":6}}
+{"actor":"Alice","kind":"opposed","subsystem":"opposed_check","subsystemLabel":"Opposed check","expr":"1d100","rolls":[28,53],"total":28,"label":"Fighting (Brawl)","text":"Fighting (Brawl) 28 (Failure) vs Dodge 53 (Failure): Dodge wins (higher value)","detail":{"winner":"b","decidedBy":"value","settle":"outcome","a":{"skill":"Fighting (Brawl)","value":20,"total":28,"outcome":{"id":"fail","label":"Failure","success":false,"critical":false,"fumble":false,"tier":1,"margin":-8}},"b":{"skill":"Dodge","value":25,"total":53,"outcome":{"id":"fail","label":"Failure","success":false,"critical":false,"fumble":false,"tier":1,"margin":-28}}},"outcome":{"id":"fail","label":"Failure","success":false,"critical":false,"fumble":false,"tier":1,"margin":-8}}
+{"actor":"Alice","kind":"subsystem","subsystem":"sanity_check","subsystemLabel":"Sanity","expr":"1d100","rolls":[55],"total":55,"target":75,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":20},"label":"Sanity","text":"Sanity 55 vs 75 (Success): loses 1 (1 = 1), Sanity 75 → 74","detail":{"stat":"SAN","loss":1,"lossNotation":"1","lossRoll":"1 = 1","before":75,"after":74,"max":99}}
 ```
 
 | 字段 | 含义 |
@@ -491,8 +495,12 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 | `total` | 结果。 |
 | `target`、`effectiveTarget` | 检定专用：掷骰对照的值，以及计入难度和调整后的值。 |
 | `subsystem`、`subsystemLabel` | `subsystem` 专用：它的稳定 id，以及它在房间语言里的名字。 |
+| `label` | 为什么而掷，用房间的语言：规则系统叫的技能或属性名、先攻这个词、子系统给这次掷骰起的名字（理智检定对照的属性、成长检定针对的技能、抽取用的表；对抗里第一方的技能）。单纯掷骰时没有。 |
+| `text` | 给人看的一行，把这次掷骰完整说清楚，用房间的语言；只有结果不止总数、目标和结果等级的那几种才有：对抗（双方的总数和结果等级，以及谁赢或平局）、有后果的子系统掷骰（改了什么、从多少到多少；抽到的表项）、普通掷骰。 |
 | `outcome` | 评级掷骰专用：见下文。 |
-| `detail` | 规则系统声明的附加信息（一个对象）。愿意的话原样显示；永远不要据此分支。普通掷骰带 `detail.text`，一个可读的写法，如 `"2d6 (5, 5) = 10"`。 |
+| `detail` | 规则系统声明的附加信息（一个对象）。愿意的话原样显示；永远不要据此分支。普通掷骰还带 `detail.text`，和 `text` 是同一行，留给 `text` 出现之前写的客户端。 |
+
+**显示一次掷骰**不需要懂规则系统：有 `text` 就显示它；没有就用 `label`、`total`、`target`（或 `effectiveTarget`）和 `outcome.label` 拼出来，比如 `Spot Hidden 19 vs 25: Success`。永远不要读 `detail` 来弄清掷的是什么、谁赢了。
 
 **结果约定**与规则系统无关，所以一个客户端能渲染所有系统：
 
@@ -685,7 +693,7 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 | `character.id`, `.name`, `.pack` | string | `pack` 是角色的规则系统 id。 |
 | `character.status` | string[] | 状态。 |
 | `character.resources` | `[{id, label, value, max}]` | HP、理智之类的量表。 |
-| `character.attributes`, `.skills` | `[{key, label, value}]` | `value` 是数或字符串。只有角色卡是查看者自己的时才填。 |
+| `character.attributes`, `.skills` | `[{key, label, value, derived?}]` | `value` 是数或字符串。只有角色卡是查看者自己的时才填。`derived: true` 标出规则系统由别的值算出来、角色卡上不存的值（排在存着的值后面）。不要提供修改推算出的属性：设置它会被拒绝（`sheet_write`）。设置推算出的技能会让这个技能有自己的值，此后列出时就不再带这个标记。 |
 
 **`party`**：谁在桌上，各自扮演什么，以及战斗的顺序。
 
@@ -734,14 +742,16 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 | `keeperMuted` | boolean | 为 `true` 时守秘人不回应。 |
 | `uploads` | boolean | 成员能否上传文件。服务器不保存文件时为 `false`。 |
 
-**`usage`**：房间上一个守秘人回合的 token 数字。
+**`usage`**：房间上一个守秘人回合的 token 数字，以及守秘人所用模型的上下文窗口。守秘人的上下文有多满：`last.inputTokens / contextWindow`。
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `last` | object 或 `null` | 第一个回合之前（以及故事重置之后）为 `null`。 |
 | `last.turn` | integer | 回合。 |
-| `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | 服务商报告的数字，整个回合累加。 |
+| `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | 服务商报告的数字。`inputTokens`、`cachedInputTokens` 和 `cacheWriteTokens` 是这个回合守秘人最后一次模型调用的（那次的提示词就是当时的全部上下文）；`outputTokens` 和 `reasoningTokens` 是这个回合各次调用累加的。 |
 | `last.estimated` | boolean | 提示词的大小由引擎估算：服务商没有报告。 |
+| `contextWindow` | integer | 可选。以 token 计：守秘人下一个回合所用模型的上下文窗口。管理员 `model set` 之后跟着变。 |
+| `contextWindowKnown` | `false` | 服务器不知道这个模型的窗口、`contextWindow` 是它的默认值（32,000）时才有；管理员用 `model set … context=N` 给出真实的值。 |
 
 **`packs`**：内容扩展包，按名字。
 
@@ -907,7 +917,7 @@ server: {"ok":false,"code":"<stable code>","message":"<in the member's language>
 - **忽略**未知 `type` 的帧、未知 `kind` 的事件（但要计入它的 `seq`，[7.6](#76-在本地保存日志)）、未知 `kind` 的信号，以及未知 `kind` 的块（显示事件的其余部分）；
 - 在任何地方都**忽略未知字段**；
 - 对决定怎么渲染的字段，**不确定就不画**：已知字段带着这个版本不认识的值（某个 `speaker`、`format`、dice `kind`、`role`、reset `scope`、audio `action` 或 `layer`、notice `level`、块的 `tone` 或 `style`），或已知字段类型不对，这一帧就算格式有误，格式有误的帧被丢弃，不画错。唯一的例外是 `turn.activity`，它只用于展示：未知值直接略去；
-- 给接受的东西设**上限**，超过上限的帧整个丢弃，而不是截断。参考解码器（`decode.ts`）用的是：短字符串（id、错误码、名字、视图名、语言、哈希）256 个字符，文本（叙述、草稿片段、通知、结果的文本、块的正文）200,000 个字符，骰子表达式 1024 个字符，每次掷骰 10,000 颗骰子，每个事件 256 个块，每个 `choices` 块 64 个选项，每个 `log.page` 回答 1000 个事件，rewind 的 `kept` 4096 项；
+- 给接受的东西设**上限**，超过上限的帧整个丢弃，而不是截断。参考解码器（`decode.ts`）用的是：短字符串（id、错误码、名字、视图名、语言、哈希、骰子的 `label`）256 个字符，文本（叙述、草稿片段、通知、结果的文本、块的正文、骰子的 `text`）200,000 个字符，骰子表达式 1024 个字符，每次掷骰 10,000 颗骰子，每个事件 256 个块，每个 `choices` 块 64 个选项，每个 `log.page` 回答 1000 个事件，rewind 的 `kept` 4096 项；
 - 原样透传不透明的值：模组视图的 `view.data`、`result.data`、骰子的 `detail`。
 
 内置视图的值会按它们的 schema 检查，但允许多出字段：更新的服务器可能给视图加字段。
@@ -1001,7 +1011,7 @@ server: {"ok":false,"code":"<stable code>","message":"<in the member's language>
 ```json
 {"type":"input","rid":"r2","text":"I light the lantern. [[1d6]]"}
 {"type":"event","seq":3,"id":"5e4d3c2b-1a0f-4e9d-8c7b-6a5f4e3d2c1b","ts":1764240010000,"kind":"narrative","turn":2,"data":{"speaker":"player","name":"Ada","member":"m:15b5f3445045","text":"I light the lantern. [[1d6]]","format":"plain"}}
-{"type":"event","seq":4,"id":"0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d","ts":1764240010001,"kind":"dice","turn":2,"data":{"actor":"Ada","kind":"roll","expr":"1d6","rolls":[6],"total":6,"detail":{"text":"1d6 (6) = 6","inline":true}}}
+{"type":"event","seq":4,"id":"0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d","ts":1764240010001,"kind":"dice","turn":2,"data":{"actor":"Ada","kind":"roll","expr":"1d6","rolls":[6],"total":6,"text":"1d6 (6) = 6","detail":{"text":"1d6 (6) = 6","inline":true}}}
 {"type":"result","rid":"r2","ok":true}
 {"type":"signal","kind":"turn","data":{"status":"busy","actor":"Ada"}}
 {"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"The lantern catches, "}}
@@ -1014,10 +1024,10 @@ server: {"ok":false,"code":"<stable code>","message":"<in the member's language>
 
 ```json
 {"type":"input","rid":"r3","text":".r 2d6"}
-{"type":"event","seq":6,"id":"3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f","ts":1764240020000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[5,5],"total":10,"detail":{"text":"2d6 (5, 5) = 10"}}}
+{"type":"event","seq":6,"id":"3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f","ts":1764240020000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[5,5],"total":10,"text":"2d6 (5, 5) = 10","detail":{"text":"2d6 (5, 5) = 10"}}}
 {"type":"result","rid":"r3","ok":true,"data":{"totals":[10]}}
 {"type":"call","rid":"r4","method":"command.run","params":{"id":"roll","args":{"expr":"2d6"}}}
-{"type":"event","seq":7,"id":"8f7e6d5c-4b3a-4f2e-9d1c-0b9a8f7e6d5c","ts":1764240025000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[3,4],"total":7,"detail":{"text":"2d6 (3, 4) = 7"}}}
+{"type":"event","seq":7,"id":"8f7e6d5c-4b3a-4f2e-9d1c-0b9a8f7e6d5c","ts":1764240025000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[3,4],"total":7,"text":"2d6 (3, 4) = 7","detail":{"text":"2d6 (3, 4) = 7"}}}
 {"type":"result","rid":"r4","ok":true,"data":{"totals":[7]}}
 ```
 

@@ -1,0 +1,17 @@
+{
+  "dice.growth": "{skill} {total} vs {before}: grows by {gain}, {before} → {after}",
+  "dice.growth_kept": "{skill} {total} vs {before}: would grow by {gain}, but the sheet kept it at {before}",
+  "dice.initiative": "Initiative",
+  "dice.loss": "{stat} {total} vs {target} ({outcome}): loses {loss} ({lossRoll}), {stat} {before} → {after}",
+  "dice.loss_kept": "{stat} {total} vs {target} ({outcome}): loses {loss} ({lossRoll}), but the sheet kept {stat} at {before}",
+  "dice.no_growth": "{skill} {total} vs {before}: no growth",
+  "dice.opposed": "{a} vs {b}: {result}",
+  "dice.opposed_by_value": "{won} (higher value)",
+  "dice.opposed_tie": "a tie",
+  "dice.opposed_won": "{side} wins",
+  "dice.opposed_won_first": "the first roll wins",
+  "dice.opposed_won_second": "the second roll wins",
+  "dice.side": "{skill} {total} ({outcome})",
+  "dice.side_plain": "{skill} {total}",
+  "dice.spend": "{stat}: spends {points} on {skill}, roll {before} → {after} ({outcome}); {stat} left {remaining}"
+}

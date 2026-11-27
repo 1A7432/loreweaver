@@ -1,0 +1,17 @@
+{
+  "dice.growth": "{skill} {total}/{before}：成长 {gain}，{before} → {after}",
+  "dice.growth_kept": "{skill} {total}/{before}：本应成长 {gain}，但角色卡上仍是 {before}",
+  "dice.initiative": "先攻",
+  "dice.loss": "{stat} {total}/{target}（{outcome}）：失去 {loss}（{lossRoll}），{stat} {before} → {after}",
+  "dice.loss_kept": "{stat} {total}/{target}（{outcome}）：失去 {loss}（{lossRoll}），但角色卡上的{stat}仍是 {before}",
+  "dice.no_growth": "{skill} {total}/{before}：没有成长",
+  "dice.opposed": "{a} 对 {b}：{result}",
+  "dice.opposed_by_value": "{won}（数值更高）",
+  "dice.opposed_tie": "平局",
+  "dice.opposed_won": "{side}胜",
+  "dice.opposed_won_first": "前一次掷骰胜",
+  "dice.opposed_won_second": "后一次掷骰胜",
+  "dice.side": "{skill} {total}（{outcome}）",
+  "dice.side_plain": "{skill} {total}",
+  "dice.spend": "{stat}：花费 {points} 点调整{skill}，掷骰 {before} → {after}（{outcome}），{stat}剩余 {remaining}"
+}

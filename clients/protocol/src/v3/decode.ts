@@ -152,6 +152,8 @@ function dice(raw: Raw): DiceData | null {
     !optional(raw, extra, "effectiveTarget", finite) ||
     !optional(raw, extra, "subsystem", shortStr) ||
     !optional(raw, extra, "subsystemLabel", shortStr) ||
+    !optional(raw, extra, "label", shortStr) ||
+    !optional(raw, extra, "text", textStr) ||
     !optional(raw, extra, "detail", isRecord)
   ) {
     return null;

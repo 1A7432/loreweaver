@@ -30,6 +30,8 @@ test("every known frame decodes, and unknown fields are dropped", () => {
   expect(decodeServerFrame({ ...welcome, extra: 1, you: { ...welcome.you, more: true } })).toEqual(welcome as never);
   expect(decodeServerFrame({ ...narrative, extra: 1, data: { ...narrative.data, mood: "dark" } })).toEqual(narrative as never);
   expect(decodeServerFrame(dice)).toEqual(dice as never);
+  const told = { ...dice, data: { ...dice.data, kind: "opposed", label: "Fighting (Brawl)", text: "Fighting (Brawl) 28 (Failure) vs Dodge 53 (Failure): Dodge wins (higher value)" } };
+  expect(decodeServerFrame(told)).toEqual(told as never);
   const frames = [
     { type: "event", seq: 3, id: "e3", ts: 3, kind: "blocks", data: { blocks: [{ kind: "divider" }, { kind: "meter", label: "HP", value: 3, min: 0, max: 10 }], replace: true } },
     { type: "event", seq: 4, id: "e4", ts: 4, kind: "media", data: { hash: "ab", mime: "image/png", size: 3, name: "a.png", from: "m1" } },
@@ -93,6 +95,10 @@ test("every malformed shape is refused", () => {
     { ...dice, data: { ...dice.data, total: Number.POSITIVE_INFINITY } },
     { ...dice, data: { ...dice.data, outcome: { id: "x" } } },
     { ...dice, data: { ...dice.data, detail: [] } },
+    { ...dice, data: { ...dice.data, label: 7 } },
+    { ...dice, data: { ...dice.data, label: "x".repeat(MAX_SHORT_CHARS + 1) } },
+    { ...dice, data: { ...dice.data, text: ["2d6"] } },
+    { ...dice, data: { ...dice.data, text: "x".repeat(MAX_TEXT_CHARS + 1) } },
     { type: "event", seq: 3, id: "e", ts: 1, kind: "blocks", data: { blocks: "no" } },
     { type: "event", seq: 3, id: "e", ts: 1, kind: "blocks", data: { blocks: Array.from({ length: MAX_BLOCKS + 1 }, () => ({ kind: "divider" })) } },
     { type: "event", seq: 3, id: "e", ts: 1, kind: "blocks", data: { blocks: [{ kind: "meter", label: "HP" }] } },

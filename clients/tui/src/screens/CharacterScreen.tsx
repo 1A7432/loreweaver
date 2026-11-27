@@ -67,7 +67,9 @@ export function CharacterScreen({ connection, theme, themeName, locale, onBack }
   const character = me?.character ?? null
   const systems = characters?.systems ?? []
   const free = freeClaimables(characters)
-  const stats = character ? [...character.attributes, ...character.skills] : []
+  // What the edit list offers: not a value the rule system derives for an attribute, which the
+  // server refuses to set. A derived skill stays: setting it gives the skill a value of its own.
+  const stats = character ? [...character.attributes.filter((stat) => stat.derived !== true), ...character.skills] : []
   const online = (viewData(snapshot, "party")?.members ?? []).filter((member) => member.online).length
   const room = snapshot.welcome?.room.id ?? ""
 

@@ -57,6 +57,7 @@ import {
   type TreeLeafView,
   applyUpdates,
   exposePrefix,
+  flattenLeaves,
   hidePrefix,
   VARIABLE_TREE_ID,
   VARIABLE_TREE_TYPE,
@@ -112,6 +113,9 @@ function runVarList(call: CommandCall): Done {
   return { text: lines(call, call.say("var.header", { count: items.length }), items), data: { tree, modules } };
 }
 
+/** How many of a branch's leaves a refusal names. */
+const MAX_BRANCH_LEAVES_NAMED = 8;
+
 function outcomeOf(outcome: WriteOutcome, path: string): Refused | null {
   return outcome.status === "refused" ? refuse("var_refused", { path, code: outcome.code }) : null;
 }
@@ -137,7 +141,15 @@ function runVarWrite(call: CommandCall, op: "set" | "add", path: string, args: A
   if (treeDocument === null) return refuse("var_refused", { path, code: "unknown_path" });
   const stored = readVariableTree(treeDocument.data);
   const value = op === "set" ? (args.value as string) : String(args.delta as number);
-  // `set` writes an existing leaf only: the tree's shape is the imported world's.
+  // `set` and `add` write an existing LEAF only: the tree's shape is the imported world's. The
+  // update language itself would replace a whole branch by a value — one mistyped path and a
+  // subtree of the world is gone — so a branch is refused here, naming what is under it.
+  const under = flattenLeaves(stored.tree)
+    .map((leaf) => leaf.path)
+    .filter((leaf) => leaf.startsWith(`${path}.`));
+  if (under.length > 0) {
+    return refuse("var_branch", { path, leaves: `${under.slice(0, MAX_BRANCH_LEAVES_NAMED).join(", ")}${under.length > MAX_BRANCH_LEAVES_NAMED ? ", …" : ""}` });
+  }
   const applied = applyUpdates(stored.tree, [{ op, written: op, path, args: [value], reason: "" }]);
   const result = applied.results[0];
   if (result === undefined) return refuse("var_refused", { path, code: "unknown_path" });

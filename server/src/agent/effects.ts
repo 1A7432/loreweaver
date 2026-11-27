@@ -726,6 +726,8 @@ export function applyModuleEffects(
         // The worker reports the rendered roll, not its faces: the text carries them.
         rolls: [],
         total: roll.total,
+        ...(roll.label === null ? {} : { label: roll.label }),
+        text: roll.text,
         detail: roll.label === null ? { text: roll.text } : { text: roll.text, label: roll.label },
       },
     });

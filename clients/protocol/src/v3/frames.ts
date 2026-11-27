@@ -117,6 +117,18 @@ export interface DiceData {
   /** A rule subsystem's stable id and its name in the room's language. */
   subsystem?: string;
   subsystemLabel?: string;
+  /**
+   * What was rolled for, in the room's language: the skill or stat as the rule system names
+   * it, the initiative word, a subsystem's own name for this roll. Absent for a bare roll.
+   */
+  label?: string;
+  /**
+   * The whole roll as one line for a person, in the room's language, when its result is more
+   * than total, target and outcome (an opposed roll, a subsystem roll with a consequence, a
+   * plain roll). Show it when present; otherwise compose from `label`, `total`, `target`
+   * and `outcome.label`.
+   */
+  text?: string;
   outcome?: Outcome;
   /** System-declared extras a client may show verbatim and never needs to understand. */
   detail?: Record<string, unknown>;

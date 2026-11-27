@@ -377,6 +377,7 @@ display:
   zh:
     bonus: 奖励骰
     penalty: 惩罚骰
+    DB: 伤害加值
   en:
     bonus: Bonus dice
     penalty: Penalty dice
@@ -395,6 +396,7 @@ display:
     生命值上限: Max HP
     魔法值: MP
     魔法值上限: Max MP
+    灵感: Idea
     体格: Build
     移动力: MOV
     护甲: Armor

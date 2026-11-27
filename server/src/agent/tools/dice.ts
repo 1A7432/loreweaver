@@ -32,6 +32,7 @@ import { checkValue, displayName, getHitPoints, hasCheckValue, resolveName, setH
 import type { RoomContext } from "../context.ts";
 import { type ArgObject, param } from "./params.ts";
 import { activeCharacter, getDocument, type LoadedCharacter, listDocuments, loadCharacter, putDocument, refuse, saveSheet, violationNotice } from "./shared.ts";
+import { tableLine } from "./tools_catalog.ts";
 import { defineTool, type RecordedCheckState, type ToolResult, type TurnLedger } from "./types.ts";
 
 /** The outcome as the table reads it: the label in the room's language, from the pack. */
@@ -92,6 +93,7 @@ export const rollDiceTool = defineTool({
         expr: roll.notation,
         rolls: faces,
         total: roll.total,
+        text: renderRoll(roll),
         detail: { criticalSuccess: critical === "success", criticalFailure: critical === "failure" },
       }),
       bookkeeping: { dice: true },
@@ -290,6 +292,7 @@ export const skillCheckTool = defineTool({
       rolls: [...rolled.dice],
       total,
       target,
+      label: skillLabel,
       outcome: outcomeData(pack, outcome, context.locale),
       detail,
     };
@@ -441,7 +444,7 @@ export const initiativeTrackerTool = defineTool({
         putDocument(context, INITIATIVE_TYPE, INITIATIVE_ID, initiativeData(change.data), document);
         return {
           text: `Added ${name}'s initiative: ${value}`,
-          events: diceEvent({ actor: name, kind: "init", expr, rolls, total: value }),
+          events: diceEvent({ actor: name, kind: "init", expr, rolls, total: value, label: tableLine(context, "dice.initiative") }),
         };
       }
       case "list":

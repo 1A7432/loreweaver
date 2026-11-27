@@ -217,7 +217,7 @@ describe("blocks, dice and injections", () => {
       options(),
     );
     expect(result.events.map((event) => event.kind)).toEqual(["dice", "narrative"]);
-    expect(result.events[0]?.data).toEqual({ actor: "dice", kind: "roll", expr: "1d20", rolls: [], total: 14, detail: { text: "1d20 [14] = 14", label: "Luck" } });
+    expect(result.events[0]?.data).toEqual({ actor: "dice", kind: "roll", expr: "1d20", rolls: [], total: 14, label: "Luck", text: "1d20 [14] = 14", detail: { text: "1d20 [14] = 14", label: "Luck" } });
     expect(readTurnInjections(store, ROOM, 1)).toEqual(["Mind the clock."]);
     const later = contextFor(services, store.beginTurn(ROOM));
     applyModuleEffects(later, { ...NONE, injections: ["Second."] }, options());

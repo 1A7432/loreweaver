@@ -245,8 +245,12 @@ test("a roll through command.run and through typed text reach the same command w
   const dice = ada.session.getSnapshot().events.filter((event): event is Extract<EventFrame, { kind: "dice" }> => event.kind === "dice");
   expect(dice).toHaveLength(2);
   const [first, second] = dice;
-  expect({ ...first?.data, rolls: undefined, total: undefined, detail: undefined }).toEqual({ ...second?.data, rolls: undefined, total: undefined, detail: undefined });
+  expect({ ...first?.data, rolls: undefined, total: undefined, text: undefined, detail: undefined }).toEqual({ ...second?.data, rolls: undefined, total: undefined, text: undefined, detail: undefined });
   expect(first?.data).toMatchObject({ actor: "Ada", kind: "roll", expr: "2d6" });
+  // A plain roll states itself in `text`; `detail.text` keeps the same line.
+  expect(first?.data.text).toMatch(/^2d6 \(\d, \d\) = \d+$/u);
+  expect(first?.data.text).toBe((first?.data.detail as { text: string }).text);
+  expect(first?.data.label).toBeUndefined();
   expect(run.ok ? (run.data as { totals: number[] }).totals[0] : null).toBe(first?.data.total as number);
   // A command opens no Keeper turn: nothing but the two rolls is in the log.
   expect(ada.session.getSnapshot().events.map((event) => event.kind)).toEqual(["dice", "dice"]);
@@ -298,6 +302,69 @@ test("views: me, party and commands subscribed; a sheet change pushes a new `me`
   expect(ada.session.getSnapshot().viewProblems.get("nope")).toBe("unknown_view");
   expect(ada.session.droppedFrames).toBe(0);
   expect(ada.session.getSnapshot().lastError).toBeNull();
+});
+
+function diceData(player: Player): Extract<EventFrame, { kind: "dice" }>["data"][] {
+  return player.session
+    .getSnapshot()
+    .events.filter((event): event is Extract<EventFrame, { kind: "dice" }> => event.kind === "dice")
+    .map((event) => event.data);
+}
+
+test("a dice event reads without the rule system: label and text in the room's language, through the client as the server stored them", async () => {
+  const b = setup();
+  const ada = await join(b, KEYS.ada, { locale: "zh" });
+  for (const line of [".coc Alice", ".ra 侦查", ".rav 斗殴, 闪避", ".sc 1/1d6", ".en 侦查", ".ti", ".ri roll"]) expect(await done(b, ada.session.input(line))).toMatchObject({ ok: true });
+  // The client's language is Chinese; the room's is English, and events are the table's.
+  const rolled = diceData(ada).map((data) => ({ kind: data.kind, label: data.label, text: data.text }));
+  expect(rolled).toEqual([
+    { kind: "check", label: "Spot Hidden", text: undefined },
+    { kind: "opposed", label: "Fighting (Brawl)", text: "Fighting (Brawl) 28 (Failure) vs Dodge 53 (Failure): Dodge wins (higher value)" },
+    { kind: "subsystem", label: "Sanity", text: "Sanity 55 vs 75 (Success): loses 1 (1 = 1), Sanity 75 → 74" },
+    { kind: "subsystem", label: "Spot Hidden", text: "Spot Hidden 91 vs 25: grows by 10, 25 → 35" },
+    { kind: "subsystem", label: "Temporary madness", text: expect.stringMatching(/^Temporary madness \(8\): /u) },
+    { kind: "init", label: "Initiative", text: undefined },
+  ]);
+  // `detail` is as it was.
+  expect(diceData(ada)[1]?.detail).toMatchObject({ winner: "b", decidedBy: "value", a: { skill: "Fighting (Brawl)", total: 28 }, b: { skill: "Dodge", total: 53 } });
+  expect(ada.session.getSnapshot().events as unknown[]).toEqual(serverLog(b));
+
+  // In a Chinese room the same rolls read in Chinese.
+  const root = await join(b, KEYS.root);
+  expect(await done(b, root.session.runCommand("language", { locale: "zh" }))).toMatchObject({ ok: true });
+  expect(await done(b, ada.session.input(".rav 斗殴, 闪避"))).toMatchObject({ ok: true });
+  expect(await done(b, ada.session.input(".ri roll"))).toMatchObject({ ok: true });
+  const [opposed, initiative] = diceData(ada).slice(-2);
+  expect(opposed?.label).toBe("斗殴");
+  expect(opposed?.text).toMatch(/^斗殴 \d+（[^）]+） 对 闪避 \d+（[^）]+）：/u);
+  expect(initiative?.label).toBe("先攻");
+  expect(ada.session.droppedFrames).toBe(0);
+});
+
+test("`me` marks the values the rule system derives; `usage` carries the Keeper model's context window and follows a model switch", async () => {
+  const models = new ModelSettings({ llm: { preset: "openai", apiKey: "sk-env-roundtrip-0123456789", model: "no-such-model" }, lanes: {} }, new ServerSettings(openDatabase(":memory:")), {
+    llm: (settings) => ({ client: new ScriptedLLM(() => "Reply"), contextWindow: settings.contextWindow }),
+  });
+  const b = setup({ models });
+  const ada = await join(b, KEYS.ada);
+  const root = await join(b, KEYS.root);
+  await done(b, ada.session.viewSubscribe(["me", "usage"]));
+  expect(await done(b, ada.session.input(".coc Alice"))).toMatchObject({ ok: true });
+  const sheet = () => ada.session.view("me")?.data.character;
+  const derivedKeys = (stats: readonly { key: string; derived?: true }[] | undefined) => (stats ?? []).filter((stat) => stat.derived === true).map((stat) => stat.key);
+  expect(derivedKeys(sheet()?.attributes)).toEqual(["HPMAX", "MPMAX", "SANMAX", "IDEA", "KNOW"]);
+  expect(derivedKeys(sheet()?.skills)).toEqual(["闪避", "母语"]);
+  expect(sheet()?.attributes.find((stat) => stat.key === "STR")).not.toHaveProperty("derived");
+  // A derived attribute cannot be set; a derived skill can, and then shows its own value.
+  expect(await done(b, ada.session.runCommand("sheet", { op: "set", writes: [{ name: "HPMAX", op: "=", value: "20" }] }))).toMatchObject({ ok: false, error: { code: "sheet_write" } });
+  expect(await done(b, ada.session.runCommand("sheet", { op: "set", writes: [{ name: "闪避", op: "=", value: "40" }] }))).toMatchObject({ ok: true });
+  expect(sheet()?.skills.find((stat) => stat.key === "闪避")).toEqual({ key: "闪避", label: "Dodge", value: 40 });
+
+  // A model the server does not know: its default window, said to be a default.
+  expect(ada.session.view("usage")?.data).toEqual({ last: null, contextWindow: 32_000, contextWindowKnown: false });
+  expect(await done(b, root.session.runCommand("model", { op: "set", provider: "openai", model: "gpt-5.5", contextWindow: 400_000 }))).toMatchObject({ ok: true });
+  expect(ada.session.view("usage")?.data).toEqual({ last: null, contextWindow: 400_000 });
+  expect(ada.session.droppedFrames).toBe(0);
 });
 
 test("an admin's undo reaches every client as a rewind that cuts its log back to the server's", async () => {

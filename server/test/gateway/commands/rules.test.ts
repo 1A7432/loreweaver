@@ -268,4 +268,23 @@ describe("flows", () => {
     expect(ok(await b.run(ADMIN, "var", { op: "list" })).text).toContain("stats.hp = 7");
     expect(code(await b.run(ADMIN, "var", { op: "set", path: "stats.mp", value: "3" }))).toBe("var_refused");
   });
+
+  test("a branch is never replaced by a value: set and add on a branch are refused, naming its leaves", async () => {
+    const b = bench();
+    seedVariables(b);
+    const before = b.services.views.view(ROOM, VARIABLE_TREE_TYPE, VARIABLE_TREE_ID, { grade: "keeper", locale: "en" }) as VariableTreeView;
+    for (const args of [
+      { op: "set", path: "stats", value: "4" },
+      { op: "add", path: "plot", delta: 1 },
+    ]) {
+      const refused = await b.run(ADMIN, "var", args);
+      expect(code(refused)).toBe("var_branch");
+      expect(refused.ok ? "" : refused.message).toContain(args.path === "stats" ? "stats.hp" : "plot.ending");
+    }
+    // Nothing of the tree moved.
+    expect(b.services.views.view(ROOM, VARIABLE_TREE_TYPE, VARIABLE_TREE_ID, { grade: "keeper", locale: "en" })).toEqual(before);
+    // A leaf is written as before.
+    expect(ok(await b.run(ADMIN, "var", { op: "set", path: "stats.hp", value: "4" })).text).toContain("stats.hp is now 4");
+    expect(ok(await b.run(ADMIN, "var", { op: "set", path: "stats.hp", value: "4" }, "zh")).text).toContain("4");
+  });
 });

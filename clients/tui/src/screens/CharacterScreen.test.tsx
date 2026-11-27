@@ -84,9 +84,10 @@ describe("CharacterScreen", () => {
     expect(frame).toContain("Rule system")
   })
 
-  test("edit the sheet: pick a stat, type a value, sheet set with a typed write", async () => {
+  test("edit the sheet: pick a stat, type a value, sheet set with a typed write; a derived attribute is not offered", async () => {
     const server = new FakeServer()
-    server.views.set("me", ME_SHEET)
+    // Max HP is derived: listed first, but the server would refuse to set it, so the editor starts at STR.
+    server.views.set("me", { ...ME_NONE, character: { ...SHEET, attributes: [{ key: "HPMAX", label: "Max HP", value: 13, derived: true }, ...SHEET.attributes] } })
     server.views.set("characters", { ...SYSTEMS, mine: "ch-1" })
     server.onCall = () => ({ ok: true, text: "Ada Lovelace: STR 70" })
     const { harness, screen, calls } = await open(server)

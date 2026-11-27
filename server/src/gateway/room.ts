@@ -832,6 +832,7 @@ export class Room {
       packs: host.packs,
       media: host.uploads?.media ?? null,
       admin: { models: host.models, keys: host.keys },
+      keeperContext: this.#keeperContext(),
     };
     return { source, modules: await this.#modules(), at: this.meta.head };
   }
@@ -928,6 +929,18 @@ export class Room {
     this.#envs.set(services, { ...env, settings: { ...env.settings, contextWindow: snapshot.contextWindow } });
     this.#pinned = { version: snapshot.version, services };
     return services;
+  }
+
+  /**
+   * The Keeper model's context window as the room's next piece of work will take it: the
+   * current model snapshot's (`#servicesNow`), or the server's setting when models do not
+   * change at run time (the operator gave that window, so it counts as known).
+   */
+  #keeperContext(): { readonly window: number; readonly known: boolean } {
+    const models = this.#host.models;
+    if (models === null) return { window: this.#host.env.settings.contextWindow, known: true };
+    const snapshot = models.snapshot();
+    return { window: snapshot.contextWindow, known: snapshot.contextWindowKnown };
   }
 
   #call(context: RoomContext, locale: string): CommandCall {
