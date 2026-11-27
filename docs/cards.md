@@ -66,8 +66,8 @@ import reads the whole original card:
 
 - **Lore.** The full lorebook becomes the room's lore entries, with the admin's trust:
   `secret` entries stay keeper-only and `constant` entries are always on.
-- **Variables.** `[InitVar]` entries (a title containing `[InitVar]`) seed the room's
-  variable tree: JSON5-tolerant objects or YAML mappings, nested and CJK paths allowed,
+- **Variables.** `[InitVar]` entries (a title containing `[InitVar]`, brackets included:
+  `initvar notes` is ordinary lore) seed the room's variable tree: JSON5-tolerant objects or YAML mappings, nested and CJK paths allowed,
   `[value, "description"]` leaves. They are data, not lore. A native card's typed
   `variables` become the room's typed variables.
 - **For the Keeper.** The card's prose (description, personality, scenario, example
@@ -83,6 +83,17 @@ import reads the whole original card:
 The answer counts what came in and what did not: *Imported the world River Town: 2 lore
 entries (0 secret), 1 variable declarations, 1 openings.* Not imported in 3.0: hook
 scripts (3.0 has no hooks; they are counted, never run) and a native card's `pregens`.
+
+Nothing is shortened to fit. An entry whose condition, title, a keyword or group name is
+over its limit (500 characters for a condition, 200 for the others; at most 64 keywords),
+or whose switches are written in a way Loreweaver does not read, is left out, and the answer
+says how many and why: *3 lore entries were left out: a flag that is not true or false ×2,
+condition too long ×1.* The rest of the card imports. Switches (`enabled`, `disable`,
+`constant`, `selective`, `useProbability`, `caseSensitive`, `matchWholeWords`,
+`groupOverride`) may be written `true`/`false`, `1`/`0` or `"true"`/`"false"`/`"1"`/`"0"`,
+as SillyTavern files write them; `secret` must be `true` or `false`, and it is secret when
+either the entry or its `extensions` says `true`. In a native card every switch is `true`
+or `false`; a row written otherwise is skipped and the answer reports it.
 
 ## What a character import brings
 
@@ -139,7 +150,9 @@ After a world import, the card's machinery runs, with code doing the bookkeeping
   `{{newline}}`, `{{trim}}`, `{{// comment}}`.
 - **The MVU protocol.** The model may write `<UpdateVariable>` blocks with
   `_.set` / `_.insert` / `_.delete` / `_.add`; code parses them, applies them to the
-  variable tree and removes them from what players see. The Keeper also has schema-checked
+  variable tree and removes them from what players see. A reply too long to check (over
+  500,000 characters) that may hold a block is not shown at all; the turn fails and can be
+  retried. The Keeper also has schema-checked
   tools onto the same tree.
 
 ## Variables, and what players see
@@ -156,7 +169,8 @@ starts **fully hidden**: no leaf reaches a player until the room's admin exposes
 A prefix exposes itself and its subtree, aligned on segments (`town` exposes
 `town.flood`, not `town2`); `*` exposes everything. The admin's own view always shows the
 whole tree, hidden leaves flagged. A native card's typed variable is visible to players
-unless it says `"visibility": "keeper"`. Panels read variables through the `variables`
+unless it says `"visibility": "keeper"`; any other spelling (`"Keeper"` included) is refused
+with a warning, never made visible. Panels read variables through the `variables`
 view, so a panel never shows a hidden leaf. Tell your players which prefixes to expose,
 for example in the card's `notes` in your pack.
 
@@ -207,7 +221,8 @@ An imported file does not choose its own privileges.
 - **The split is code, not a prompt.** A character import writes a character and a seat;
   it cannot add lore, seed variables or carry template code, however the card is phrased.
 - **`secret` and `constant` are the admin's.** Only a world import keeps a secret entry
-  or an always-on one.
+  or an always-on one. An entry whose `secret` is not `true` or `false` is never treated as
+  public: it is kept away from players and left out of the import.
 - **Entries are pinned to the importing room**, and their ids are regenerated, so a card
   cannot address another card's entries.
 - **Secret stays secret.** Players' lore lists, panels and every other view are computed

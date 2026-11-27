@@ -307,7 +307,9 @@ function specInputFromStored(id: unknown, raw: Record<string, unknown>): SpecInp
   return {
     id,
     kind,
-    visibility: raw.visibility === "player" || raw.visibility === "keeper" ? raw.visibility : "player",
+    // Exactly `player` or `keeper` (absent: `player`); anything else — `Keeper`, `secret` —
+    // makes the spec unusable rather than public (`buildSpec`: `bad_visibility`).
+    visibility: raw.visibility,
     labels: raw.labels,
     minimum: kind === "number" ? raw.minimum : undefined,
     maximum: kind === "number" ? raw.maximum : undefined,
@@ -321,8 +323,9 @@ function specInputFromStored(id: unknown, raw: Record<string, unknown>): SpecInp
 
 /**
  * The tolerant sibling of `buildSpec`, for specs read from a pack, a lorecard or storage:
- * an unknown visibility reads as `player`, misplaced option labels are ignored. Null when
- * the spec is unusable all the same (bad id, kind, bounds or default).
+ * misplaced option labels are ignored. Null when the spec is unusable all the same (bad
+ * id, kind, visibility, bounds or default) — an unknown visibility is never read as
+ * `player`, which would publish a variable its author meant for the Keeper.
  */
 export function normalizeSpec(raw: unknown): VariableSpec | null {
   if (!isRecord(raw)) return null;

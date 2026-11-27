@@ -8,6 +8,11 @@
 // native bundle goes through the same split and the same lore import as any card: a
 // typed `condition` becomes a leading `@@if <expr>` line, `secret` stays a plain key.
 //
+// Flags are booleans: `secret`, `constant`, `enabled`, `case_sensitive` and
+// `match_whole_words` take `true` or `false`, absent or null is the default, and any other
+// value (`1`, `"false"`) skips the entry with a `flag_not_boolean` warning naming the field —
+// never read by truthiness, where `secret: "false"` would mean secret.
+//
 // 3.0 has no hooks: code reaches a room only as a pack's module. A bundle that still
 // carries a `hooks` section is read, the scripts are counted into a warning, and nothing
 // of them is kept — they cannot be installed or run from here.
@@ -18,6 +23,7 @@
 import type { JsonObject } from "../documents/model.ts";
 import { codePoints, countKeptOptionLabels, countOfferedOptionLabels, normalizeSpec, MAX_VARIABLES, type VariableSpec } from "../variables/index.ts";
 import { MAX_CARD_FILE_BYTES, isObject, parseJsonText, text, utf8, type BookEntry, type CharacterCard } from "./card.ts";
+import { readStrictFlag } from "../worldbook/index.ts";
 import { CardError } from "./errors.ts";
 
 export const LORECARD_FORMAT = "loreweaver.card";
@@ -42,8 +48,10 @@ export type LorecardWarningCode =
   | "content_not_text"
   | "content_too_long"
   | "content_empty"
-  /** The condition rides along but is too long to ever fire. */
+  /** The condition rides along; the lore import refuses the entry (a condition is never cut). */
   | "condition_too_long"
+  /** A flag that is not a boolean (`where` names it); the entry was skipped. */
+  | "flag_not_boolean"
   | "variable_not_object"
   /** Unusable id, kind, bounds, default, or an over-long label. */
   | "variable_unusable"
@@ -98,15 +106,14 @@ export function looksLikeLorecard(bytes: Uint8Array): boolean {
   }
 }
 
-/** Python-style truthiness, which the format's flags have always been read with. */
-function flag(value: unknown, fallback = false): boolean {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === "string") return value !== "";
-  if (typeof value === "number") return value !== 0;
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "object") return Object.keys(value).length > 0;
-  return value === true;
-}
+/** The boolean fields of a `worldbook` entry, and each one's default. */
+const ENTRY_FLAGS: readonly (readonly [string, boolean])[] = [
+  ["secret", false],
+  ["constant", false],
+  ["enabled", true],
+  ["case_sensitive", false],
+  ["match_whole_words", false],
+];
 
 /** A whole number (integer text, a number truncated, a boolean as 0/1), clamped; else the fallback. */
 function integer(value: unknown, fallback: number, low?: number, high?: number): number {
@@ -148,6 +155,15 @@ function parseEntry(raw: unknown, index: number, warnings: LorecardWarning[]): B
     warnings.push({ code: "content_empty", where });
     return null;
   }
+  const flags = new Map<string, boolean>();
+  for (const [name, fallback] of ENTRY_FLAGS) {
+    const read = readStrictFlag(raw[name]);
+    if (read === "invalid") {
+      warnings.push({ code: "flag_not_boolean", where: `${where}.${name}` });
+      return null;
+    }
+    flags.set(name, read === "absent" ? fallback : read);
+  }
   // A decorator is one line, so a multi-line condition collapses onto it.
   const condition = text(raw.condition).split(/\s+/u).filter((part) => part !== "").join(" ");
   if (codePoints(condition) > MAX_CONDITION_CHARS) warnings.push({ code: "condition_too_long", where });
@@ -164,13 +180,13 @@ function parseEntry(raw: unknown, index: number, warnings: LorecardWarning[]): B
     selective: secondaryKeys.length > 0,
     selective_logic: SELECTIVE_LOGICS.has(logic) ? logic : "and_any",
     category: text(raw.category).trim() || "lore",
-    secret: flag(raw.secret),
-    constant: flag(raw.constant),
+    secret: flags.get("secret") === true,
+    constant: flags.get("constant") === true,
     priority: integer(raw.priority, 0),
-    enabled: flag(raw.enabled, true),
+    enabled: flags.get("enabled") === true,
     probability: integer(raw.probability, 100, 0, 100),
-    case_sensitive: flag(raw.case_sensitive),
-    match_whole_words: flag(raw.match_whole_words),
+    case_sensitive: flags.get("case_sensitive") === true,
+    match_whole_words: flags.get("match_whole_words") === true,
     scan_depth: integer(raw.scan_depth, 0, 0, 200),
     position: POSITIONS[text(raw.position).trim()] ?? "",
     sticky: integer(raw.sticky, 0, 0, 999),
@@ -252,7 +268,10 @@ function parsePregens(raw: unknown, warnings: LorecardWarning[]): Pregen[] {
       warnings.push({ code: "pregen_missing_name", where });
       continue;
     }
-    const blurb = text(flag(item.concept) ? item.concept : item.blurb).trim();
+    // `concept` when it says anything (a non-empty string, a non-zero number, true), else `blurb`.
+    const concept = item.concept;
+    const said = (typeof concept === "string" && concept !== "") || (typeof concept === "number" && concept !== 0) || concept === true;
+    const blurb = text(said ? concept : item.blurb).trim();
     const notes = text(item.notes).trim();
     const skillsRaw = item.skills;
     const tooLong =

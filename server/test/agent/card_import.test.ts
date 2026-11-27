@@ -32,7 +32,7 @@ import {
   fromPlain,
   type VarMap,
 } from "../../src/core/variables/index.ts";
-import { MAX_IMPORT_ENTRIES } from "../../src/core/worldbook/index.ts";
+import { MAX_CONDITION_CHARS, MAX_IMPORT_ENTRIES, MAX_TITLE_CHARS } from "../../src/core/worldbook/index.ts";
 import { ScriptedLLM } from "../../src/infra/llm/index.ts";
 import { openDatabase } from "../../src/infra/runtime/sqlite.ts";
 import { type RoomWriter, Store } from "../../src/infra/store.ts";
@@ -278,6 +278,65 @@ describe("importWorld", () => {
     const last = plainRaw("Overflow", { character_book: { entries: Array.from({ length: per }, (_, i) => ({ keys: [`k${i}`], content: `c${i}`, comment: `e${i}` })) } });
     expect(importWorld(r.context(), cardOf(last))).toMatchObject({ ok: false, code: "lore_full" });
     expect(r.rows()).toBe(before);
+  });
+});
+
+describe("importWorld: what a card's entries say is read one way, and nothing is dropped unsaid", () => {
+  function entriesCard(entries: unknown[]): ImportedCard {
+    return cardOf({ spec: "chara_card_v2", spec_version: "2.0", data: { name: "Isle", description: "An isle.", character_book: { entries } } });
+  }
+
+  test("top-level secret: true is stored secret whatever extensions.secret says; secret: 1 is refused, counted with its title", () => {
+    const r = room();
+    const result = importWorld(
+      r.context(),
+      entriesCard([
+        { comment: "truth", content: "x", keys: ["k"], secret: true, extensions: { secret: false } },
+        { comment: "one", content: "y", keys: ["k"], secret: 1 },
+      ]),
+    );
+    if (!result.ok) throw new Error(result.code);
+    const lore = r.services.documents.list(ROOM, LORE_ENTRY_TYPE);
+    expect(lore.map((document) => [document.data.title, document.data.secret])).toEqual([["truth", true]]);
+    expect(result.lore).toMatchObject({ written: 1, secret: 1, leftOut: [{ title: "one", reason: "flag_not_boolean", field: "secret" }] });
+    expect(result.warnings).toEqual([{ code: "secret_unreadable", count: 1 }]);
+  });
+
+  test("an entry titled `initvar notes` is lore: stored, not swallowed as a declaration", () => {
+    const r = room();
+    const result = importWorld(r.context(), entriesCard([{ comment: "initvar notes", content: "The island remembers.", keys: ["isle"] }]));
+    if (!result.ok) throw new Error(result.code);
+    expect(r.services.documents.list(ROOM, LORE_ENTRY_TYPE).map((document) => document.data.title)).toEqual(["initvar notes"]);
+    expect(result.lore).toMatchObject({ written: 1, leftOut: [] });
+    expect(result.variables.declarations).toBe(0);
+  });
+
+  test("an over-long condition, title or key leaves its entry out, counted with the reason; the rest imports whole", () => {
+    const r = room();
+    const condition = `a == 1 || ${"x".repeat(MAX_CONDITION_CHARS)} || b == 2`;
+    const result = importWorld(
+      r.context(),
+      entriesCard([
+        { comment: "gated", content: `@@if ${condition}\nThe gate opens.` },
+        { comment: "t".repeat(MAX_TITLE_CHARS + 1), content: "x" },
+        { comment: "keyed", content: "x", keys: ["k".repeat(201)] },
+        { comment: "kept", content: "Fine.", keys: ["k"] },
+      ]),
+    );
+    if (!result.ok) throw new Error(result.code);
+    expect(r.services.documents.list(ROOM, LORE_ENTRY_TYPE).map((document) => document.data.title)).toEqual(["kept"]);
+    expect(result.lore.leftOut.map((entry) => entry.reason)).toEqual(["condition_too_long", "title_too_long", "key_too_long"]);
+    // No stored condition is a truncated one.
+    expect(r.rows()).not.toContain("a == 1 ||");
+  });
+
+  test("a native bundle's skipped rows reach the result as card warnings", () => {
+    const r = room();
+    const bundle = { format: LORECARD_FORMAT, format_version: 1, name: "Bundle", worldbook: [{ title: "s", content: "x", secret: "false" }, { title: "ok", content: "y" }] };
+    const result = importWorld(r.context(), cardOf(bundle, "b.lorecard.json"));
+    if (!result.ok) throw new Error(result.code);
+    expect(result.cardWarnings).toEqual([{ code: "flag_not_boolean", where: "worldbook[0].secret" }]);
+    expect(r.services.documents.list(ROOM, LORE_ENTRY_TYPE).map((document) => [document.data.title, document.data.secret])).toEqual([["ok", false]]);
   });
 });
 

@@ -156,6 +156,11 @@ describe("ReplyStreamGate", () => {
 
   test("a trailing '<' and a '<' into prose", () => {
     expect(suspectHoldIndex("abc <")).toBe(4);
+    // Every name an update block may use is withheld from the stream, whole or still being typed.
+    for (const tag of ["UpdateVariable", "VariableUpdate", "Update", "variableupdate", "Variab", "V"]) {
+      expect([tag, suspectHoldIndex(`Hi <${tag}`)]).toEqual([tag, 3]);
+      expect([tag, suspectHoldIndex(`Hi <${tag}>_.set('a', 1);</${tag}>`)]).toEqual([tag, 3]);
+    }
     expect(suspectHoldIndex("abc <  ")).toBe(4);
     expect(suspectHoldIndex("3 < 4 and 5 > 2")).toBe("3 < 4 and 5 > 2".length);
     expect(suspectHoldIndex("老周<忽然>抬头")).toBe("老周<忽然>抬头".length);

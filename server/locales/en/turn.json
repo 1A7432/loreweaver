@@ -14,6 +14,7 @@
   "loop.provider_transient": "The AI provider is still temporarily unavailable after retrying. Please try again shortly.",
   "loop.unavailable": "The Keeper is momentarily unavailable. Please try again in a moment.",
   "loop.reply_blocked": "The Keeper's reply was held back by this room's output review. Please try again.",
+  "loop.reply_too_long": "The Keeper's reply was too long to check for variable updates, so it was not shown. Please try again.",
   "scribe.whisper.npc_overreach": "Observation: {npc} may have spoken past their recorded knowledge — \"{quote}\" ({fact}). Your call whether it needs smoothing over.",
   "scribe.whisper.unrolled_check": "Observation: this turn seems to have settled a {skill} question without a roll — \"{quote}\". Your call."
 }

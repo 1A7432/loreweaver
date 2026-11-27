@@ -20,13 +20,16 @@
 // that throws ends the round's drafting (nothing more is shown; the event still lands).
 import type { SignalPayloads } from "loreweaver-protocol/v3";
 
+import { UPDATE_TAG_NAMES } from "../../core/variables/update.ts";
 import { stripTextToolCalls } from "./reply.ts";
 
 /** Released text is sent once this many characters (code points) are pending, or at a newline. */
 export const DRAFT_FLUSH_CHARS = 48;
 
-// Tag-name prefixes that may open a machinery block or an MVU update block.
-const SUSPECT_PREFIXES: readonly string[] = ["deep", "use", "tool_call", "tool_use", "function_call", "function_calls", "invoke", "updatevariable"];
+// Tag-name prefixes that may open a machinery block, and the names of an update block — the
+// extractor's own list, so the two cannot drift: `<VariableUpdate>` was extracted from the
+// final reply but streamed to the table in the draft, because this list had only one of the three.
+const SUSPECT_PREFIXES: readonly string[] = ["deep", "use", "tool_call", "tool_use", "function_call", "function_calls", "invoke", ...UPDATE_TAG_NAMES];
 // After a `<`: optional spaces and slash, then a tag name (Python's `[\w-]`, any script).
 const TAG_RE = /^\s*\/?\s*([A-Za-z_][\p{L}\p{N}_-]*)/u;
 // What may follow a `<` before the tag name has started.

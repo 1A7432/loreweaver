@@ -325,8 +325,11 @@ A closed block telling a runtime's generic check commands and tools how to use t
 - `favorable`, `unfavorable`: declared modifiers (`UNDECLARED_MODIFIER` otherwise) that
   favourable and unfavourable counts route to; the counts net first (two bonus and one
   penalty is one bonus).
-- `default_target`: an integer, the target of a `dc` check that names none. (The reference
-  Keeper's dice tool uses it; its typed check command leaves such a check ungraded.)
+- `default_target`: an integer, the target of a `dc` check that names none. A runtime MUST
+  NOT invent a target when there is none: the reference Keeper's dice tool uses
+  `default_target`, and without one refuses a `dc` check that names no DC (`dc_required`),
+  telling the model to state it — never graded against 0; its typed check command leaves
+  such a check ungraded (and does not read `default_target`).
 - `proficiency`: a canonical stat a proficient check adds to the modifier.
 - `default_skill`: the canonical stat a bare check rolls.
 

@@ -870,6 +870,12 @@ class KeeperTurn {
     const treeDocument = services.documents.get(room, VARIABLE_TREE_TYPE, VARIABLE_TREE_ID);
     const stored = treeDocument === null || treeDocument.corrupt ? null : readVariableTree(treeDocument.data);
     const update = applyReplyUpdates(stored?.tree ?? (new Map() as VarMap), raw);
+    // A reply too long to scan that may hold a block cannot be cleaned: it is not published
+    // (its blocks would reach the table as written), the way a blocked reply is not.
+    if (update.overflow) {
+      this.#problem("reply_updates_unscanned", `${raw.length} characters`);
+      return this.#fail("reply_too_long", { level: "warn", code: "reply_too_long", text: turnText(locale, "loop.reply_too_long") });
+    }
     // (b) Textual tool calls.
     const text = stripTextToolCalls(update.text);
     // (c) The review.

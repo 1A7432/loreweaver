@@ -108,7 +108,7 @@ function expectedWarning(message: string): Record<string, unknown> {
 // st_card_parse
 // ---------------------------------------------------------------------------
 
-const PARSE_DEVIATIONS: Record<string, { reason: string; card?: Record<string, unknown>; ok?: true; extra?: (card: CharacterCard) => void }> = {
+const PARSE_DEVIATIONS: Record<string, { reason: string; card?: Record<string, unknown>; ok?: true; extra?: (card: CharacterCard) => void; warnings?: Record<string, unknown>[] }> = {
   v2_data_not_object: {
     reason: "SillyTavern `readFromV2` keeps a root field when `data` lacks it (a string `data` lacks every field)",
     card: { name: "Root" },
@@ -135,6 +135,42 @@ const PARSE_DEVIATIONS: Record<string, { reason: string; card?: Record<string, u
   png_studio_fixture: {
     reason: "ccv3 precedence (as png_first_card_chunk_wins): the parsed fields agree, `raw` is the v3 document",
     extra: (card) => expect(card.raw?.spec).toBe("chara_card_v3"),
+  },
+  // 3.0 reads a native bundle's flags as booleans: `secret: 0` (and `constant: 1`) skip the
+  // entry with `flag_not_boolean` naming the first such field, where 2.x read them by
+  // truthiness (`secret: "false"` was secret). The "num" entry and the dict-content skip
+  // are unchanged.
+  lorecard_entry_coercions: {
+    reason: "a native bundle's flags are booleans: a non-boolean `secret` skips the entry (flag_not_boolean), never read by truthiness",
+    card: {
+      character_book: [
+        {
+          case_sensitive: false,
+          category: "lore",
+          comment: "num",
+          constant: false,
+          content: "12345",
+          cooldown: 0,
+          delay: 0,
+          enabled: true,
+          keys: [],
+          match_whole_words: false,
+          position: "after_char",
+          priority: 0,
+          probability: 100,
+          scan_depth: 0,
+          secondary_keys: [],
+          secret: false,
+          selective: false,
+          selective_logic: "and_any",
+          sticky: 0,
+        },
+      ],
+    },
+    warnings: [
+      { code: "flag_not_boolean", where: "worldbook[0].secret" },
+      { code: "content_not_text", where: "worldbook[2]" },
+    ],
   },
   png_named_json: {
     reason: "a PNG is recognized by its signature whatever its name (SillyTavern goes by the extension and would fail)",
@@ -180,7 +216,7 @@ describe("st_card_parse", () => {
         expect(lorecard.variables.map(legacySpec)).toEqual(row.lorecard.variable_specs);
         expect(lorecard.pregens).toEqual(row.lorecard.pregens);
         expect(lorecard.unsupportedHooks).toBe(row.lorecard.hooks.length);
-        expect(lorecard.warnings.filter((warning) => warning.code !== "hooks_unsupported")).toEqual(row.lorecard.warnings.map(expectedWarning));
+        expect(lorecard.warnings.filter((warning) => warning.code !== "hooks_unsupported")).toEqual(deviation?.warnings ?? row.lorecard.warnings.map(expectedWarning));
         const hookWarnings = lorecard.warnings.filter((warning) => warning.code === "hooks_unsupported");
         expect(hookWarnings).toEqual(row.lorecard.hooks.length > 0 ? [{ code: "hooks_unsupported", where: "hooks", count: row.lorecard.hooks.length }] : []);
         expect(JSON.stringify(imported.card.raw)).not.toContain("turn_start");

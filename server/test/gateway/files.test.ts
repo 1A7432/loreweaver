@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { EventFrame, ServerFrame } from "loreweaver-protocol/v3";
 
 import { LORE_ENTRY_TYPE } from "../../src/core/lore/index.ts";
+import { LEFT_OUT_REASONS } from "../../src/core/worldbook/index.ts";
 import { COMMANDS_CATALOG } from "../../src/gateway/commands/index.ts";
 import type { Member } from "../../src/gateway/room.ts";
 import { type Embeddings, HashEmbeddings, VectorIndex } from "../../src/infra/recall/index.ts";
@@ -256,10 +257,41 @@ describe("import", () => {
   });
 });
 
+test("entries a world import left out are counted, with the reason, in the admin's language", async () => {
+  const b = setup();
+  const root = b.join(KEYS.root, { locale: "zh" });
+  const card = jsonFile({
+    spec: "chara_card_v2",
+    spec_version: "2.0",
+    data: {
+      name: "Isle",
+      character_book: {
+        entries: [
+          { comment: "a", content: "x", secret: "yes" },
+          { comment: "b", content: "x", enabled: "no" },
+          { comment: "c", content: `@@if ${"x".repeat(501)}\nx` },
+          { comment: "kept", content: "x", keys: ["k"] },
+        ],
+      },
+    },
+  });
+  await upload(b.uploads!, ROOM, ROOT, card, "application/json");
+  const answer = await say(b, root, "imp", `.import world ${sha256(card)}`);
+  expect(answer).toMatchObject({ ok: true, data: { lore: { written: 1 } } });
+  expect((answer as { text: string }).text).toContain("3 条设定未导入：开关字段不是 true 或 false ×2，条件过长 ×1。");
+});
+
 test("every refusal an import can pass through, and every part it can leave behind, has its sentence in both languages", () => {
   const codes = ["too_many_entries", "lore_full", "entry_invalid", "name_too_long", "prose_too_long", "directive_too_long", "too_many_openings", "opening_too_long", "variables_too_large", "module_variables_full", "no_member", "no_rule_system", "card_bad_name", "name_taken", "persona_too_long", "sheet_refused", "seat_refused", "document_refused", "stale_generation", "not_uploaded", "not_a_card", "no_media"];
   const parts = ["variable_declarations", "templates", "secret_entries", "lore_entries", "hooks", "module_variables", "directives", "openings", "scenario", "pregens"];
-  const keys = [...codes.map((code) => `error.${code}`), ...parts.map((part) => `import.part.${part}`), "reason.no_media"];
+  const keys = [
+    ...codes.map((code) => `error.${code}`),
+    ...parts.map((part) => `import.part.${part}`),
+    ...LEFT_OUT_REASONS.map((reason) => `import.left_out_reason.${reason}`),
+    "import.left_out",
+    "import.card_warnings",
+    "reason.no_media",
+  ];
   for (const locale of ["en", "zh"] as const) {
     expect(keys.filter((key) => !Object.hasOwn(COMMANDS_CATALOG[locale] ?? {}, key))).toEqual([]);
   }

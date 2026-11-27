@@ -6,6 +6,7 @@ import { CONTEXT_READING, FACTS_TURN_LINE, OPENING_NOTE, PLAYER_ACTIONS, recordP
 import { turnText } from "../../../src/agent/turn/catalog.ts";
 import { worldCardData, worldCardId, WORLD_CARD_TYPE } from "../../../src/core/card/index.ts";
 import { documentCatalog } from "../../../src/core/documents/raw.ts";
+import { MAX_UPDATE_TEXT_CHARS } from "../../../src/core/variables/index.ts";
 import { createNpc, npcData, NPC_TYPE } from "../../../src/core/npcs/index.ts";
 import { LLMError, toolCall } from "../../../src/infra/llm/index.ts";
 import { RoomWorker, WorkerTimeout } from "../../../src/infra/room_worker.ts";
@@ -411,6 +412,20 @@ describe("the reply's commit block", () => {
     expect(ran.result.reply).toBe("You bleed.");
     const tree = h.services.documents.get(ROOM, "variable_tree", "tree");
     expect(JSON.stringify(tree?.data)).toContain("7");
+  });
+
+  test("a reply too long to scan that holds a block is not published, and nothing of it applies", async () => {
+    const h = new Harness();
+    putTree(h.services, h.seedWriter(), { hp: 10 });
+    const marker = "MK-UNSCANNED-BLOCK";
+    h.keeper.script([`${"x".repeat(MAX_UPDATE_TEXT_CHARS)}\n<UpdateVariable>\n_.set('hp', 10, 7);// ${marker}\n</UpdateVariable>`]);
+    const ran = await h.turn("Ouch.");
+    expect(ran.result).toMatchObject({ status: "failed", code: "reply_too_long", reply: null });
+    expect(ran.result.problems).toContain("reply_updates_unscanned");
+    expect(ran.events).toEqual([]);
+    expect(JSON.stringify(ran.signals.filter((signal) => signal.kind !== "draft"))).not.toContain(marker);
+    expect(ran.signals.find((signal) => signal.kind === "notice")?.data).toMatchObject({ code: "reply_too_long" });
+    expect(JSON.stringify(h.services.documents.get(ROOM, "variable_tree", "tree")?.data)).not.toContain("7");
   });
 });
 

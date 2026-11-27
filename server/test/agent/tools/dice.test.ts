@@ -88,6 +88,22 @@ describe("skill_check", () => {
     expect(outcome.text).toContain("vs target 12");
   });
 
+  test("a DC system without a default difficulty refuses a check that states no DC, rather than rolling against 0", async () => {
+    const room = bench();
+    const dnd = room.pack("dnd5e");
+    if (dnd.resolution === null) throw new Error("dnd5e resolves checks");
+    const noDefault = { ...dnd, resolution: { ...dnd.resolution, check: { ...dnd.resolution.check, defaultTarget: null } } };
+    const context = { ...room.context({ pack: "dnd5e", who: NOBODY }), pack: noDefault };
+    const catalog = room.catalog({ pack: noDefault });
+    const refused = await room.call(catalog, "skill_check", { skill_name: "Stealth", actor: "Ghoul", npc_target: 3 }, { context });
+    expect(refused).toMatchObject({ status: "refused", code: "dc_required", events: [] });
+    expect(refused.text).toContain("state the DC");
+    room.random.push(10);
+    const stated = await room.call(catalog, "skill_check", { skill_name: "Stealth", actor: "Ghoul", npc_target: 3, dc: 15 }, { context });
+    expect(stated.status).toBe("ok");
+    expect(stated.text).toContain("vs target 15");
+  });
+
   test("a pool system takes its roll parameters, bounded", async () => {
     const room = bench();
     const context = room.context({ pack: "wod", who: NOBODY });

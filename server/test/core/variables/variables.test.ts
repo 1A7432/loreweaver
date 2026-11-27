@@ -28,6 +28,7 @@ import {
   moduleVariablesDocument,
   moduleVariablesPayload,
   normalizeModuleVariables,
+  normalizeSpec,
   normalizeVariableId,
   optionLabelFor,
   parseCommandValue,
@@ -221,6 +222,16 @@ describe("<UpdateVariable> commands (MagVarUpdate semantics)", () => {
     expect(skipped.text).toBe(long);
   });
 
+  test("an over-long reply is `overflow` exactly when a block could open in it (its caller must not publish it)", () => {
+    const prose = "x".repeat(MAX_UPDATE_TEXT_CHARS + 1);
+    expect(extractUpdates(prose)).toEqual({ commands: [], text: prose, blocks: 0, overflow: false });
+    for (const opener of ["<UpdateVariable>", "<update>", "<VARIABLEUPDATE a='1'>", "<update\n"]) {
+      expect([opener, extractUpdates(`${prose}${opener}_.set('a', 1);`).overflow]).toEqual([opener, true]);
+    }
+    // Look-alike tags are not openers, as for the block search itself.
+    expect(extractUpdates(`${prose}<UpdateVariables>`).overflow).toBe(false);
+  });
+
   test("lodash paths: brackets, quoted keys, and segments kept as written", () => {
     expect(parsePath('a.b[0]["x.y"]')).toEqual(["a", "b", "0", "x.y"]);
     expect(parsePath("a..b")).toEqual(["a", "", "b"]);
@@ -312,6 +323,16 @@ describe("module variables", () => {
       ],
     });
     expect(state.variables).toEqual([{ spec: { id: "a", kind: "number", visibility: "player", labels: {}, default: 1 }, value: 1 }]);
+  });
+
+  test("an unknown visibility makes a read spec unusable, never public", () => {
+    for (const visibility of ["Keeper", "KEEPER", "secret", "public", "", 1, true]) {
+      expect([visibility, normalizeSpec({ id: "truth", kind: "bool", visibility })]).toEqual([visibility, null]);
+    }
+    expect(normalizeSpec({ id: "truth", kind: "bool", visibility: "keeper" })?.visibility).toBe("keeper");
+    expect(normalizeSpec({ id: "truth", kind: "bool" })?.visibility).toBe("player");
+    // Stored state with such a spec loses the variable rather than publishing it.
+    expect(normalizeModuleVariables({ variables: [{ spec: { id: "truth", kind: "bool", visibility: "Keeper" }, value: true }] }).variables).toEqual([]);
   });
 });
 

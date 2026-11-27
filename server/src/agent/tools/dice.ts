@@ -241,7 +241,11 @@ export const skillCheckTool = defineTool({
     let modifier = 0;
     const proficientApplies = subject !== null && args.proficient && resolution.check.proficiency !== null;
     if (resolution.targetKind === "dc") {
-      target = args.dc ?? resolution.check.defaultTarget ?? 0;
+      // No DC and no pack default: the engine does not invent a number (a check against 0
+      // would nearly always succeed).
+      const dc = args.dc ?? resolution.check.defaultTarget;
+      if (dc === null) return refuse("dc_required", "This rule system declares no default difficulty: state the DC for this check (dc).");
+      target = dc;
       modifier = npcValue ?? sheetCheckValue;
       if (proficientApplies && subject !== null) {
         const bonus = sheetValue(spec, subject.character.sheet, resolution.check.proficiency as string);

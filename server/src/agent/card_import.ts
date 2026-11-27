@@ -34,6 +34,7 @@ import { createHash } from "node:crypto";
 
 import { splitCard, type CardMachinery, type CardSplit, type SplitWarning } from "../core/card/split.ts";
 import type { ImportedCard } from "../core/card/parse.ts";
+import type { LorecardWarning } from "../core/card/lorecard.ts";
 import {
   MAX_ALTERNATE_GREETINGS,
   MAX_DIRECTIVE_CHARS,
@@ -97,7 +98,7 @@ import {
   variableTreeData,
   variableTreeDocument,
 } from "../core/variables/index.ts";
-import { bindCharName, importLorebook, type MacroContext, substituteMacros } from "../core/worldbook/index.ts";
+import { bindCharName, importLorebook, type LeftOutEntry, type MacroContext, substituteMacros } from "../core/worldbook/index.ts";
 import { StaleGeneration } from "../infra/lifecycle/errors.ts";
 import type { RoomContext, Services } from "./context.ts";
 import type { CardDirectives } from "./prompt/snapshot.ts";
@@ -187,11 +188,11 @@ export interface WorldImported {
     /** Secret (keeper-only) entries among those written. */
     readonly secret: number;
     /**
-     * Entries the lore importer took for variable declarations (a title with `initvar`
-     * but without the `[InitVar]` brackets the card split looks for): neither lore nor
-     * read into the tree.
+     * Entries the lore import refused, each with its title and reason (a flag that is not
+     * a boolean, a condition, title, key or group over its bound, ...): left out, the rest
+     * imported. Nothing is cut to fit.
      */
-    readonly declarationLike: number;
+    readonly leftOut: readonly LeftOutEntry[];
   };
   readonly variables: {
     /** Declaration entries the card carried, and how many of them could not be read. */
@@ -205,6 +206,11 @@ export interface WorldImported {
   readonly directives: { readonly headChars: number; readonly postHistoryChars: number };
   readonly openings: number;
   readonly warnings: readonly SplitWarning[];
+  /**
+   * What reading a native bundle reported (`[]` for a SillyTavern card): rows it skipped,
+   * each with its code and where (`worldbook[3].secret`).
+   */
+  readonly cardWarnings: readonly LorecardWarning[];
   /** What the card carries that 3.0 does not import (and why), by count. */
   readonly notImported: readonly LeftBehind[];
   /** The new lore entries, to embed for recall after the commit. */
@@ -423,7 +429,7 @@ export function importWorld(context: RoomContext, card: ImportedCard, options: W
       skippedTooLong: lore.skippedTitles,
       unreachable: lore.unreachableTitles,
       secret: prepared.filter((entry) => entry.secret).length,
-      declarationLike: lore.declarations.length,
+      leftOut: lore.leftOut,
     },
     variables: {
       declarations: machinery.variableDeclarations,
@@ -434,6 +440,7 @@ export function importWorld(context: RoomContext, card: ImportedCard, options: W
     directives: { headChars: codePoints(world.head), postHistoryChars: codePoints(world.postHistory) },
     openings: openingCount(world),
     warnings: split.warnings,
+    cardWarnings: card.lorecard?.warnings ?? [],
     notImported: nonZero([
       { part: "hooks", count: machinery.unsupportedHooks, reason: "unsupported" },
       { part: "pregens", count: split.world.pregens.length, reason: "unsupported" },

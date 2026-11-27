@@ -27,6 +27,14 @@
  * default (enabled, selective, default placement) instead of silently switching entries
  * off.
  *
+ * Flags, keeper-only lore and declarations are read by `entry_rules.ts`, the definition the
+ * card split shares: a flag value outside the accepted spellings refuses the entry.
+ *
+ * Nothing is cut to fit: a title, key or group past its bound, more keys than `MAX_KEYS`, or
+ * a condition past `MAX_CONDITION_CHARS` (half a condition is a different rule) refuses the
+ * ENTRY, and the rest of the book imports. Every entry left out is counted in the result
+ * (`leftOut`, or `skippedTitles` for over-long content), with its reason.
+ *
  * Trust: an import is either the room keeper's (`keeper`) or anyone else's (`player`).
  * Only a keeper import may set `constant` (or `@@activate`), keep a `secret` entry, or
  * seed variables from a declaration entry; a player import drops secret entries outright
@@ -35,6 +43,7 @@
  */
 
 import { splitDecorators } from "./decorators.ts";
+import { entrySecrecy, isVariableDeclaration, type FlagRead, readStFlag } from "./entry_rules.ts";
 import { isFrontendResidue } from "./scrub.ts";
 import type { ImportedEntry, Placement, SelectiveLogic } from "./types.ts";
 
@@ -42,12 +51,12 @@ import type { ImportedEntry, Placement, SelectiveLogic } from "./types.ts";
 export const MAX_IMPORT_ENTRIES = 200;
 /** An entry longer than this (code points) is skipped and reported by title. */
 export const MAX_ENTRY_CHARS = 16_000;
-/** Conditions longer than this are cut (the condition language's own source limit). */
+/** A longer condition refuses its entry (the condition language's own source limit). */
 export const MAX_CONDITION_CHARS = 500;
-/** Titles and individual keys are cut to this many code points. */
+/** A longer title (after `{{char}}` binding), key or group refuses its entry. */
 export const MAX_TITLE_CHARS = 200;
 export const MAX_KEY_CHARS = 200;
-/** At most this many primary and this many secondary keys per entry are kept. */
+/** More primary, or more secondary, keys than this refuses the entry. */
 export const MAX_KEYS = 64;
 /** A declaration body (`[InitVar]`) is not lore and has its own, larger bound. */
 export const MAX_DECLARATION_CHARS = 200_000;
@@ -73,6 +82,38 @@ export interface VariableDeclaration {
 
 export type ImportErrorCode = "TOO_MANY_ENTRIES";
 
+/**
+ * Why an entry was left out of an import (over-long content is `skippedTitles`):
+ * `not_an_object`; `flag_not_boolean` (a flag outside its accepted spellings — `field` says
+ * which; `secret` is strictly boolean); `secret_untrusted` / `declaration_untrusted` (a
+ * player import may not mint keeper-only lore or seed variables); `declaration_too_long`
+ * (over `MAX_DECLARATION_CHARS`); `condition_too_long`, `title_too_long`, `key_too_long`,
+ * `too_many_keys`, `group_too_long` (over their bounds, nothing cut); `empty` (nothing left
+ * once decorators were taken off).
+ */
+export const LEFT_OUT_REASONS = [
+  "not_an_object",
+  "flag_not_boolean",
+  "secret_untrusted",
+  "declaration_untrusted",
+  "declaration_too_long",
+  "condition_too_long",
+  "title_too_long",
+  "key_too_long",
+  "too_many_keys",
+  "group_too_long",
+  "empty",
+] as const;
+export type LeftOutReason = (typeof LEFT_OUT_REASONS)[number];
+
+export interface LeftOutEntry {
+  /** The entry's title as far as it could be read (`""` when none). */
+  readonly title: string;
+  readonly reason: LeftOutReason;
+  /** The field at fault, when one is. */
+  readonly field?: string;
+}
+
 export type ImportResult =
   | {
       readonly ok: true;
@@ -84,6 +125,8 @@ export type ImportResult =
       readonly unreachableTitles: readonly string[];
       /** Declaration entries consumed (keeper imports only; a player import returns none). */
       readonly declarations: readonly VariableDeclaration[];
+      /** Every other entry not stored, in book order, with the reason. */
+      readonly leftOut: readonly LeftOutEntry[];
     }
   | { readonly ok: false; readonly code: ImportErrorCode };
 
@@ -138,11 +181,6 @@ function codePoints(text: string): number {
   return count;
 }
 
-function cut(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return Array.from(text).slice(0, max).join("");
-}
-
 /** Python-`int()`-like coercion of a JSON value; `fallback` for anything unreadable. */
 function toInt(value: unknown, fallback: number): number {
   if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : fallback;
@@ -155,7 +193,7 @@ function clamp(value: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, value));
 }
 
-/** JSON truthiness, the way the formats' producers mean their flags. */
+/** JSON truthiness: which numbers and booleans `text` prints (flags are `entry_rules.ts`'s). */
 function truthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (isRecord(value)) return Object.keys(value).length > 0;
@@ -168,13 +206,13 @@ function text(value: unknown): string {
   return "";
 }
 
+/** Every non-blank key (strings, and numbers as text); the bounds are checked by the caller. */
 function keyList(value: unknown): string[] {
   const items = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
   const keys: string[] = [];
   for (const item of items) {
-    if (keys.length >= MAX_KEYS) break;
     const key = typeof item === "string" ? item : typeof item === "number" ? String(item) : "";
-    if (key.trim() !== "") keys.push(cut(key, MAX_KEY_CHARS));
+    if (key.trim() !== "") keys.push(key);
   }
   return keys;
 }
@@ -202,18 +240,6 @@ function rawTitle(raw: Raw): string {
   return text(own(raw, "title")) || text(own(raw, "comment")) || text(own(raw, "name"));
 }
 
-/**
- * Whether a raw entry declares variables rather than telling lore: an MVU `[InitVar]`
- * title (case-insensitive substring `initvar`), an ST `[InitialVariables]` title, or an
- * `@@initial_variables` decorator — the card splitter's definition of variable machinery.
- */
-export function isVariableDeclaration(raw: unknown): boolean {
-  if (!isRecord(raw)) return false;
-  const title = rawTitle(raw).toLowerCase();
-  if (title.includes("initvar") || title.replaceAll(" ", "").includes("[initialvariables]")) return true;
-  return splitDecorators(text(own(raw, "content"))).decorators.has("initial_variables");
-}
-
 /** The entries of a book: an `entries` list, an `entries` object keyed by uid, or a bare list. */
 function rawEntries(book: unknown): unknown[] | null {
   const entries = isRecord(book) ? own(book, "entries") : book;
@@ -228,37 +254,66 @@ export function importLorebook(book: unknown, options: ImportOptions): ImportRes
   const source = options.source ?? "";
   const charName = options.charName ?? "";
   const raws = rawEntries(book);
-  if (raws === null) return { ok: true, entries: [], skippedTitles: [], unreachableTitles: [], declarations: [] };
+  if (raws === null) return { ok: true, entries: [], skippedTitles: [], unreachableTitles: [], declarations: [], leftOut: [] };
   if (raws.length > MAX_IMPORT_ENTRIES) return { ok: false, code: "TOO_MANY_ENTRIES" };
 
   const entries: ImportedEntry[] = [];
   const skippedTitles: string[] = [];
   const unreachableTitles: string[] = [];
   const declarations: VariableDeclaration[] = [];
+  const leftOut: LeftOutEntry[] = [];
   raws.forEach((raw, offset) => {
-    if (!isRecord(raw)) return;
+    if (!isRecord(raw)) {
+      leftOut.push({ title: "", reason: "not_an_object" });
+      return;
+    }
     if (isVariableDeclaration(raw)) {
       // Declarations are DATA for the variable tree, consumed before the content cap (a
       // large declaration is legitimate) and only on a keeper import: the tree is shared
       // room state.
-      if (keeper) {
+      const title = rawTitle(raw);
+      if (!keeper) leftOut.push({ title, reason: "declaration_untrusted" });
+      else {
         const body = splitDecorators(text(own(raw, "content"))).body;
-        if (codePoints(body) <= MAX_DECLARATION_CHARS) declarations.push({ title: cut(rawTitle(raw), MAX_TITLE_CHARS), body });
+        if (codePoints(body) > MAX_DECLARATION_CHARS) leftOut.push({ title, reason: "declaration_too_long" });
+        else if (codePoints(title) > MAX_TITLE_CHARS) leftOut.push({ title, reason: "title_too_long", field: "title" });
+        else declarations.push({ title, body });
       }
       return;
     }
     const entry = normaliseEntry(raw, offset + 1, keeper, source);
-    if (entry === null) return;
+    if ("reason" in entry) {
+      leftOut.push(entry);
+      return;
+    }
     const bound = charName === "" ? entry : bindEntry(entry, charName);
     if (codePoints(bound.content) > MAX_ENTRY_CHARS) {
       skippedTitles.push(bound.title);
       return;
     }
-    if (bound.content === "") return;
+    const overBound = boundProblem(bound);
+    if (overBound !== null) {
+      leftOut.push({ title: bound.title, ...overBound });
+      return;
+    }
+    if (bound.content === "") {
+      leftOut.push({ title: bound.title, reason: "empty" });
+      return;
+    }
     entries.push(bound);
     if (!bound.enabled && bound.keys.length === 0) unreachableTitles.push(bound.title);
   });
-  return { ok: true, entries, skippedTitles, unreachableTitles, declarations };
+  return { ok: true, entries, skippedTitles, unreachableTitles, declarations, leftOut };
+}
+
+/** The first bound an entry breaks once its `{{char}}` is bound, or null. */
+function boundProblem(entry: ImportedEntry): { reason: LeftOutReason; field: string } | null {
+  if (codePoints(entry.title) > MAX_TITLE_CHARS) return { reason: "title_too_long", field: "title" };
+  for (const [field, keys] of [["keys", entry.keys], ["secondary_keys", entry.secondaryKeys]] as const) {
+    if (keys.length > MAX_KEYS) return { reason: "too_many_keys", field };
+    if (keys.some((key) => codePoints(key) > MAX_KEY_CHARS)) return { reason: "key_too_long", field };
+  }
+  return null;
 }
 
 function bindEntry(entry: ImportedEntry, charName: string): ImportedEntry {
@@ -271,36 +326,58 @@ function bindEntry(entry: ImportedEntry, charName: string): ImportedEntry {
   };
 }
 
-function normaliseEntry(raw: Raw, index: number, keeper: boolean, source: string): ImportedEntry | null {
-  const extensions = isRecord(own(raw, "extensions")) ? (own(raw, "extensions") as Raw) : {};
-  const secret = truthy(field(raw, extensions, "secret", "secret"));
-  if (secret && !keeper) return null;
+/** The SillyTavern flags of an entry, each read by `readStFlag`, `extensions` first where SillyTavern puts it there. */
+const ST_FLAGS = ["disable", "enabled", "constant", "selective", "useProbability", "caseSensitive", "matchWholeWords", "groupOverride"] as const;
 
+function stFlags(raw: Raw, extensions: Raw): Readonly<Record<(typeof ST_FLAGS)[number], FlagRead>> {
+  return {
+    disable: readStFlag(own(raw, "disable")),
+    enabled: readStFlag(own(raw, "enabled")),
+    constant: readStFlag(own(raw, "constant")),
+    selective: readStFlag(own(raw, "selective")),
+    useProbability: readStFlag(field(raw, extensions, "useProbability", "useProbability", "use_probability")),
+    caseSensitive: readStFlag(field(raw, extensions, "case_sensitive", "case_sensitive", "caseSensitive")),
+    matchWholeWords: readStFlag(field(raw, extensions, "match_whole_words", "match_whole_words", "matchWholeWords")),
+    groupOverride: readStFlag(field(raw, extensions, "group_override", "groupOverride", "group_override")),
+  };
+}
+
+function normaliseEntry(raw: Raw, index: number, keeper: boolean, source: string): ImportedEntry | LeftOutEntry {
+  const extensions = isRecord(own(raw, "extensions")) ? (own(raw, "extensions") as Raw) : {};
   const fallbackTitle = `${source || "Lore"} ${index}`;
   let title = rawTitle(raw) || fallbackTitle;
+  const secrecy = entrySecrecy(raw);
+  if (secrecy === "invalid") return { title, reason: "flag_not_boolean", field: "secret" };
+  const secret = secrecy === "secret";
+  if (secret && !keeper) return { title, reason: "secret_untrusted" };
+  const flags = stFlags(raw, extensions);
+  const invalid = ST_FLAGS.find((name) => flags[name] === "invalid");
+  if (invalid !== undefined) return { title, reason: "flag_not_boolean", field: invalid };
+
   // ST's native `disable: true` (world-info.js checkWorldInfo: `if (entry.disable == true)`),
   // or a V2 `enabled: false`; either one switches the entry off.
-  let enabled = own(raw, "disable") !== true && (own(raw, "enabled") === undefined || truthy(own(raw, "enabled")));
+  let enabled = flags.disable !== true && flags.enabled !== false;
 
   const { decorators, body } = splitDecorators(text(own(raw, "content")));
   const ifValue = decorators.get("if");
-  const condition = typeof ifValue === "string" ? cut(ifValue, MAX_CONDITION_CHARS) : "";
+  const condition = typeof ifValue === "string" ? ifValue : "";
+  if (codePoints(condition) > MAX_CONDITION_CHARS) return { title, reason: "condition_too_long", field: "condition" };
   // `@@dont_activate` never activates (checkWorldInfo); render-time decorators mark
   // frontend UI that must never reach a prompt. Both import disabled, kept and listed.
   if (decorators.has("dont_activate") || RENDER_ONLY_DECORATORS.some((name) => decorators.has(name))) enabled = false;
   if (RENDER_ONLY_TITLE.test(title)) enabled = false;
   if (body !== "" && isFrontendResidue(body)) enabled = false;
-  title = cut(title.replace(GENERATE_TITLE_PREFIX, "") || fallbackTitle, MAX_TITLE_CHARS);
+  title = title.replace(GENERATE_TITLE_PREFIX, "") || fallbackTitle;
 
   // `@@activate` activates the entry like `constant` does (checkWorldInfo); it is
   // subject to the same trust rule, so only a keeper import honours either.
-  const constant = keeper && (truthy(own(raw, "constant")) || decorators.has("activate"));
+  const constant = keeper && (flags.constant === true || decorators.has("activate"));
 
-  const selective = own(raw, "selective");
-  const secondaryKeys = selective === undefined || truthy(selective) ? keyList(first(raw, "secondary_keys", "keysecondary")) : [];
-  const useProbability = field(raw, extensions, "useProbability", "useProbability", "use_probability");
-  const probability = useProbability === undefined || truthy(useProbability) ? clamp(toInt(field(raw, extensions, "probability", "probability"), 100), 0, 100) : 100;
+  const secondaryKeys = flags.selective !== false ? keyList(first(raw, "secondary_keys", "keysecondary")) : [];
+  const probability = flags.useProbability !== false ? clamp(toInt(field(raw, extensions, "probability", "probability"), 100), 0, 100) : 100;
   const groupWeight = toInt(field(raw, extensions, "group_weight", "groupWeight", "group_weight"), 100);
+  const group = text(field(raw, extensions, "group", "group"));
+  if (codePoints(group) > MAX_TITLE_CHARS) return { title, reason: "group_too_long", field: "group" };
 
   return {
     title,
@@ -314,19 +391,19 @@ function normaliseEntry(raw: Raw, index: number, keeper: boolean, source: string
     condition,
     priority: toInt(first(raw, "priority", "insertion_order", "order"), 0),
     probability,
-    caseSensitive: truthy(field(raw, extensions, "case_sensitive", "case_sensitive", "caseSensitive")),
-    matchWholeWords: truthy(field(raw, extensions, "match_whole_words", "match_whole_words", "matchWholeWords")),
+    caseSensitive: flags.caseSensitive === true,
+    matchWholeWords: flags.matchWholeWords === true,
     scanDepth: clamp(toInt(field(raw, extensions, "scan_depth", "scan_depth", "scanDepth"), 0), 0, 200),
     placement: placement(field(raw, extensions, "position", "position")),
     depth: clamp(toInt(field(raw, extensions, "depth", "depth"), DEFAULT_DEPTH), 0, 10_000),
     sticky: clamp(toInt(field(raw, extensions, "sticky", "sticky"), 0), 0, 999),
     cooldown: clamp(toInt(field(raw, extensions, "cooldown", "cooldown"), 0), 0, 999),
     delay: clamp(toInt(field(raw, extensions, "delay", "delay"), 0), 0, 9999),
-    group: cut(text(field(raw, extensions, "group", "group")), MAX_TITLE_CHARS),
+    group,
     // ST keeps a stored weight of 0 (`entry.extensions?.group_weight ?? DEFAULT_WEIGHT`):
     // such a member can only win when every member weighs 0.
     groupWeight: clamp(groupWeight, 0, MAX_GROUP_WEIGHT),
-    groupOverride: truthy(field(raw, extensions, "group_override", "groupOverride", "group_override")),
+    groupOverride: flags.groupOverride === true,
     category: text(field(raw, extensions, "category", "category")) || "lore",
     source,
   };

@@ -99,9 +99,10 @@ the bundle kept: a malformed entry, variable or pregen (codes below).
 | `pregens` | list | A cast, below. Parsed; **not imported** in this version. |
 | `hooks` | list or text | Counted, never kept (§3.1). |
 
-A bundle has no directives. Unknown fields are ignored. Flags in a bundle are read by
-truthiness: absent or null is the default; `false`, `0`, `""`, an empty list and an empty
-object are false; everything else, the string `"false"` included, is true.
+A bundle has no directives. Unknown fields are ignored. Flags in a bundle are booleans:
+absent or null is the default, `true` and `false` are themselves, and any other value
+(`1`, `0`, `"false"`, `"true"`) skips the entry with the warning `flag_not_boolean`, whose
+`where` names the field (`worldbook[3].secret`). A flag is never read by truthiness.
 
 **`worldbook[]` entries.** Each becomes a SillyTavern-shaped entry and goes through the
 same split and lore import (§5) as any card's entry.
@@ -110,7 +111,7 @@ same split and lore import (§5) as any card's entry.
 |---|---|
 | `content` | Required text. An object or list is skipped (`content_not_text`); blank is skipped (`content_empty`); over 16,000 (`MAX_ENTRY_CONTENT_CHARS`) is skipped (`content_too_long`). |
 | `title` | Trimmed; default `Untitled Lore`. |
-| `condition` | A condition expression (§6, step 5). Whitespace runs collapse to one space and it becomes a leading `@@if` line. Over 500 (`MAX_CONDITION_CHARS`) warns `condition_too_long`. |
+| `condition` | A condition expression (§6, step 5). Whitespace runs collapse to one space and it becomes a leading `@@if` line. Over 500 (`MAX_CONDITION_CHARS`) warns `condition_too_long`, and the lore import then refuses the entry (§5.2): a condition is never cut. |
 | `keys`, `secondary_keys` | Lists of text, or one text; trimmed, empties dropped. Secondary keys gate the entry exactly when there are some. |
 | `selective_logic` | `and_any` (default), `and_all`, `not_any` or `not_all`; anything else is `and_any`. |
 | `category` | Default `lore`. |
@@ -126,11 +127,12 @@ same split and lore import (§5) as any card's entry.
 
 An integer is a number (truncated), a boolean (0/1) or integer text; anything else is the
 default. Warnings: `entry_not_object`, `content_not_text`, `content_empty`,
-`content_too_long`, `condition_too_long`, `section_wrong_type` (a section of the wrong
-type, read as empty).
+`content_too_long`, `flag_not_boolean`, `condition_too_long`, `section_wrong_type` (a
+section of the wrong type, read as empty).
 
 **`pregens[]`.** `{name, concept or blurb, notes, skills}`: `name` required (≤ 60),
-`concept` (or, when `concept` is falsy, `blurb`) ≤ 200, `notes` ≤ 400, `skills` a mapping of
+`concept` (or, when `concept` is not a non-empty string, a non-zero number or `true`,
+`blurb`) ≤ 200, `notes` ≤ 400, `skills` a mapping of
 at most 32 names to integers. At most 8 are read (`MAX_PREGENS`; `pregens_truncated`);
 warnings `pregen_not_object`, `pregen_missing_name`, `pregen_too_long`,
 `pregen_skill_not_integer`, `pregen_skills_wrong_type`. This version parses a cast and
@@ -138,7 +140,8 @@ reports it as not imported (§4.1); claiming pregenerated characters is not spec
 this version.
 
 **`variables[]`.** Each spec is read as in §8.5; warnings `variable_not_object`,
-`variable_unusable`, `variable_duplicate` (the first of an id wins),
+`variable_unusable` (an unusable id, kind, visibility, bound, option or default),
+`variable_duplicate` (the first of an id wins),
 `option_labels_not_enum`, `option_labels_wrong_type` and `option_labels_dropped` (with
 the count).
 
@@ -188,8 +191,11 @@ A card is a **world card** if and only if at least one of these holds; otherwise
    `content`, `title`, `comment`, `name`, `keys`, `secondary_keys`, `key` or
    `keysecondary` of a lore entry that is neither a declaration nor keeper-only.
    Directives are not scanned.
-3. **Keeper-only lore.** A lore entry has `secret: true`, or `extensions.secret: true`
-   (the boolean `true`, nothing else).
+3. **Keeper-only lore.** A lore entry is secret by §5.2's rule (`secret: true` at the entry
+   or in its `extensions`), or its `secret` at either level is present, not null and not
+   a boolean. Such an unreadable entry is treated as keeper-only — kept off the character
+   half and counted, with the split warning `secret_unreadable` — and the lore import
+   refuses it (§5.2). A reader that cannot tell fails closed.
 4. **Typed variables.** A native bundle declares at least one usable variable spec.
 5. **Hook scripts.** The card carries a non-blank hook script — a string, or an object
    whose `code` is a string — in a native bundle's `hooks`, or in a SillyTavern
@@ -227,7 +233,8 @@ NOT be offered to the Keeper as a tool. It reads the **original** card, both hal
 
 - **Lore.** Every entry except declarations becomes a lore entry at **keeper trust** (§5.4):
   `secret` and `constant` are honoured, templates are kept to be rendered at activation
-  (§7). The entries' source is `card:<name>`.
+  (§7). The entries' source is `card:<name>`. An entry the lore import refuses (§5.2) is
+  left out and reported with its title and reason; the rest import.
 - **The variable tree.** Every declaration entry is parsed and the parses are merged in
   order (§8.2); the room's tree is seeded with the result: a top-level key the room already
   has keeps the room's value, so a re-import never resets progress; the exposure list is
@@ -243,7 +250,8 @@ NOT be offered to the Keeper as a tool. It reads the **original** card, both hal
   The system-prompt directive joins the head of the Keeper's prompt verbatim; the
   post-history directive is passed through the macros (§7.2) on every turn. Where a
   runtime places directives in its prompt is not specified.
-- **Not imported**, reported by count: hook scripts and a native bundle's pregens.
+- **Not imported**, reported by count: hook scripts and a native bundle's pregens. A
+  native bundle's warnings (§2) are reported too, each with its code and where.
 
 **Re-import and stacking.** The world card's identity is its name. Importing a card whose
 name the room already holds replaces that card's lore entries and its world card, and
@@ -268,7 +276,9 @@ by the same rule. A room admin who wants a clean slate resets the room first.
 An entry the stored-entry rules refuse is `entry_invalid`; a document the store refuses is
 `document_refused`; a room that moved to another generation meanwhile (undo, reset) is
 `stale_writer`. One entry longer than 16,000 is skipped and reported by title, not refused;
-so is an entry stored disabled with no keys (nothing can fire it until the admin acts, §9).
+an entry left out for another reason (§5.2) is reported with its title and reason; an entry
+stored disabled with no keys is reported by title (nothing can fire it until the admin acts,
+§9).
 
 ### 4.2 Character import
 
@@ -335,40 +345,52 @@ order, the first present and not null winning.
 
 | Stored | Extension | Top-level names | Reading |
 |---|---|---|---|
-| `title` | | `title`, `comment`, `name` | The first that is non-empty text. A leading `[GENERATE:…]` prefix is removed. Cut to 200. Default `<source> <n>` (`n` the 1-based position in the book). |
+| `title` | | `title`, `comment`, `name` | The first that is non-empty text. A leading `[GENERATE:…]` prefix is removed. Default `<source> <n>` (`n` the 1-based position in the book). Over 200 once `{{char}}` is bound: `title_too_long`. |
 | `content` | | `content` | The text after the leading decorator lines (§5.3). |
-| `keys` | | `keys`, `key` | A string is one key; a list keeps strings and numbers (as text); blank keys dropped; each cut to 200; the first 64 kept. |
-| `secondaryKeys` | | `secondary_keys`, `keysecondary` | As `keys`, but only when `selective` is absent or truthy; otherwise none. |
+| `keys` | | `keys`, `key` | A string is one key; a list keeps strings and numbers (as text); blank keys dropped. A key over 200 once `{{char}}` is bound: `key_too_long`; more than 64 keys: `too_many_keys`. |
+| `secondaryKeys` | | `secondary_keys`, `keysecondary` | As `keys` (same bounds), unless the flag `selective` reads false; then none. |
 | `selectiveLogic` | `selectiveLogic` | `selective_logic`, `selectiveLogic` | An integer 0–3 means `and_any`, `not_all`, `not_any`, `and_all`; a name is itself; anything else `and_any`. |
-| `constant` | | `constant` | Truthy, or an `@@activate` decorator; **keeper trust only** (§5.4). |
-| `enabled` | | `disable`, `enabled` | False when `disable` is `true`, or `enabled` is present and falsy; also forced false by §5.3. |
-| `secret` | `secret` | `secret` | Truthy. |
-| `condition` | | | The `@@if` expression, cut to 500. |
+| `constant` | | `constant` | Flag, or an `@@activate` decorator; **keeper trust only** (§5.4). |
+| `enabled` | | `disable`, `enabled` | Flags: false when `disable` reads true or `enabled` reads false; also forced false by §5.3. |
+| `secret` | `secret` | `secret` | Secret (below): both levels are read. |
+| `condition` | | | The `@@if` expression. Over 500: `condition_too_long` — never cut, since half a condition is a different rule. |
 | `priority` | | `priority`, `insertion_order`, `order` | Integer. |
-| `probability` | `probability` | `probability` | Integer clamped to 0–100; 100 when `useProbability` (extension, then `useProbability`, `use_probability`) is present and falsy. |
-| `caseSensitive` | `case_sensitive` | `case_sensitive`, `caseSensitive` | Truthy. |
-| `matchWholeWords` | `match_whole_words` | `match_whole_words`, `matchWholeWords` | Truthy. |
+| `probability` | `probability` | `probability` | Integer clamped to 0–100; 100 when the flag `useProbability` (extension, then `useProbability`, `use_probability`) reads false. |
+| `caseSensitive` | `case_sensitive` | `case_sensitive`, `caseSensitive` | Flag. |
+| `matchWholeWords` | `match_whole_words` | `match_whole_words`, `matchWholeWords` | Flag. |
 | `scanDepth` | `scan_depth` | `scan_depth`, `scanDepth` | Integer clamped to 0–200. |
 | `placement` | `position` | `position` | An integer 0–7 means `before`, `after`, `author_note_top`, `author_note_bottom`, `at_depth`, `examples_top`, `examples_bottom`, `outlet`; `before_char` / `after_char` mean `before` / `after`; anything else `default`. |
 | `depth` | `depth` | `depth` | Integer clamped to 0–10,000. |
 | `sticky`, `cooldown`, `delay` | same | same | Integers clamped as in §5.1. |
-| `group` | `group` | `group` | Text, cut to 200. |
+| `group` | `group` | `group` | Text. Over 200: `group_too_long`. |
 | `groupWeight` | `group_weight` | `groupWeight`, `group_weight` | Integer clamped to 0–10,000. |
-| `groupOverride` | `group_override` | `groupOverride`, `group_override` | Truthy. |
+| `groupOverride` | `group_override` | `groupOverride`, `group_override` | Flag. |
 | `category` | `category` | `category` | Text; default `lore`. |
 
-*Truthy*: a non-empty list or object, or any other value JavaScript reads as true.
-*Integer*: a number truncated toward zero, a boolean as 0/1, or a string of 1–15 digits
-with an optional sign; anything else is the default. *Text*: a string, or a number or
-boolean that is truthy, as its text.
+*Flag*: exactly one of these spellings — `true`, `1`, `"true"`, `"1"` read true; `false`,
+`0`, `"false"`, `"0"` and null read false (null as SillyTavern's own `!entry.enabled` and
+`entry.selective || false` read it); absent is the field's default (`selective`,
+`useProbability` and `enabled` true, the others false). Files made for SillyTavern write
+these; any other value — `"yes"`, `2`, `"TRUE"` — refuses the entry with
+`flag_not_boolean`, naming the field. A flag is never read by truthiness. *Secret*: `secret`
+and `extensions.secret` are each absent, null or a boolean; `true` at either level makes the
+entry secret, so `extensions` never makes public what the top level marks secret; any other
+value at either level (`1`, `"false"`) refuses the entry (`flag_not_boolean`, field
+`secret`). `secret` is Loreweaver's key, not SillyTavern's, so it has no looser spelling; the
+card split (§3.1) and the native bundle (§2) read it by the same rule. *Integer*: a number
+truncated toward zero, a boolean as 0/1, or a string of 1–15 digits with an optional sign;
+anything else is the default. *Text*: a string, or a non-zero number or `true`, as its text.
 
 When the import binds a card name, `{{char}}` (any case and spacing), `<char>` and `<BOT>`
 are replaced by it in the title, content and keys. An entry whose content is then longer than
-16,000 is skipped and its title reported; an entry with empty content is dropped.
-Declaration entries (§8.2) are never stored as lore. The lore import also treats as a
-declaration, and drops, an entry whose title (`title`, `comment` or `name`) contains
-`initvar` case-insensitively without the brackets of §8.2: such an entry is neither stored
-as lore nor read into the tree; the world import reports how many there were.
+16,000 is skipped and its title reported. Declaration entries (§8.2, the predicate the split
+uses) are never stored as lore. **Nothing is cut to fit**: every other entry not stored is
+left out and reported with its title, its reason and, where one field is at fault, the
+field; the rest of the book imports. The reasons: `not_an_object`, `flag_not_boolean`,
+`secret_untrusted` and `declaration_untrusted` (§5.4), `declaration_too_long` (a declaration
+body over 200,000, `MAX_DECLARATION_CHARS`), `condition_too_long`, `title_too_long`,
+`key_too_long`, `too_many_keys`, `group_too_long`, and `empty` (no content once the
+decorator lines are off).
 
 > **Differs from SillyTavern.** SillyTavern turns a character-book entry that lacks
 > `enabled` into a disabled one, one that lacks `selective` into one that ignores its
@@ -404,8 +426,9 @@ a file cannot address another file's entries.
 
 - **Keeper trust** (the world import): `secret` and `constant` are honoured, declarations
   feed the variable tree. A re-import of the same source replaces that source's entries.
-- **Player trust**: a secret entry MUST be dropped, never stored as public lore; `constant`
-  and `@@activate` are ignored; declarations are dropped; entries are only ever added.
+- **Player trust**: a secret entry MUST be dropped, never stored as public lore
+  (`secret_untrusted`); `constant` and `@@activate` are ignored; declarations are dropped
+  (`declaration_untrusted`); entries are only ever added.
 
 In this version only the world import stores imported lore; the player rules apply to any
 runtime path that stores lore from a non-admin file.
@@ -603,7 +626,9 @@ empty mapping has none.
 A lore entry is a **declaration** when its title (`title`, else `comment`, else `name`: the
 first non-empty string), lower-cased, contains `[initvar]`; or that title with spaces
 removed, lower-cased, contains `[initialvariables]`; or its content starts with an
-`@@initial_variables` decorator.
+`@@initial_variables` decorator. The brackets are part of the marker: a title such as
+`initvar notes` is ordinary lore. This is the one predicate: the split (§3.1) and the lore
+import (§5.2) both use it, so an entry is never a declaration to one and lore to the other.
 
 The declaration's text is its content without decorator lines; then the text between an
 `<initvar>` line and a `</initvar>` line, if present; then the inside of a fenced code block,
@@ -622,8 +647,13 @@ one (a list included) replaces the earlier value.
 
 The Keeper changes the tree by writing update blocks in its reply. The runtime finds them,
 applies them in deterministic code, and publishes the reply **without** them. A reply over
-500,000 characters (`MAX_UPDATE_TEXT_CHARS`) is not scanned. A room without a tree applies
-nothing, but the blocks are still removed.
+500,000 characters (`MAX_UPDATE_TEXT_CHARS`) is not scanned for blocks. If it contains a
+block's opening tag anywhere (`<UpdateVariable`, `<VariableUpdate` or `<Update`, any case,
+as a whole tag name), nothing applies and the reply MUST NOT be published, since its blocks
+could not be removed: the reference fails the turn (`reply_too_long`, the problem
+`reply_updates_unscanned` reported to the operator), as it does a reply its review blocks.
+Without such a tag it has no block to remove and is published as it is. A room without a
+tree applies nothing, but the blocks are still removed.
 
 - **Blocks.** `<UpdateVariable>…</UpdateVariable>`, also `<VariableUpdate>` and `<Update>`
   (case-insensitive; attributes allowed; a block must be closed by its own tag). A block
@@ -683,7 +713,7 @@ most 64 (`MAX_VARIABLES`).
 |---|---|
 | `id` | Trimmed, lower-cased, runs of whitespace or `-` become `_`; 1–64 code points (`MAX_ID_CHARS`); ASCII characters MUST be `[a-z0-9_]`; any other character is allowed unless it is a separator or control character (`理智` is a valid id). |
 | `kind` | `number`, `bool`, `text` or `enum`. |
-| `visibility` | `player` (default) or `keeper`. Any other value reads as `player` when a spec is read from a card. |
+| `visibility` | Exactly `player` (the default, when absent or null) or `keeper`. Any other value, `Keeper` and `secret` included, makes the spec unusable (`bad_visibility`; in a card, `variable_unusable`): it is never read as `player`. |
 | `labels` | `{language: text}`; the language is the part of the key before `-`, lower-cased; a blank or non-text label is skipped; one over 50 (`MAX_LABEL_CHARS`) makes the spec unusable. |
 | `minimum`, `maximum` | `number` only: integers (numbers truncate; numeric text and booleans coerce), `minimum` ≤ `maximum`. |
 | `options` | `enum` only, required: non-blank strings, trimmed, duplicates (case-insensitive) dropped, 1–20 (`MAX_OPTIONS`) of at most 50 (`MAX_OPTION_CHARS`). |
@@ -792,3 +822,11 @@ changed:
   `groupWeight` of 0, and lays entries out by ascending priority; whole-word matching treats
   CJK letters as boundaries; YAML in declarations is 1.2; an over-long label makes a typed
   variable unusable instead of being dropped.
+- **Stricter reading:** lore flags are read from a named set of spellings (§5.2) and a native
+  bundle's flags as booleans (§2), never by truthiness, and an unreadable value refuses the
+  entry; `secret` is read the same way by the split and the import, `true` at either level
+  winning; a title, key, group or condition over its bound refuses the entry instead of being
+  cut, and every entry left out is reported; a title with `initvar` but without the brackets
+  is lore (2.0 dropped it); a typed variable whose `visibility` is not exactly `player` or
+  `keeper` is unusable (2.0 read it as `player`); a reply too long to scan for update blocks
+  that may hold one is not published (2.0 published it with its blocks).

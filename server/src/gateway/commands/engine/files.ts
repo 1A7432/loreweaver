@@ -84,6 +84,13 @@ function cardRefusal(refusal: CardImportRefusal): Refused {
 }
 
 /** "hooks ×2, secret entries ×1", in the caller's language. */
+/** Labels counted in first-appearance order: `label ×n, label ×n`. */
+function countedText(call: CommandCall, labels: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+  return [...counts].map(([label, count]) => call.say("import.part_count", { part: label, count })).join(call.say("import.list_separator"));
+}
+
 function partsText(call: CommandCall, parts: readonly LeftBehind[]): string {
   return parts.map((part) => call.say("import.part_count", { part: call.say(`import.part.${part.part}`), count: part.count })).join(call.say("import.list_separator"));
 }
@@ -213,6 +220,8 @@ function world(call: CommandCall, card: ImportedCard, recall: RecallDeps | null)
   ];
   if (result.otherWorlds > 0) lines.push(call.say("import.world_stacked", { count: result.otherWorlds + 1 }));
   if (result.lore.skippedTooLong.length > 0) lines.push(call.say("import.skipped_long", { count: result.lore.skippedTooLong.length }));
+  if (result.lore.leftOut.length > 0) lines.push(call.say("import.left_out", { count: result.lore.leftOut.length, reasons: countedText(call, result.lore.leftOut.map((entry) => call.say(`import.left_out_reason.${entry.reason}`))) }));
+  if (result.cardWarnings.length > 0) lines.push(call.say("import.card_warnings", { count: result.cardWarnings.length, codes: countedText(call, result.cardWarnings.map((warning) => warning.code)) }));
   if (result.lore.unreachable.length > 0) lines.push(call.say("import.unreachable", { count: result.lore.unreachable.length }));
   if (result.variables.unreadable > 0) lines.push(call.say("import.unreadable_declarations", { count: result.variables.unreadable }));
   if (result.notImported.length > 0) lines.push(call.say("import.left_behind", { parts: partsText(call, result.notImported) }));

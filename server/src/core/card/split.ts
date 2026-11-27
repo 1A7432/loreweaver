@@ -17,7 +17,8 @@
 // `extensions.loreweaver_hooks` at the root or in `data`) carries machinery 3.0 does not
 // run: it is a world card, the scripts are reported in a warning, and neither import
 // keeps them.
-import { initVarBody, isInitVarTitle, mergeDeclarations, parseInitVar, type InitVarParse, type VariableSpec, type VarMap } from "../variables/index.ts";
+import { initVarBody, mergeDeclarations, parseInitVar, type InitVarParse, type VariableSpec, type VarMap } from "../variables/index.ts";
+import { entrySecrecy, entryTitle as sharedEntryTitle, isVariableDeclaration as sharedIsVariableDeclaration, splitDecorators as sharedSplitDecorators } from "../worldbook/index.ts";
 import { isObject, text, type BookEntry, type CharacterCard } from "./card.ts";
 import { countHookScripts } from "./lorecard.ts";
 import type { ImportedCard } from "./parse.ts";
@@ -28,7 +29,10 @@ export type CardKind = "world" | "character";
 export interface CardMachinery {
   readonly variableDeclarations: number;
   readonly templateSpans: number;
-  /** Keeper-only lore entries (`secret: true`, at the entry or in its `extensions`). */
+  /**
+   * Keeper-only lore entries (`secret: true`, at the entry or in its `extensions`), and
+   * entries whose `secret` is not a boolean (fail closed: never on the character half).
+   */
   readonly secretEntries: number;
   readonly unsupportedHooks: number;
   /** Typed module variables a native bundle declares (shared room state, like a tree). */
@@ -38,7 +42,8 @@ export interface CardMachinery {
 }
 
 export interface SplitWarning {
-  readonly code: "hooks_unsupported" | "declaration_unreadable";
+  /** `secret_unreadable`: entries whose `secret` is neither a boolean nor absent (the lore import refuses them). */
+  readonly code: "hooks_unsupported" | "declaration_unreadable" | "secret_unreadable";
   readonly count: number;
 }
 
@@ -91,61 +96,29 @@ export function stripTemplates(source: string): { readonly text: string; readonl
 // Variable declarations
 // ---------------------------------------------------------------------------
 
-const DECORATOR = /^@@([A-Za-z_]+)(?:\s+(.*))?$/;
+/** Leading `@@decorator` lines of an entry: the lore import's reader (`core/worldbook/decorators.ts`). */
+export const splitDecorators = sharedSplitDecorators;
 
-/**
- * Leading `@@decorator` lines of an entry (ST-Prompt-Template). Flags map to `true`,
- * `@@if` to its expression; parsing stops at the first line that is neither a decorator
- * nor (after one) blank.
- */
-export function splitDecorators(content: string): { readonly decorators: ReadonlyMap<string, string | true>; readonly body: string } {
-  const decorators = new Map<string, string | true>();
-  const lines = content.split("\n");
-  let index = 0;
-  while (index < lines.length) {
-    const line = (lines[index] as string).trim();
-    if (line === "" && decorators.size > 0) {
-      index += 1;
-      continue;
-    }
-    const match = DECORATOR.exec(line);
-    if (match === null) break;
-    const name = (match[1] as string).toLowerCase();
-    const argument = (match[2] ?? "").trim();
-    decorators.set(name, name === "if" && argument !== "" ? argument : true);
-    index += 1;
-  }
-  if (decorators.size === 0) return { decorators, body: content };
-  return { decorators, body: lines.slice(index).join("\n") };
-}
-
-/** An entry's title: `title`, else `comment`, else `name` (the first that is non-empty text). */
+/** An entry's title: `title`, else `comment`, else `name` (the first non-empty string). */
 export function entryTitle(entry: BookEntry): string {
-  for (const field of ["title", "comment", "name"] as const) {
-    const value = entry[field];
-    if (typeof value === "string" && value !== "") return value;
-  }
-  return "";
+  return sharedEntryTitle(entry);
 }
 
 /**
- * Whether an entry declares variables rather than telling lore: a MagVarUpdate
- * `[InitVar]` title, an ST `[InitialVariables]` title (spaces and case ignored), or a
- * leading `@@initial_variables` decorator. The one definition of "variable machinery".
+ * Whether an entry declares variables rather than telling lore: the one recogniser the
+ * lore import uses too (`core/worldbook/entry_rules.ts`, where the rule is stated).
  */
 export function isVariableDeclaration(entry: BookEntry): boolean {
-  const title = entryTitle(entry);
-  return (
-    isInitVarTitle(title) ||
-    title.replace(/ /g, "").toLowerCase().includes("[initialvariables]") ||
-    splitDecorators(text(entry.content)).decorators.has("initial_variables")
-  );
+  return sharedIsVariableDeclaration(entry);
 }
 
-/** Whether an entry is keeper-only lore. */
+/**
+ * Whether an entry stays off the character half as keeper-only: `secret: true` at the
+ * entry or in its `extensions`, or a `secret` that is not a boolean (fail closed; the lore
+ * import refuses such an entry). The definition is `entrySecrecy`'s.
+ */
 export function isSecretEntry(entry: BookEntry): boolean {
-  if (entry.secret === true) return true;
-  return isObject(entry.extensions) && entry.extensions.secret === true;
+  return entrySecrecy(entry) !== "public";
 }
 
 /** The declaration an entry carries, parsed (decorators and wrappers off first). */
@@ -201,6 +174,7 @@ export function splitCard(imported: ImportedCard): CardSplit {
   const declarations: InitVarParse[] = [];
   let variables: VarMap | null = null;
   let secretEntries = 0;
+  let secretUnreadable = 0;
   for (const entry of card.book) {
     if (isVariableDeclaration(entry)) {
       const parsed = parseDeclaration(entry);
@@ -211,6 +185,7 @@ export function splitCard(imported: ImportedCard): CardSplit {
     worldEntries.push(entry);
     if (isSecretEntry(entry)) {
       secretEntries += 1;
+      if (entrySecrecy(entry) === "invalid") secretUnreadable += 1;
       continue;
     }
     const kept: Record<string, unknown> = { ...entry };
@@ -262,6 +237,7 @@ export function splitCard(imported: ImportedCard): CardSplit {
   if (machinery.unsupportedHooks > 0) warnings.push({ code: "hooks_unsupported", count: machinery.unsupportedHooks });
   const unreadable = declarations.filter((parsed) => !parsed.ok).length;
   if (unreadable > 0) warnings.push({ code: "declaration_unreadable", count: unreadable });
+  if (secretUnreadable > 0) warnings.push({ code: "secret_unreadable", count: secretUnreadable });
   return {
     kind: isWorld(machinery) ? "world" : "character",
     machinery,

@@ -14,6 +14,7 @@
   "loop.provider_transient": "AI 供应商在自动重试后仍暂时不可用，请稍后重试。",
   "loop.unavailable": "守秘人暂时无法应答，请稍后再试一次。",
   "loop.reply_blocked": "守秘人的回复被本房间的输出审查拦下了，请再试一次。",
+  "loop.reply_too_long": "守秘人的回复太长，无法检查其中的变量更新，所以没有显示。请再试一次。",
   "scribe.whisper.npc_overreach": "观察：{npc} 这句台词可能越出了其知识记录——「{quote}」（{fact}）。要不要圆场，你自己判断。",
   "scribe.whisper.unrolled_check": "观察：这一回合似乎没掷骰就定下了一件与{skill}有关的事——「{quote}」。你自己判断。"
 }

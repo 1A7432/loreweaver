@@ -29,7 +29,11 @@ import {
   type VarValue,
 } from "./tree.ts";
 
-/** A longer reply is not scanned (its blocks stay in the text and nothing applies). */
+/**
+ * A longer reply is not scanned for blocks (the block search is bounded to this). Such a
+ * reply that holds a block opener anywhere comes back `overflow`: nothing applies, and the
+ * caller must not publish it (its blocks could not be removed).
+ */
 export const MAX_UPDATE_TEXT_CHARS = 500_000;
 /** Commands past this many in one reply are refused (`too_large`), not dropped unseen. */
 export const MAX_UPDATE_COMMANDS = 512;
@@ -60,7 +64,12 @@ export interface ExtractedUpdates {
   readonly text: string;
   /** Closed blocks found. */
   readonly blocks: number;
-  /** The reply was longer than `MAX_UPDATE_TEXT_CHARS` and was not scanned. */
+  /**
+   * The reply was longer than `MAX_UPDATE_TEXT_CHARS` AND holds a block opener: it was not
+   * scanned, nothing applies, and `text` still holds whatever blocks it has — the caller
+   * must not publish it. An over-long reply without any opener has no block to remove and
+   * is not `overflow`.
+   */
   readonly overflow: boolean;
 }
 
@@ -71,13 +80,21 @@ export interface ExtractedUpdates {
 // MagVarUpdate accepts three tag names (`updatevariable|variableupdate|update`). The
 // backreference pairs an opening tag with its own closing tag; `\b` keeps
 // `<UpdateVariables>` from counting.
-const TAGS = "updatevariable|variableupdate|update";
+/**
+ * The tag names an update block may use, lower-case. The ONE list: the extractor's patterns
+ * are built from it, and the draft gate withholds a tag of any of these names from the
+ * stream (`agent/turn/gate.ts`) — a name added here is withheld there without another edit.
+ */
+export const UPDATE_TAG_NAMES: readonly string[] = ["updatevariable", "variableupdate", "update"];
+const TAGS = UPDATE_TAG_NAMES.join("|");
 const BLOCK = new RegExp(`<(${TAGS})\\b[^>]*>([\\s\\S]*?)</\\1\\s*>`, "gi");
 // A block fenced in triple backticks is unwrapped first so no empty fence is left behind.
 const FENCED_BLOCK = new RegExp("```[A-Za-z0-9_-]*\\s*(<(" + TAGS + ")\\b[^>]*>[\\s\\S]*?</\\2\\s*>)\\s*```", "gi");
 // Reasoning regions inside a block are not commands (MagVarUpdate masks the same names).
 const REASONING = /<(think|thinking|reasoning|analysis|analyze)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const COMMAND = /_\.(set|insert|assign|remove|unset|delete|add)\(/;
+// Any opening tag a block could start with: one linear search, safe at any length.
+const OPENER = new RegExp(`<(?:${TAGS})\\b`, "i");
 
 /**
  * The update commands in a reply, and the reply without its blocks. Only commands inside
@@ -87,7 +104,7 @@ const COMMAND = /_\.(set|insert|assign|remove|unset|delete|add)\(/;
  * shown. Reading blocks only keeps "applied" and "removed from view" the same set.
  */
 export function extractUpdates(text: string): ExtractedUpdates {
-  if (text.length > MAX_UPDATE_TEXT_CHARS) return { commands: [], text, blocks: 0, overflow: true };
+  if (text.length > MAX_UPDATE_TEXT_CHARS) return { commands: [], text, blocks: 0, overflow: OPENER.test(text) };
   const unfenced = text.replace(FENCED_BLOCK, (_match, block: string) => block);
   const commands: UpdateCommand[] = [];
   let blocks = 0;

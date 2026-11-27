@@ -12,3 +12,4 @@ export * from "./matching.ts";
 export * from "./scrub.ts";
 export * from "./types.ts";
 export * from "./variables.ts";
+export * from "./entry_rules.ts";

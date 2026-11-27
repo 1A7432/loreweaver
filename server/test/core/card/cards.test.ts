@@ -138,3 +138,46 @@ describe("the split", () => {
     expect(splitCard(parseCard(encoder.encode(JSON.stringify({ format: "loreweaver.card", format_version: 1, name: "Plain" })))).kind).toBe("character");
   });
 });
+
+describe("the native bundle reads its flags and visibilities strictly", () => {
+  const bundle = (extra: Record<string, unknown>): Uint8Array =>
+    encoder.encode(JSON.stringify({ format: "loreweaver.card", format_version: 1, name: "B", ...extra }));
+
+  test("a flag that is not a boolean skips the entry with flag_not_boolean naming the field; null and absent are defaults", () => {
+    const imported = parseCard(
+      bundle({
+        worldbook: [
+          { title: "s", content: "x", secret: "false" },
+          { title: "e", content: "x", enabled: "false" },
+          { title: "c", content: "x", constant: 1 },
+          { title: "w", content: "x", match_whole_words: "yes" },
+          { title: "ok", content: "x", secret: true, enabled: null, case_sensitive: false },
+        ],
+      }),
+      "b.lorecard.json",
+    );
+    expect(imported.lorecard?.warnings).toEqual([
+      { code: "flag_not_boolean", where: "worldbook[0].secret" },
+      { code: "flag_not_boolean", where: "worldbook[1].enabled" },
+      { code: "flag_not_boolean", where: "worldbook[2].constant" },
+      { code: "flag_not_boolean", where: "worldbook[3].match_whole_words" },
+    ]);
+    expect(imported.card.book.map((entry) => [entry.comment, entry.secret, entry.enabled])).toEqual([["ok", true, true]]);
+    // `secret: "false"` used to be read by truthiness as secret; now nothing of it reaches the split.
+    expect(splitCard(imported).machinery.secretEntries).toBe(1);
+  });
+
+  test("a variable declared visibility \"Keeper\" is refused (variable_unusable), never made public", () => {
+    const imported = parseCard(
+      bundle({
+        variables: [
+          { id: "truth", kind: "bool", visibility: "Keeper" },
+          { id: "seen", kind: "bool", visibility: "keeper" },
+        ],
+      }),
+      "b.lorecard.json",
+    );
+    expect(imported.lorecard?.variables.map((spec) => [spec.id, spec.visibility])).toEqual([["seen", "keeper"]]);
+    expect(imported.lorecard?.warnings).toEqual([{ code: "variable_unusable", where: "variables[0]" }]);
+  });
+});
