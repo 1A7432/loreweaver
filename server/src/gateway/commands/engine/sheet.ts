@@ -30,6 +30,7 @@ import {
   sheetValue,
   validateSheet,
 } from "../../../core/sheets/index.ts";
+import type { RulePack } from "../../../core/rulepacks/index.ts";
 import { foldCase } from "../../../core/sheets/text.ts";
 import { compact, object, oneOf, text } from "../schema.ts";
 import { firstWord } from "../parse.ts";
@@ -201,13 +202,24 @@ function runSet(call: CommandCall, writes: readonly SheetWriteArg[]): Done | Ref
   return { text: lines.join("\n"), data: { id: stored.id, changed, violations: updated.violations.map((violation) => violation.code) } };
 }
 
-function shownNames(stored: StoredCharacter, sheet: Sheet): string[] {
-  const show = stored.pack.stShow;
+function shownNames(pack: RulePack, sheet: Sheet): string[] {
+  const show = pack.stShow;
   if (typeof show === "object" && show !== null && !Array.isArray(show)) {
     const top = (show as { readonly top?: unknown }).top;
     if (Array.isArray(top) && top.every((name) => typeof name === "string")) return (top as string[]).slice(0, MAX_SHOWN);
   }
   return [...sheet.attributes.map(([name]) => name), ...sheet.skills.map(([name]) => name)].slice(0, MAX_SHOWN);
+}
+
+/** The stats a sheet shows in its text form (the pack's `st_show` top, else the first), in the caller's language. */
+export function sheetItems(call: CommandCall, pack: RulePack, sheet: Sheet): string {
+  const items: string[] = [];
+  for (const name of shownNames(pack, sheet)) {
+    const read = sheetValue(pack.sheet, sheet, name);
+    const value = read.kind === "value" ? String(read.value) : read.kind === "text" ? read.text : null;
+    if (value !== null) items.push(call.say("sheet.item", { name: displayName(pack.sheet, name, call.locale), value }));
+  }
+  return items.join(call.say("list.separator"));
 }
 
 function runShow(call: CommandCall): Done | Refused {
@@ -225,13 +237,7 @@ function runShow(call: CommandCall): Done | Refused {
   }
   const full = view as CharacterFullView;
   const sheet = parseSheet(stored.pack.sheet, full.sheet).sheet;
-  const items: string[] = [];
-  for (const name of shownNames(stored, sheet)) {
-    const read = sheetValue(stored.pack.sheet, sheet, name);
-    const value = read.kind === "value" ? String(read.value) : read.kind === "text" ? read.text : null;
-    if (value !== null) items.push(call.say("sheet.item", { name: displayName(stored.pack.sheet, name, call.locale), value }));
-  }
-  return { text: call.say("sheet.show", { name: full.name, items: items.join(call.say("list.separator")) }), data: full };
+  return { text: call.say("sheet.show", { name: full.name, items: sheetItems(call, stored.pack, sheet) }), data: full };
 }
 
 function claimableIds(call: CommandCall): Set<string> {

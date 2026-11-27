@@ -10,9 +10,11 @@
 //     imported" marker. World machinery reaches a room through this function and nowhere
 //     else. Whether the caller may run it (the admin check) is the command layer's.
 //   - `importCharacter` — a player's character. Only the character half of `splitCard`
-//     is read, and only its name and persona are written: a character document with the
-//     room's rule pack's default sheet and the persona as its background, seated for the
-//     importing member. Nothing in this path writes a lore entry, a variable or a
+//     is read, and only its name and persona are written: a character document with a
+//     sheet rolled for the room's rule pack — biased toward the concept the authoring lane
+//     read from the persona, when the caller has one (`agent/lanes/genchar.ts`) — and the
+//     persona as its background (or its notes, under the concept's backstory), seated for
+//     the importing member. Nothing in this path writes a lore entry, a variable or a
 //     directive, whatever the card holds; what was left behind is reported by count.
 //
 // Both are synchronous: the caller parses the bytes first (`parseCard`). Every refusal is
@@ -48,9 +50,12 @@ import {
   type WorldCard,
 } from "../core/card/world_card.ts";
 import {
+  type CharacterConcept,
   CHARACTER_TYPE,
   characterData,
   characterOf,
+  conceptCharacterSheet,
+  type ConceptPersona,
   createCharacter,
   EMPTY_SEATING,
   MAX_CHARACTER_NAME_CHARS,
@@ -64,7 +69,6 @@ import type { JsonObject } from "../core/documents/model.ts";
 import { DocumentRefused } from "../core/documents/raw.ts";
 import { LORE_ENTRY_TYPE, loreEntryDocument, loreSource, MAX_ROOM_LORE_ENTRIES, validateLoreEntry } from "../core/lore/index.ts";
 import type { RulePack } from "../core/rulepacks/index.ts";
-import { newSheet } from "../core/sheets/index.ts";
 import {
   codePoints,
   defineVariable,
@@ -433,6 +437,11 @@ export interface CharacterImportOptions {
   readonly name?: string;
   /** The rule pack to build the sheet for; defaults to the room's (`context.pack`). */
   readonly pack?: RulePack;
+  /**
+   * The concept the authoring lane read from the persona (`agent/lanes/genchar.ts`), already
+   * reviewed by the caller; absent or null, the sheet is rolled without one.
+   */
+  readonly concept?: CharacterConcept | null;
 }
 
 /** What a character import leaves behind of `split`, with the reason for each part. */
@@ -457,21 +466,41 @@ function strippedParts(split: CardSplit): LeftBehind[] {
   ]);
 }
 
-/** The persona a character carries: the character half's description and personality. */
-function personaOf(split: CardSplit, name: string): string {
+/** The persona a character carries: the character half's description and personality, `{{char}}` bound to `name`. */
+function personaParts(split: CardSplit, name: string): ConceptPersona {
   const card = split.character;
-  return bindCharName(
-    [card.description, card.personality]
-      .map((part) => part.trim())
-      .filter((part) => part !== "")
-      .join("\n\n"),
-    name,
-  );
+  return { description: bindCharName(card.description.trim(), name), personality: bindCharName(card.personality.trim(), name) };
+}
+
+function personaOf(split: CardSplit, name: string): string {
+  const parts = personaParts(split, name);
+  return [parts.description, parts.personality].filter((part) => part !== "").join("\n\n");
+}
+
+/** What a character import of a card shows the authoring lane. */
+export interface CharacterPersona {
+  readonly name: string;
+  readonly description: string;
+  readonly personality: string;
+  readonly tags: readonly string[];
 }
 
 /**
- * Import `card` as a character for the context's member: a character document with the
- * rule pack's default sheet, the persona as its background, owned by the member and
+ * The character half's persona as a character import reads it — only the character half
+ * (the card split): its name (or `name`), description and personality with `{{char}}`
+ * bound, and its tags. Null when the import would refuse the name or the persona anyway.
+ */
+export function characterPersona(card: ImportedCard, name?: string): CharacterPersona | null {
+  const split = splitCard(card);
+  const chosen = (name ?? split.character.name).trim();
+  if (chosen === "" || codePoints(chosen) > MAX_CHARACTER_NAME_CHARS) return null;
+  if (codePoints(personaOf(split, chosen)) > MAX_PERSONA_CHARS) return null;
+  return { name: chosen, ...personaParts(split, chosen), tags: split.character.tags };
+}
+
+/**
+ * Import `card` as a character for the context's member: a character document with a
+ * rolled sheet (biased toward `options.concept`), the persona as its background, owned by the member and
  * seated for them (giving up whatever they played — the reference server made an imported
  * card the player's active character). Reads the character half of the split only.
  */
@@ -496,8 +525,10 @@ export function importCharacter(context: RoomContext, card: ImportedCard, option
   const persona = personaOf(split, name);
   if (codePoints(persona) > MAX_PERSONA_CHARS) return refusal("persona_too_long");
 
-  const blank = newSheet(pack.sheet, name, pack.id).sheet;
-  const created = createCharacter(pack.sheet, { ...blank, background: persona }, { owner: member.id });
+  // Rolled as a new character is, biased toward the concept when the lane read one (the
+  // reference's `build_sheet_from_persona`), the persona as its background or notes.
+  const made = conceptCharacterSheet(pack.sheet, pack.source, context.random, { name, system: pack.id, persona: personaParts(split, name), concept: options.concept ?? null });
+  const created = createCharacter(pack.sheet, made.sheet, { owner: member.id, creationMethod: made.method });
   if (!created.ok) return refusal("sheet_refused", { detail: created.code });
 
   const seatingDocument = documents.get(room, SEATING_TYPE, SEATING_ID);

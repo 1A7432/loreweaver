@@ -35,6 +35,18 @@ export {
   updateSheet,
 } from "./character.ts";
 export {
+  applyConcept,
+  type CharacterConcept,
+  conceptCharacterSheet,
+  type ConceptCharacterInput,
+  type ConceptMethod,
+  type ConceptPersona,
+  type ConceptSheet,
+  conceptText,
+  ROLE_FIELDS,
+  SIGNATURE_SKILL_FLOOR,
+} from "./concept.ts";
+export {
   characterOf,
   claim,
   CLAIMABLE_ID,

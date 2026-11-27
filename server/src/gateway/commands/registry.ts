@@ -22,6 +22,7 @@ import { COMMANDS_CATALOG } from "./catalog.ts";
 import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCommands } from "./engine/checks.ts";
 import { audioCommand, layerCommand } from "./engine/audio.ts";
 import { importCommand, uploadsCommand } from "./engine/files.ts";
+import { type AuthoringDeps, GENCHAR_PER_HOUR, gencharCommand } from "./engine/genchar.ts";
 import { packCommand, panelsCommand, skillCommand } from "./engine/packs.ts";
 import { reportCommand } from "./engine/report.ts";
 import { imagegenCommand, type KeyAdmin, keyCommand, modelCommand } from "./engine/admin.ts";
@@ -33,6 +34,8 @@ import { argumentTooLong, inlineRolls, MAX_COMMAND_ARG_CHARS, MAX_INLINE_ROLLS, 
 import { compact, validateArgs } from "./schema.ts";
 import type { ModelSettings } from "../model_settings.ts";
 import { RoomPacks } from "../packs.ts";
+import { HourlyQuota } from "../rate_limit.ts";
+import { REVIEW_OFF, type ReviewFilter } from "../review.ts";
 import type { Uploads } from "../uploads.ts";
 import {
   type Args,
@@ -68,6 +71,8 @@ export interface RegistryOptions {
   readonly models?: ModelSettings | null;
   /** The access keys (`key`); absent: that command is unavailable. */
   readonly keys?: KeyAdmin | null;
+  /** The operator's word filter, for what the authoring lane writes on a new sheet (`genchar`, a character import); default: off. */
+  readonly review?: ReviewFilter;
 }
 
 /** What a line a player typed turned out to be. */
@@ -109,6 +114,8 @@ export class CommandRegistry {
     this.#modules = options.modules ?? null;
     const gate = new ResetGate(options.resetConfirmMs);
     const packs = options.packs ?? RoomPacks.none();
+    // One quota for the server's concept calls: `genchar` and a character import share it.
+    const authoring: AuthoringDeps = { models: options.models ?? null, quota: new HourlyQuota(GENCHAR_PER_HOUR), review: options.review ?? REVIEW_OFF, skills: packs.skillRegistry };
     this.#engine = Object.freeze([
       rollCommand,
       hiddenRollCommand,
@@ -118,6 +125,7 @@ export class CommandRegistry {
       sheetCommand,
       renameCommand,
       newCharacterCommand,
+      gencharCommand(authoring),
       pcCommand,
       recapCommand,
       loreCommand,
@@ -132,7 +140,7 @@ export class CommandRegistry {
       resetCommand(gate),
       saveCommand,
       uploadsCommand(options.uploads ?? null),
-      importCommand(options.uploads ?? null, options.recall ?? null, packs),
+      importCommand(options.uploads ?? null, options.recall ?? null, packs, authoring),
       packCommand(packs),
       skillCommand(packs),
       panelsCommand(packs),

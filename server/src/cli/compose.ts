@@ -116,7 +116,7 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
         },
       },
     },
-    commands: (modules, keys) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null, packs: roomPacks, models: parts.modelSettings ?? null, keys }),
+    commands: (modules, keys) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null, packs: roomPacks, models: parts.modelSettings ?? null, keys, review: parts.review }),
     runTurn: runKeeperTurn,
     recordPlayerAction,
     defaultLocale: settings.locale,

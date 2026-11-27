@@ -66,3 +66,41 @@ export class RateLimiter {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// An hourly quota: for an action that costs a model call a member can trigger at will
+// (`genchar`, a player's card import). A sliding hour per key; time is passed in by the
+// caller (the server's clock), so a test steps it by hand. The table of keys is capped like
+// the buckets above: past `MAX_QUOTA_KEYS`, keys with nothing left in the hour are dropped,
+// and when none has, a key not yet tracked is refused until one has.
+// ---------------------------------------------------------------------------
+
+/** Keys an hourly quota tracks at once. */
+export const MAX_QUOTA_KEYS = 4096;
+/** The window of an hourly quota. */
+export const QUOTA_WINDOW_MS = 3_600_000;
+
+export class HourlyQuota {
+  readonly #perHour: number;
+  readonly #spent = new Map<string, number[]>();
+
+  constructor(perHour: number) {
+    this.#perHour = perHour;
+  }
+
+  /** Spend one of `key`'s uses this hour; false when none is left. */
+  take(key: string, now: number): boolean {
+    const recent = (this.#spent.get(key) ?? []).filter((at) => now - at < QUOTA_WINDOW_MS);
+    if (recent.length >= this.#perHour) {
+      this.#spent.set(key, recent);
+      return false;
+    }
+    if (!this.#spent.has(key) && this.#spent.size >= MAX_QUOTA_KEYS) {
+      for (const [other, times] of this.#spent) if (times.every((at) => now - at >= QUOTA_WINDOW_MS)) this.#spent.delete(other);
+      if (this.#spent.size >= MAX_QUOTA_KEYS) return false;
+    }
+    recent.push(now);
+    this.#spent.set(key, recent);
+    return true;
+  }
+}

@@ -5,10 +5,15 @@
 // `import` is iron rule 3's card split at the command layer: `as: "world"` is the admin's and
 // calls `importWorld`, the one path by which a card's world machinery reaches a room;
 // `as: "character"` is any player's and calls `importCharacter`, which writes a character
-// and a seat and nothing else, whatever the card holds. The card file itself never becomes
+// and a seat and nothing else, whatever the card holds. Its sheet is rolled for the room's
+// rule system and biased toward the concept the authoring lane reads from the card's persona
+// (the reference's `build_sheet_from_persona`; `genchar.ts` holds the shared step, its cap
+// and its review): one model call in `prepare`, so a character import does not wait for the
+// room's lock. Without a model, over the cap, or with an answer the lane cannot use, the
+// sheet is rolled without a concept — the reference's fallback — and the caller is told why. The card file itself never becomes
 // table media (see `../../uploads.ts`): the table hears one line for a world import — that a
 // world was imported, and its name — and nothing at all of a character card.
-import { importCharacter, importWorld, type CardImportRefusal, type LeftBehind } from "../../../agent/card_import.ts";
+import { characterPersona, importCharacter, importWorld, type CardImportRefusal, type LeftBehind } from "../../../agent/card_import.ts";
 import { forgetItems, indexLoreEntries, type RecallDeps } from "../../../agent/recall.ts";
 import { CardError, parseCard, type ImportedCard } from "../../../core/card/index.ts";
 import { MAX_CHARACTER_NAME_CHARS } from "../../../core/characters/index.ts";
@@ -16,8 +21,10 @@ import type { RoomPacks } from "../../packs.ts";
 import type { Uploads } from "../../uploads.ts";
 import { firstWord } from "../parse.ts";
 import { BOOLEAN, compact, object, oneOf, text } from "../schema.ts";
-import { type CommandCall, type CommandSpec, type Done, isRefused, refuse, type Refused } from "../types.ts";
+import { type Args, type CommandCall, type CommandSpec, type Done, isRefused, refuse, type Refused } from "../types.ts";
+import { type AuthoringDeps, type ConceptRead, readConcept, reviewConcept } from "./genchar.ts";
 import { OFF_WORDS, ON_WORDS } from "./room.ts";
+import { tableCharacterNames } from "../support.ts";
 
 const HASH = /^[0-9a-f]{64}$/u;
 const WORLD_WORDS: ReadonlySet<string> = new Set(["world", "世界"]);
@@ -81,9 +88,10 @@ function partsText(call: CommandCall, parts: readonly LeftBehind[]): string {
   return parts.map((part) => call.say("import.part_count", { part: call.say(`import.part.${part.part}`), count: part.count })).join(call.say("import.list_separator"));
 }
 
-/** What the import reads: the caller's card, parsed. */
+/** What the import reads: the caller's card, parsed (and, for a character, the concept read from its persona). */
 interface Prepared {
   readonly card: ImportedCard;
+  readonly concept?: ConceptRead;
 }
 
 /** The first whitespace-separated word of `text`, case kept, and the rest. */
@@ -114,7 +122,7 @@ async function packCard(packs: RoomPacks, call: CommandCall, packId: string, pat
  * pack enabled in this room ships (`pack` and `card`, its path in the pack) — as the room's
  * world (admin) or the caller's character.
  */
-export function importCommand(uploads: Uploads | null, recall: RecallDeps | null, packs: RoomPacks | null = null): CommandSpec {
+export function importCommand(uploads: Uploads | null, recall: RecallDeps | null, packs: RoomPacks | null = null, authoring: AuthoringDeps | null = null): CommandSpec {
   return {
     id: "import",
     source: "engine",
@@ -123,6 +131,8 @@ export function importCommand(uploads: Uploads | null, recall: RecallDeps | null
     text: { en: ["import"], zh: ["import", "导入"] },
     role: "player",
     adminWhen: (args) => args.as === "world",
+    // A character import may wait on the model (the concept); a world import waits on nothing.
+    unlocked: (args) => args.as === "character" && authoring !== null,
     available: () => (uploads === null && (packs === null || packs.installed().length === 0) ? NO_MEDIA : true),
     parseText(rest) {
       const [kind, after] = firstWord(rest);
@@ -141,35 +151,50 @@ export function importCommand(uploads: Uploads | null, recall: RecallDeps | null
       return compact({ pack: first.toLowerCase(), card, as, name: name === "" ? undefined : name });
     },
     async prepare(call, args): Promise<Prepared | Refused> {
-      const member = call.context.who.member;
-      if (member === null) return refuse("no_member");
-      const fromPack = args.pack !== undefined || args.card !== undefined;
-      if (fromPack === (args.file !== undefined)) return refuse("usage");
-      if (fromPack) {
-        if (packs === null) return refuse("unknown_pack", { id: String(args.pack ?? "") });
-        if (args.pack === undefined) return refuse("missing_arg", { path: "pack" });
-        if (args.card === undefined) return refuse("missing_arg", { path: "card" });
-        return packCard(packs, call, args.pack as string, args.card as string);
-      }
-      if (uploads === null) return refuse(NO_MEDIA);
-      const hash = args.file as string;
-      if (!HASH.test(hash)) return refuse("invalid_arg", { path: "file" });
-      const file = await uploads.importFile(call.context.room, member.id, hash);
-      // Never uploaded, uploaded by somebody else, or gone with a reset: one answer.
-      if (file === undefined) return refuse("not_uploaded");
-      try {
-        return { card: parseCard(file.bytes, file.record.name) };
-      } catch (error) {
-        if (error instanceof CardError) return refuse("not_a_card", { code: error.code });
-        throw error;
-      }
+      const read = await readCard(call, args);
+      if (isRefused(read) || args.as !== "character" || authoring === null) return read;
+      return { ...read, ...(await personaConcept(call, authoring, read.card, args.name as string | undefined)) };
     },
     run(call, args, prepared): Done | Refused {
       if (isRefused(prepared)) return prepared;
-      const { card } = prepared as Prepared;
-      return args.as === "world" ? world(call, card, recall) : character(call, card, args.name as string | undefined);
+      const { card, concept } = prepared as Prepared;
+      return args.as === "world" ? world(call, card, recall) : character(call, card, args.name as string | undefined, concept ?? null, authoring);
     },
   };
+
+  async function readCard(call: CommandCall, args: Args): Promise<Prepared | Refused> {
+    const member = call.context.who.member;
+    if (member === null) return refuse("no_member");
+    const fromPack = args.pack !== undefined || args.card !== undefined;
+    if (fromPack === (args.file !== undefined)) return refuse("usage");
+    if (fromPack) {
+      if (packs === null) return refuse("unknown_pack", { id: String(args.pack ?? "") });
+      if (args.pack === undefined) return refuse("missing_arg", { path: "pack" });
+      if (args.card === undefined) return refuse("missing_arg", { path: "card" });
+      return packCard(packs, call, args.pack as string, args.card as string);
+    }
+    if (uploads === null) return refuse(NO_MEDIA);
+    const hash = args.file as string;
+    if (!HASH.test(hash)) return refuse("invalid_arg", { path: "file" });
+    const file = await uploads.importFile(call.context.room, member.id, hash);
+    // Never uploaded, uploaded by somebody else, or gone with a reset: one answer.
+    if (file === undefined) return refuse("not_uploaded");
+    try {
+      return { card: parseCard(file.bytes, file.record.name) };
+    } catch (error) {
+      if (error instanceof CardError) return refuse("not_a_card", { code: error.code });
+      throw error;
+    }
+  }
+}
+
+/** The concept for a character import: none when the room has no rule system or the import would be refused anyway. */
+async function personaConcept(call: CommandCall, authoring: AuthoringDeps, card: ImportedCard, name: string | undefined): Promise<{ concept?: ConceptRead }> {
+  const pack = call.context.pack;
+  const persona = characterPersona(card, name);
+  // A name already at the table is refused by the import: no call for it.
+  if (pack === null || persona === null || tableCharacterNames(call, null).has(persona.name.toLowerCase())) return {};
+  return { concept: await readConcept(call, authoring, pack, persona, "import") };
 }
 
 function world(call: CommandCall, card: ImportedCard, recall: RecallDeps | null): Done | Refused {
@@ -216,12 +241,21 @@ function world(call: CommandCall, card: ImportedCard, recall: RecallDeps | null)
   return done;
 }
 
-function character(call: CommandCall, card: ImportedCard, name: string | undefined): Done | Refused {
-  const result = importCharacter(call.context, card, name === undefined ? {} : { name });
+/** Why the sheet was rolled without reading the persona, in the caller's language. */
+function conceptSkipped(call: CommandCall, status: Exclude<ConceptRead["status"], "applied">): string {
+  if (status === "no_model") return call.say("import.concept_no_model");
+  if (status === "rate_limited") return call.say("import.concept_rate_limited");
+  return call.say("import.concept_failed");
+}
+
+function character(call: CommandCall, card: ImportedCard, name: string | undefined, read: ConceptRead | null, authoring: AuthoringDeps | null): Done | Refused {
+  const concept = read?.status === "applied" && authoring !== null ? reviewConcept(call, authoring, read.concept) : null;
+  const result = importCharacter(call.context, card, { ...(name === undefined ? {} : { name }), concept });
   if (!result.ok) return cardRefusal(result);
   const label = call.context.services.packs.get(result.pack)?.sheet.shape?.label ?? "";
   const lines = [call.say("import.character_done", { name: result.name, system: label === "" ? result.pack : label })];
+  if (read !== null && read.status !== "applied") lines.push(conceptSkipped(call, read.status));
   if (result.worldCard) lines.push(call.say("import.character_world_card"));
   if (result.stripped.length > 0) lines.push(call.say("import.stripped", { parts: partsText(call, result.stripped) }));
-  return { text: lines.join("\n"), data: result };
+  return { text: lines.join("\n"), data: { ...result, concept: read?.status ?? "none" } };
 }

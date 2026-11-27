@@ -4,7 +4,9 @@
 // - the Keeper's context has ONE assembler (`agent/prompt/`) and ONE caller, the turn
 //   engine — nothing else builds or extends what the Keeper sees;
 // - every other call site is a scoped actor (its own prompt from its own record — iron
-//   rule 3), the chronicle fold, or plumbing that forwards a call unchanged;
+//   rule 3), the chronicle fold, an authoring lane (outside any turn: content for a
+//   person to keep, from that person's own text), or plumbing that forwards a call
+//   unchanged;
 // - `core/` makes no model call at all (iron rule 1).
 //
 // A new `.chat(` call site fails this test until it is listed here with its lane — the
@@ -16,7 +18,7 @@ import { join, relative, sep } from "node:path";
 
 const SRC = join(import.meta.dir, "..", "..", "src");
 
-type Lane = "keeper" | "scoped-actor" | "memory" | "plumbing";
+type Lane = "keeper" | "scoped-actor" | "memory" | "authoring" | "plumbing";
 
 const MODEL_CALL_LANES: ReadonlyMap<string, { readonly lane: Lane; readonly what: string }> = new Map([
   ["agent/turn/engine.ts", { lane: "keeper", what: "the Keeper's turn: tool rounds, check rounds, the finalizer" }],
@@ -24,6 +26,7 @@ const MODEL_CALL_LANES: ReadonlyMap<string, { readonly lane: Lane; readonly what
   ["agent/lanes/scribe.ts", { lane: "scoped-actor", what: "the Scribe's bookkeeping pass" }],
   ["agent/lanes/director.ts", { lane: "scoped-actor", what: "the Stage Director" }],
   ["agent/lanes/fold.ts", { lane: "memory", what: "the chronicle fold" }],
+  ["agent/lanes/genchar.ts", { lane: "authoring", what: "a character concept from a persona (`genchar`, a player's card import); no turn, the Keeper's client" }],
   ["infra/llm/retry.ts", { lane: "plumbing", what: "the retry layer" }],
   ["infra/llm/index.ts", { lane: "plumbing", what: "the configured client" }],
 ]);

@@ -4,6 +4,7 @@
 // the line and the call end with identical outcomes.
 import { describe, expect, test } from "bun:test";
 
+import { ScriptedLLM } from "../../../src/infra/llm/index.ts";
 import { jsonFile, plainCard, sha256, upload } from "../card_files.ts";
 import { ADA, ADMIN, bench, type Bench, type Member, ok, ROOM } from "./bench.ts";
 import { seedChronicle, seedHabits, seedLore, seedNpc, seedRoster, seedSounds, seedVariables } from "./seed.ts";
@@ -18,6 +19,8 @@ interface Case {
   readonly media?: boolean;
   /** The bench has model settings and keys (`model`, `imagegen`, `key`). */
   readonly admin?: boolean;
+  /** What the model answers (`genchar`). */
+  readonly model?: string;
 }
 
 const CARD = jsonFile(plainCard("Mira"));
@@ -40,6 +43,12 @@ const CASES: readonly Case[] = [
   { line: ".st 力量60 HP-2", id: "sheet", args: { op: "set", writes: [{ name: "力量", op: "=", value: "60" }, { name: "HP", op: "-=", value: "2" }] }, setup: withCharacter },
   { line: ".nn Alicia", id: "rename", args: { name: "Alicia" }, setup: withCharacter },
   { line: ".coc Alice", id: "new_character", args: { system: "coc7", name: "Alice" } },
+  {
+    line: ".genchar coc7 Ada Lin | a retired sea captain, stubborn, good with knots and a rifle",
+    id: "genchar",
+    args: { system: "coc7", name: "Ada Lin", description: "a retired sea captain, stubborn, good with knots and a rifle" },
+    model: '{"occupation": "Sea captain", "attribute_emphasis": ["CON", "STR"], "signature_skills": ["rifle", "spot hidden"], "backstory": "Thirty years at sea."}',
+  },
   { line: ".pc claim Holmes", id: "pc", args: { op: "claim", name: "Holmes" }, setup: seedRoster },
   { line: ".recap", id: "recap", args: {}, setup: seedChronicle },
   { line: ".lore add Town | A quiet place", id: "lore", args: { op: "add", title: "Town", content: "A quiet place" }, member: ADMIN },
@@ -78,8 +87,9 @@ describe("text form and structured form", () => {
   for (const item of CASES) {
     test(`${item.id}: ${item.line}`, async () => {
       const member = item.member ?? ADA;
-      const text = bench({ seed: item.id, media: item.media === true, admin: item.admin === true });
-      const call = bench({ seed: item.id, media: item.media === true, admin: item.admin === true });
+      const model = (): ScriptedLLM | undefined => (item.model === undefined ? undefined : new ScriptedLLM(() => item.model as string));
+      const text = bench({ seed: item.id, media: item.media === true, admin: item.admin === true, ...(item.model === undefined ? {} : { model: model() }) });
+      const call = bench({ seed: item.id, media: item.media === true, admin: item.admin === true, ...(item.model === undefined ? {} : { model: model() }) });
       await item.setup?.(text);
       await item.setup?.(call);
       expect(text.registry.textCommand(text.context(member, { newTurn: false }), item.line, "en")).toEqual({ id: item.id, args: item.args });

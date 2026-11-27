@@ -42,6 +42,8 @@ function member(key: keyof typeof KEYS, role: Member["role"]): Member {
 
 async function say(b: RoomBench, wire: Wire, rid: string, text: string): Promise<ServerFrame | undefined> {
   wire.receive({ type: "input", rid, text });
+  // A character import does not queue behind the room's lock (it may wait on the model): wait for its answer itself.
+  await wire.until((frame) => frame.type === "result" && frame.rid === rid);
   await b.settled();
   return resultFor(wire.sent, rid);
 }

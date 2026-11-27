@@ -7,7 +7,7 @@
 import type { DiceData } from "loreweaver-protocol/v3";
 
 import type { RoomContext } from "../../../agent/context.ts";
-import { createCharacter, switchCharacter, type SheetWrite, updateSheet } from "../../../core/characters/index.ts";
+import { type Character, createCharacter, switchCharacter, type SheetWrite, updateSheet } from "../../../core/characters/index.ts";
 import {
   actingCombatant,
   addCombatant,
@@ -25,7 +25,7 @@ import {
 import { renderRoll } from "../../../core/dice/index.ts";
 import { type CheckOutcome, favorModifiers, type PerformedCheck, performCheck, type Resolution } from "../../../core/resolution/index.ts";
 import { commandWord, type CommandBinding, type RulePack, subsystemName, tableName } from "../../../core/rulepacks/index.ts";
-import { displayName, generateCharacter, resolveName, type Sheet } from "../../../core/sheets/index.ts";
+import { displayName, generateCharacter, resolveName, type Sheet, type SheetViolation } from "../../../core/sheets/index.ts";
 import { foldCase, stripSpace } from "../../../core/sheets/text.ts";
 import { findTable, lookupStat, runSubsystem, type SubsystemSpec, type TableDrawSpec } from "../../../core/subsystems/index.ts";
 import { compact, integer, object, oneOf, type ObjectSchema, type Schema, text, BOOLEAN } from "../schema.ts";
@@ -759,6 +759,48 @@ function newCharacterId(call: CommandCall): string {
   return `ch-${call.context.services.clock.id()}`;
 }
 
+/** A new character made and seated: what `seatNewCharacter` did. */
+export interface NewCharacter {
+  readonly id: string;
+  readonly character: Character;
+  readonly violations: readonly SheetViolation[];
+  readonly events: CommandEvent[];
+}
+
+/**
+ * Make `sheet` (a new sheet of `pack`'s system) the caller's character and seat it for them:
+ * validated as a creation, owned by the caller, seated in place of whatever they played (that
+ * character stays in the room, unseated). The table is told in one line; a room with no rule
+ * system takes this one. The one path every new character of a member takes — `new_character`
+ * and `genchar`.
+ */
+export function seatNewCharacter(call: CommandCall, pack: RulePack, sheet: Sheet, creationMethod: string): NewCharacter | Refused {
+  const member = call.context.who.member;
+  if (member === null || memberIdOf(call.context) === null) return refuse("no_member");
+  if (tableCharacterNames(call, null).has(sheet.name.trim().toLowerCase())) return refuse("name_taken", { name: sheet.name.trim() });
+  const created = createCharacter(pack.sheet, sheet, { owner: member.id, creationMethod });
+  if (!created.ok) return refuse("sheet_refused", { code: created.code });
+  const seats = seating(call);
+  if (isRefused(seats)) return seats;
+  const id = newCharacterId(call);
+  const seated = switchCharacter(seats, member.id, id, member.name);
+  if (!seated.ok) return refuse("seat_refused", { code: seated.code });
+  saveCharacter(call, id, created.data);
+  saveSeating(call, seated.data);
+  const events: CommandEvent[] = [
+    { kind: "narrative", data: { speaker: "system", text: call.tell("character.created", { member: member.name, name: created.data.sheet.name, system: pack.id }), format: "plain" } },
+  ];
+  // A room that has no rule system takes the one its first character was made for: a
+  // table that rolled CoC investigators and then could not make a check (seen in the
+  // first hands-on run of the terminal client) is not a state anyone chose. An admin
+  // changes it with `rule system`; a room that already has one is left alone.
+  if (call.context.pack === null) {
+    call.context.writer.statePut(ROOM_RULE_PACK, pack.id);
+    events.push({ kind: "narrative", data: { speaker: "system", text: call.tell("rule.system_event", { system: pack.id }), format: "plain" } });
+  }
+  return { id, character: created.data, violations: created.violations, events };
+}
+
 export const newCharacterCommand: CommandSpec = {
   id: "new_character",
   source: "engine",
@@ -782,29 +824,11 @@ export const newCharacterCommand: CommandSpec = {
     const name = ((args.name as string | undefined) ?? call.say("character.default_name")).trim();
     if (tableCharacterNames(call, null).has(name.toLowerCase())) return refuse("name_taken", { name });
     const generated = generateCharacter(pack.sheet, call.context.random, { name, system: pack.id });
-    const created = createCharacter(pack.sheet, generated.sheet, { owner: member.id, creationMethod: "rolled" });
-    if (!created.ok) return refuse("sheet_refused", { code: created.code });
-    const seats = seating(call);
-    if (isRefused(seats)) return seats;
-    const id = newCharacterId(call);
-    const seated = switchCharacter(seats, member.id, id, member.name);
-    if (!seated.ok) return refuse("seat_refused", { code: seated.code });
-    saveCharacter(call, id, created.data);
-    saveSeating(call, seated.data);
-    const events: CommandEvent[] = [
-      { kind: "narrative", data: { speaker: "system", text: call.tell("character.created", { member: member.name, name: created.data.sheet.name, system: pack.id }), format: "plain" } },
-    ];
-    // A room that has no rule system takes the one its first character was made for: a
-    // table that rolled CoC investigators and then could not make a check (seen in the
-    // first hands-on run of the terminal client) is not a state anyone chose. An admin
-    // changes it with `rule system`; a room that already has one is left alone.
-    if (call.context.pack === null) {
-      call.context.writer.statePut(ROOM_RULE_PACK, pack.id);
-      events.push({ kind: "narrative", data: { speaker: "system", text: call.tell("rule.system_event", { system: pack.id }), format: "plain" } });
-    }
+    const made = seatNewCharacter(call, pack, generated.sheet, "rolled");
+    if (isRefused(made)) return made;
     return {
-      data: { id, name: created.data.sheet.name, system: pack.id, violations: created.violations.map((violation) => violation.code) },
-      events,
+      data: { id: made.id, name: made.character.sheet.name, system: pack.id, violations: made.violations.map((violation) => violation.code) },
+      events: made.events,
     };
   },
 };

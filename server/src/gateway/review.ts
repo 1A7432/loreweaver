@@ -2,9 +2,11 @@
 //
 // Every table-visible text the engine produces passes through here exactly once, at the
 // moment it is final: the Keeper's narrative after its variable blocks and text tool calls
-// are stripped (§12 3.2 step 11c), and a module's table fact before it is published as a
-// system narrative event (steps 2 and 13). Two entry points, `reviewNarrative` and
-// `reviewFact`, so a call site says which of the two it is; both run the same filter.
+// are stripped (§12 3.2 step 11c), a module's table fact before it is published as a
+// system narrative event (steps 2 and 13), and the text the authoring lane wrote for a new
+// character before it is stored (`genchar`, a player's card import). Three entry points,
+// `reviewNarrative`, `reviewFact` and `reviewAuthored`, so a call site says which it is;
+// all run the same filter.
 //
 // Ported from the reference's `gateway/ops.py` `Censor`:
 //   - it ships OFF: no built-in word list. A filter built from nothing is an explicit no-op,
@@ -221,5 +223,13 @@ export function reviewNarrative(filter: ReviewFilter, room: ReviewRoom, text: st
 
 /** A module's table fact, just before it is published as a system narrative event. */
 export function reviewFact(filter: ReviewFilter, room: ReviewRoom, text: string, locale: string): ReviewResult {
+  return review(filter, room, text, locale);
+}
+
+/**
+ * A free-text field the authoring lane wrote for a new character (`genchar`, a player's card
+ * import: the occupation, the backstory, the notes), before it is stored on the sheet.
+ */
+export function reviewAuthored(filter: ReviewFilter, room: ReviewRoom, text: string, locale: string): ReviewResult {
   return review(filter, room, text, locale);
 }

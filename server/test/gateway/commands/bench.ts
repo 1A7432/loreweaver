@@ -26,7 +26,8 @@ import { Keystore } from "../../../src/net/keystore.ts";
 import { Uploads } from "../../../src/gateway/uploads.ts";
 import type { Clock } from "../../../src/infra/ids.ts";
 import { type MediaLimits, MediaStore } from "../../../src/infra/media/index.ts";
-import { ScriptedLLM } from "../../../src/infra/llm/index.ts";
+import { type LLMClient, ScriptedLLM } from "../../../src/infra/llm/index.ts";
+import type { ReviewFilter } from "../../../src/gateway/review.ts";
 import { openDatabase } from "../../../src/infra/runtime/sqlite.ts";
 import { Store } from "../../../src/infra/store.ts";
 
@@ -85,6 +86,12 @@ export interface BenchOptions {
   readonly recall?: RecallDeps;
   /** Model settings (an OpenAI Keeper, scripted clients) and an in-memory keystore with one admin key, behind `model`, `imagegen` and `key`. */
   readonly admin?: boolean;
+  /** The model every lane of `services.models` talks to (`genchar`, a character import); default: one with no reply. */
+  readonly model?: LLMClient;
+  /** The operator's word filter for the command table; default: off. */
+  readonly review?: ReviewFilter;
+  /** Model settings with no model configured at all (not with `admin`). */
+  readonly noModel?: boolean;
 }
 
 /** The Keeper's key in an `admin` bench's settings. */
@@ -115,7 +122,7 @@ export function bench(options: BenchOptions = {}): Bench {
     .register(sceneDocument)
     .register(keeperNotesDocument)
     .register(npcIntentsDocument);
-  const llm = new ScriptedLLM([]);
+  const llm = options.model ?? new ScriptedLLM([]);
   const reports: string[] = [];
   const services: Services = {
     store,
@@ -138,6 +145,7 @@ export function bench(options: BenchOptions = {}): Bench {
   let models: ModelSettings | null = null;
   let keystore: Keystore | null = null;
   let keys: KeyAdmin | null = null;
+  if (options.noModel === true) models = new ModelSettings({ lanes: {} }, new ServerSettings(db));
   if (options.admin === true) {
     models = new ModelSettings({ llm: { preset: "openai", apiKey: ENV_KEY, model: "gpt-5.5" }, lanes: {} }, new ServerSettings(db), { llm: () => ({ client: new ScriptedLLM([]) }), image: () => ({ generate: () => Promise.reject(new Error("no pictures in tests")) }) });
     keystore = new Keystore();
@@ -151,6 +159,7 @@ export function bench(options: BenchOptions = {}): Bench {
     modules: options.modules ?? null,
     uploads,
     recall: options.recall ?? null,
+    ...(options.review === undefined ? {} : { review: options.review }),
     ...(options.resetConfirmMs === undefined ? {} : { resetConfirmMs: options.resetConfirmMs }),
   });
   let seeds = 0;

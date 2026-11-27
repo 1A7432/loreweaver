@@ -24,7 +24,7 @@ import type { RateLimitSettings } from "../../src/gateway/rate_limit.ts";
 import type { RoomPacks } from "../../src/gateway/packs.ts";
 import { REVIEW_OFF } from "../../src/gateway/review.ts";
 import { Uploads } from "../../src/gateway/uploads.ts";
-import { type Responder, type ScriptedReply, ScriptedLLM } from "../../src/infra/llm/index.ts";
+import { type LLMClient, type Responder, type ScriptedReply, ScriptedLLM } from "../../src/infra/llm/index.ts";
 import { DEFAULT_MEDIA_LIMITS, type MediaLimits, MediaStore } from "../../src/infra/media/index.ts";
 import { openDatabase } from "../../src/infra/runtime/sqlite.ts";
 import { spawnWorker, type WorkerHandle } from "../../src/infra/runtime/worker.ts";
@@ -130,6 +130,8 @@ export interface BenchOptions {
   readonly packs?: (media: MediaStore | null) => RoomPacks;
   /** The model lanes at run time (`model`, `imagegen`, `admin/model`); each piece of work pins a snapshot. */
   readonly models?: ModelSettings;
+  /** The Keeper's model client (`genchar`, a character import); default: one with no reply. */
+  readonly keeperModel?: LLMClient;
 }
 
 export const LANES_ON: LaneSettings = { scribe: true, director: true, directorSettings: { imagesEnabled: false, maxImages: 0, pregenPerBeat: 0 } };
@@ -168,7 +170,7 @@ export class RoomBench {
       store: this.store,
       // With packs installed, their rule systems join the built-ins as the server's would.
       packs: packs === null ? new RulePackRegistry(builtInPacks()) : packs.ruleSystemRegistry,
-      models: { keeper: unused, npc: unused, scribe: this.scribe, director: this.director, memory: unused },
+      models: { keeper: options.keeperModel ?? unused, npc: unused, scribe: this.scribe, director: this.director, memory: unused },
       clock: testClock(),
       report: (_room, text) => {
         this.reports.push(text);
