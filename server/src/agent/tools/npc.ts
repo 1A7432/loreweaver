@@ -309,7 +309,7 @@ const EFFORTS: ReadonlySet<string> = new Set<NpcEffort>(["low", "medium", "high"
 export const speakAsNpcTool = defineTool({
   name: "speak_as_npc",
   description:
-    "Delegate one NPC's in-character line to their knowledge-scoped AI sub-actor. The sub-actor sees ONLY this NPC's own persona/knowledge -- never the keeper pool or other NPCs' secrets -- so it structurally cannot leak or act on information this NPC doesn't have. Weave the returned line into your narration yourself: your narration is all you will remember of this scene next turn, even though the table also sees the line as the NPC's own message. The actor never rolls dice or invents world facts, so adjudicate any resulting mechanics via the normal dice/check tools.",
+    "Delegate one NPC's in-character line to their knowledge-scoped AI sub-actor. The sub-actor sees ONLY this NPC's own persona/knowledge -- never the keeper pool or other NPCs' secrets -- so it structurally cannot leak or act on information this NPC doesn't have. The table reads the returned line at once, as the NPC's own message, BEFORE your narration: do not repeat its words there. Narrate what surrounds and follows it -- the gesture, the pause, what the others see, what happens next. The line stays in your history beside that turn's narration, so you will remember what was said. The actor never rolls dice or invents world facts, so adjudicate any resulting mechanics via the normal dice/check tools.",
   params: {
     npc: param.string("The NPC's name or id."),
     situation: param.string("What is happening right now, from this NPC's point of view."),
@@ -360,7 +360,7 @@ export const speakAsNpcTool = defineTool({
     }
     if (line === "") return { text: `${name} (${mood}) says nothing.${intentNote}` };
     return {
-      text: `${name} (${mood}): "${line}"${intentNote}`,
+      text: `${name} (${mood}): "${line}"${intentNote}\n(The table has already read this as ${name}'s own message. Do not repeat its words in your narration.)`,
       events: [{ kind: "narrative", data: { speaker: "npc", name, text: line, format: "plain" } }],
     };
   },

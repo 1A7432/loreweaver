@@ -41,6 +41,12 @@ export interface PastExchange {
   readonly speaker: string;
   readonly playerText: string;
   readonly keeperReply: string;
+  /**
+   * What NPCs said in that turn as their own messages (`speak_as_npc`), in order. The table
+   * read them before the reply, and the reply does not repeat them: without them here the
+   * Keeper would not know next turn what its NPCs said.
+   */
+  readonly npcLines?: readonly { readonly name: string; readonly text: string }[];
 }
 
 /** The world card's own standing directives, as stored at import. */

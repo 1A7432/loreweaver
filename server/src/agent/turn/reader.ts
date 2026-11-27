@@ -137,6 +137,8 @@ function narrativeOf(data: unknown): { speaker: string; name: string; text: stri
 export function readHistory(store: Store, room: string, currentTurn: number, throughTurn: number): HistoryReading {
   const players = new Map<number, Line>();
   const replies = new Map<number, string>();
+  /** Per turn, what NPCs said as their own messages, oldest first. */
+  const spoken = new Map<number, Line[]>();
   let before = store.room(room).head + 1;
   let scanned = 0;
   let passedThrough = false;
@@ -169,6 +171,11 @@ export function readHistory(store: Store, room: string, currentTurn: number, thr
         if (throughTurn > 0 && turn <= throughTurn) passedThrough = true;
       } else if (line.speaker === "kp" && turn < currentTurn && !replies.has(turn)) {
         replies.set(turn, line.text);
+      } else if (line.speaker === "npc" && turn < currentTurn && line.text.trim() !== "") {
+        // The scan runs newest first: each older line goes in front.
+        const lines = spoken.get(turn) ?? [];
+        lines.unshift({ name: line.name, text: line.text });
+        spoken.set(turn, lines);
       }
     }
     scanned += page.length;
@@ -187,10 +194,12 @@ export function readHistory(store: Store, room: string, currentTurn: number, thr
   const all: PastExchange[] = [];
   for (const [turn, reply] of replies) {
     const player = players.get(turn);
-    if (player !== undefined) all.push({ turn, speaker: player.name, playerText: player.text, keeperReply: reply });
+    const npcLines = spoken.get(turn);
+    const said = npcLines === undefined ? {} : { npcLines };
+    if (player !== undefined) all.push({ turn, speaker: player.name, playerText: player.text, keeperReply: reply, ...said });
     // A reply with no player line is a narrate-now turn — unless the scan stopped before
     // reaching that turn's line, which only a cut scan can do.
-    else if (reachedStart || turn > throughTurn) all.push({ turn, speaker: "", playerText: FACTS_TURN_LINE, keeperReply: reply });
+    else if (reachedStart || turn > throughTurn) all.push({ turn, speaker: "", playerText: FACTS_TURN_LINE, keeperReply: reply, ...said });
   }
   all.sort((a, b) => a.turn - b.turn);
   const history = all.filter((exchange) => throughTurn <= 0 || exchange.turn > throughTurn);

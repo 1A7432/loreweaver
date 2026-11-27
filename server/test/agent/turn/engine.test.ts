@@ -107,6 +107,20 @@ describe("tool rounds", () => {
     expect(second.at(-1)).toMatchObject({ role: "tool", cacheBreakpoint: true });
   });
 
+  test("next turn the Keeper still knows what its NPCs said: their lines are in the history, before the reply that did not repeat them", async () => {
+    const h = new Harness();
+    addNpc(h, "mara", "Mara", "SECRET_MARA_SMUGGLES");
+    h.npc.script(async () => '{"dialogue": "The boat left at dawn.", "action_intent": "", "mood": "calm"}');
+    h.keeper.script([{ toolCalls: [toolCall("speak_as_npc", { npc: "Mara", situation: "Asked about the boat." })] }, "She does not look up from the nets.", "The tide turns."]);
+    await h.turn("I ask about the boat.");
+    // The tool's answer tells the Keeper the table has the line already.
+    const answer = h.keeper.requests[1]?.messages.find((message) => message.role === "tool");
+    expect(answer?.content).toContain("Do not repeat its words in your narration.");
+    await h.turn("I wait.");
+    const replayed = (h.keeper.requests.at(-1)?.messages ?? []).filter((message) => message.role === "assistant").map((message) => message.content);
+    expect(replayed).toEqual(['(The table read this as Mara\'s own message: "The boat left at dawn.")\n\nShe does not look up from the nets.']);
+  });
+
   test("a module veto: the call does not run and the model reads the module's reason", async () => {
     const h = new Harness();
     const worker = fakeWorker({

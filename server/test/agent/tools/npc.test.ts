@@ -93,7 +93,10 @@ describe("speak_as_npc", () => {
     await room.call(catalog, "create_npc", { name: "Bob", secret_agenda: "OTHER-SECRET" });
     const spoken = await room.call(catalog, "speak_as_npc", { npc: "Martha", situation: "Strangers walk in", effort: "HIGH", tone: "wary" });
     expect(spoken.status).toBe("ok");
-    expect(spoken.text).toBe('Martha (nervous): "Welcome, travellers."\n(Their private intent was filed to your npc_intents notes: kp_note(\'list\', \'npc_intents\').)');
+    expect(spoken.text).toBe(
+      'Martha (nervous): "Welcome, travellers."\n(Their private intent was filed to your npc_intents notes: kp_note(\'list\', \'npc_intents\').)\n' +
+        "(The table has already read this as Martha's own message. Do not repeat its words in your narration.)",
+    );
     expect(spoken.events).toEqual([{ kind: "narrative", data: { speaker: "npc", name: "Martha", text: "Welcome, travellers.", format: "plain" } }]);
     expect(JSON.stringify(spoken.events)).not.toContain("son away");
     expect(seen).toHaveLength(1);

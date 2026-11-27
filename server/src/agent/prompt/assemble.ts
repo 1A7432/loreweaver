@@ -74,9 +74,10 @@ export function speakerLine(locale: string, speaker: string, text: string): stri
 
 /** A past exchange as replayed: a byte-stable function of the exchange alone. */
 export function replayExchange(locale: string, exchange: PastExchange): readonly [UserMessage, AssistantMessage] {
+  const spoken = (exchange.npcLines ?? []).map((line) => promptText(locale, "prompt.npc_line", { name: line.name, text: line.text }));
   return [
     { role: "user", content: speakerLine(locale, exchange.speaker, exchange.playerText) },
-    { role: "assistant", content: exchange.keeperReply },
+    { role: "assistant", content: [...spoken, exchange.keeperReply].join("\n\n") },
   ];
 }
 

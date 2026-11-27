@@ -384,6 +384,16 @@ describe("history", () => {
     expect(at(5)).toEqual([]);
     expect(assembleKeeperPrompt({ ...EMPTY, history: exchanges(1, 2) }).history).toHaveLength(4);
   });
+
+  test("what NPCs said as their own messages stays in the history, before that turn's reply", () => {
+    const exchange = { turn: 3, speaker: "Bob", playerText: "I ask about the lighthouse.", keeperReply: "She puts the glass down.", npcLines: [{ name: "Martha", text: "Every night it burns." }, { name: "Old Tom", text: "Don't ask." }] };
+    const replayed = (locale: string) => assembleKeeperPrompt({ ...EMPTY, locale, history: [exchange] }).history.map((message) => message.content);
+    expect(replayed("en")).toEqual(["[Bob]\nI ask about the lighthouse.", '(The table read this as Martha\'s own message: "Every night it burns.")\n\n(The table read this as Old Tom\'s own message: "Don\'t ask.")\n\nShe puts the glass down.']);
+    expect(replayed("zh")[1]).toBe("（桌上已读到Martha本人的发言：“Every night it burns.”）\n\n（桌上已读到Old Tom本人的发言：“Don't ask.”）\n\nShe puts the glass down.");
+    // A turn in which no NPC spoke replays as it always did.
+    const { npcLines: _none, ...silent } = exchange;
+    expect(assembleKeeperPrompt({ ...EMPTY, history: [silent] }).history[1]?.content).toBe("She puts the glass down.");
+  });
 });
 
 describe("text", () => {
@@ -401,7 +411,8 @@ describe("text", () => {
   test("the carried-over texts are the 2.6 texts, apart from the listed edits", () => {
     // Keys edited to drop a mention of something 3.0 no longer has; every other copied key is verbatim.
     const edited = new Set(["prompt.keeper_discipline", "prompt.system.guidelines", "prompt.style.freshness"]);
-    const added = new Set(["prompt.commands_header", "prompt.command_line"]);
+    // `prompt.npc_line`: an NPC's own line kept in the history, now that the narration does not repeat it.
+    const added = new Set(["prompt.commands_header", "prompt.command_line", "prompt.npc_line"]);
     // The 2.6 originals of every key the Keeper's catalog carries, exported from the Python
     // server's catalogs (prompt, worldbook, relationships, modvars, common) before it was removed:
     // the tuned wording stays pinned to what was tuned.
