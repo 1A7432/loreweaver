@@ -238,11 +238,17 @@ describe("lore entries: the admin's editing commands", () => {
       asLore("e1", entry({ title: "Harbour", content: "Salt." })),
       asLore("e2", entry({ title: "Cellar", content: "LEAKMARK", secret: true })),
       asLore("e3", entry({ title: "Reply template", content: "residue", enabled: false })),
+      asLore("e4", entry({ title: "Quay", content: "Tar and rope." })),
     ];
     const overlay = switchLore(EMPTY_OVERLAY, "Harbour", false);
     if (!overlay.ok) throw new Error("overlay refused");
+    // A player lists what is in play: not the secret, not what its file has off, not what the
+    // admin switched off — and without the overlay the admin's switch is not known, so the
+    // caller must pass it.
     const forPlayer = listLore(entries, PLAYER, { overlay: overlay.data, disabledOnly: true });
-    expect(forPlayer.map((item) => item.entry.id)).toEqual(["e1", "e3"]);
+    expect(forPlayer.map((item) => item.entry.id)).toEqual(["e4"]);
+    expect(seen(forPlayer)).not.toContain("Salt.");
+    expect(seen(forPlayer)).not.toContain("residue");
     expect(seen(forPlayer)).not.toContain("LEAKMARK");
     expect(seen(forPlayer)).not.toContain("effectiveEnabled");
     expect(seen(forPlayer)).not.toContain("overlaid");
@@ -252,6 +258,7 @@ describe("lore entries: the admin's editing commands", () => {
       ["e1", false, true],
       ["e2", true, false],
       ["e3", false, false],
+      ["e4", true, false],
     ]);
     expect(seen(forAdmin)).not.toContain("LEAKMARK");
     expect(listLore(entries, KEEPER, { overlay: overlay.data, disabledOnly: true }).map((item) => item.entry.id)).toEqual(["e1", "e3"]);

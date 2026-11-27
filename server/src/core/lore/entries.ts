@@ -317,14 +317,52 @@ function isAdmin(viewer: Viewer): boolean {
 }
 
 /** What `viewer` may see of one entry; null when it does not exist for them. */
-export function projectLoreEntry(entry: LoreEntry, viewer: Viewer): LoreEntryView | null {
+export function projectLoreEntry(entry: LoreEntry, viewer: Viewer, off = !entry.enabled): LoreEntryView | null {
   if (viewer.grade === "keeper") return fullView(entry);
   if (isAdmin(viewer)) {
     if (!entry.secret) return fullView(entry);
     return { view: "secret_title", id: entry.id, title: entry.title, secret: true, enabled: entry.enabled, constant: entry.constant, source: entry.source };
   }
-  if (entry.secret) return null;
+  // An entry that is switched off is not part of this table's world: a route not in play,
+  // an option the admin turned down. For a player it does not exist, like a secret one.
+  if (entry.secret || off) return null;
   return { view: "table", id: entry.id, title: entry.title, content: entry.content };
+}
+
+/**
+ * Whether the stored entry is switched off, as its document records it. The admin's switch
+ * lives in the keeper-side overlay, which a projection of ONE document cannot read; so the
+ * effective state is written beside each entry (`meta.off`) by `syncLoreSwitches`, whenever
+ * the lore or the overlay is written. A document never synced falls back to its own flag.
+ */
+export function loreEntryOff(document: Document, entry: LoreEntry): boolean {
+  const recorded = document.meta.off;
+  return typeof recorded === "boolean" ? recorded : !entry.enabled;
+}
+
+/** The writer's type is the store's; this module only passes it on. */
+export interface LoreWriter {
+  readonly room: string;
+}
+
+/**
+ * Bring every entry's recorded switch in step with the overlay: THE one place `meta.off`
+ * is written. Call it in the same commit as any write to the room's lore entries or to its
+ * overlay. Returns how many documents it rewrote.
+ */
+export function syncLoreSwitches<W extends LoreWriter>(documents: { list(room: string, type: string): Document[]; put(writer: W, type: string, id: string, data: JsonObject, meta?: JsonObject): unknown }, writer: W, overlay: LoreOverlay): number {
+  let rewritten = 0;
+  for (const document of documents.list(writer.room, LORE_ENTRY_TYPE)) {
+    // A payload that could not be read is never rewritten: that would save over the real one.
+    if (document.corrupt) continue;
+    const entry = readLoreEntry(document);
+    if (entry === null) continue;
+    const off = !applyOverlay(entry, overlay).enabled;
+    if (document.meta.off === off) continue;
+    documents.put(writer, LORE_ENTRY_TYPE, document.id, document.data, { ...document.meta, off });
+    rewritten += 1;
+  }
+  return rewritten;
 }
 
 export const loreEntryDocumentType: DocumentType<LoreEntryView> = {
@@ -334,7 +372,7 @@ export const loreEntryDocumentType: DocumentType<LoreEntryView> = {
   version: 1,
   project(document, viewer) {
     const entry = readLoreEntry(document);
-    return entry === null ? null : projectLoreEntry(entry, viewer);
+    return entry === null ? null : projectLoreEntry(entry, viewer, loreEntryOff(document, entry));
   },
   validate: validateLoreEntry,
 };
@@ -447,13 +485,14 @@ export function listLore(entries: readonly LoreEntry[], viewer: Viewer, options:
   const curator = viewer.grade === "keeper" || isAdmin(viewer);
   const items: LoreListItem[] = [];
   for (const entry of entries) {
-    const view = projectLoreEntry(entry, viewer);
+    const effective = options.overlay === undefined ? entry : applyOverlay(entry, options.overlay);
+    // What is off after the overlay does not exist for a player.
+    const view = projectLoreEntry(entry, viewer, !effective.enabled);
     if (view === null) continue;
     if (!curator) {
       items.push({ entry: view });
       continue;
     }
-    const effective = options.overlay === undefined ? entry : applyOverlay(entry, options.overlay);
     if (options.disabledOnly === true && effective.enabled) continue;
     items.push({ entry: view, effectiveEnabled: effective.enabled, overlaid: effective !== entry });
   }

@@ -67,7 +67,18 @@ import {
 } from "../core/characters/index.ts";
 import type { JsonObject } from "../core/documents/model.ts";
 import { DocumentRefused } from "../core/documents/raw.ts";
-import { LORE_ENTRY_TYPE, loreEntryDocument, loreSource, MAX_ROOM_LORE_ENTRIES, validateLoreEntry } from "../core/lore/index.ts";
+import {
+  EMPTY_OVERLAY,
+  LORE_ENTRY_TYPE,
+  LORE_OVERLAY_ID,
+  LORE_OVERLAY_TYPE,
+  loreEntryDocument,
+  loreSource,
+  MAX_ROOM_LORE_ENTRIES,
+  readOverlay,
+  syncLoreSwitches,
+  validateLoreEntry,
+} from "../core/lore/index.ts";
 import type { RulePack } from "../core/rulepacks/index.ts";
 import {
   codePoints,
@@ -389,6 +400,10 @@ export function importWorld(context: RoomContext, card: ImportedCard, options: W
   const committed = commit(context, () => {
     for (const id of replacedIds) documents.delete(context.writer, LORE_ENTRY_TYPE, id);
     for (const entry of prepared) documents.put(context.writer, LORE_ENTRY_TYPE, entry.id, entry.data, entry.meta);
+    // The room's switches outlive a re-import: the new entries take them in the same commit,
+    // so an entry the admin turned off is never shown to players for even one turn.
+    const overlayDocument = documents.get(room, LORE_OVERLAY_TYPE, LORE_OVERLAY_ID);
+    syncLoreSwitches(documents, context.writer, overlayDocument === null || overlayDocument.corrupt ? EMPTY_OVERLAY : readOverlay(overlayDocument.data));
     if (treeData !== null) documents.put(context.writer, VARIABLE_TREE_TYPE, VARIABLE_TREE_ID, treeData);
     if (moduleData !== null) documents.put(context.writer, MODULE_VARIABLES_TYPE, MODULE_VARIABLES_ID, moduleData);
     documents.put(context.writer, WORLD_CARD_TYPE, cardId, worldCardData(world), { source: cardId });

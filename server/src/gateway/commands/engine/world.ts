@@ -38,6 +38,7 @@ import {
   newLoreEntry,
   type OverlayChange,
   overlayData,
+  syncLoreSwitches,
   readOverlay,
   restoreLore,
   switchLore,
@@ -257,6 +258,10 @@ function runLoreAdd(call: CommandCall, title: string | undefined, content: strin
   const { data, meta } = loreEntryDocument(entry.data);
   const id = `lore-${call.context.services.clock.id()}`;
   putDocument(call, LORE_ENTRY_TYPE, id, data, meta);
+  // A title the overlay already names takes that switch at once.
+  const overlay = readLoreOverlay(call);
+  if (isRefused(overlay)) return overlay;
+  syncLoreSwitches(call.context.services.documents, call.context.writer, overlay);
   return { text: call.say("lore.added", { title: entry.data.title }), data: { id } };
 }
 
@@ -274,6 +279,7 @@ function runLoreSwitch(call: CommandCall, op: string, title: string | undefined,
     const restored = restoreLore(overlay, title);
     if (restored.removed === 0) return refuse("not_found", { title });
     putDocument(call, LORE_OVERLAY_TYPE, LORE_OVERLAY_ID, overlayData(restored.overlay));
+    syncLoreSwitches(call.context.services.documents, call.context.writer, restored.overlay);
     return { text: call.say("lore.restored", { count: restored.removed }) };
   }
   // A switch names an entry the room holds; a typo must not become a dangling annotation.
@@ -286,6 +292,8 @@ function runLoreSwitch(call: CommandCall, op: string, title: string | undefined,
   } else change = unbindLore(overlay, title);
   if (!change.ok) return refuse(change.code === "bad_condition" ? "bad_condition" : "invalid_arg", { path: change.path });
   putDocument(call, LORE_OVERLAY_TYPE, LORE_OVERLAY_ID, overlayData(change.data));
+  // What players may see of the lore follows the switch in the same commit.
+  syncLoreSwitches(call.context.services.documents, call.context.writer, change.data);
   const done = op === "enable" ? "lore.enabled" : op === "disable" ? "lore.disabled" : op === "bind" ? "lore.bound" : "lore.unbound";
   return { text: call.say(done, { title: title.trim() }) };
 }
