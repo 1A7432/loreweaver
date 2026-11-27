@@ -197,7 +197,7 @@ the welcome, and again after every reconnect ([10.2](#102-subscribing)).
 |---|---|
 | `player` | Speak, run player commands, subscribe to views, upload (when uploads are on), fetch room media. |
 | `admin` | Everything a player may, plus admin commands and admin-only arguments, and fetch admin-only files. |
-| `observer` | Watch: receive events, signals and views, run the few commands marked for observers (`help`, `recap`, `uploads` without arguments, `model list` without arguments), fetch room media. An observer's speech is refused (`observer_speech`) and so are its uploads (`observer_upload`). |
+| `observer` | Watch: receive events, signals and views, run the few commands marked for observers (`help`, `recap`, `report` without `reveal`, `panels` to list, `uploads` without arguments, `model` to list the providers — `list` without `provider` or `lane`), fetch room media. An observer's speech is refused (`observer_speech`) and so are its uploads (`observer_upload`). |
 
 The role belongs to the key; it cannot be changed from a connection. A room admin changes a
 key's role with the `key` command ([6.8](#68-the-engines-commands)): the holder's live
@@ -329,7 +329,9 @@ lock: `undo`, `reset` and `save` (export and import). They run at once, even in 
 Keeper turn; work of the old generation still running (a turn waiting on the model, a queued
 line) fails to commit by itself, and the in-flight turn ends with its `turn idle` signal as usual.
 `pack install`, `model`, `imagegen` and `key` do not wait for the lock either: they act on the
-server (a fetch, a model switch, a revoked key) and must not sit behind a turn. A turn in flight
+server (a fetch, a model switch, a revoked key) and must not sit behind a turn. Nor do `genchar`
+and a character `import` (each waits on one model call of its own) or `report` (it reads the
+log as it stands). A turn in flight
 when the model is switched finishes on the model it started with.
 
 ### 6.3 Text forms
@@ -407,7 +409,7 @@ this viewer may use them now:
 - An admin command is not listed to a non-admin at all.
 - Some player commands need the admin for certain arguments (`bot` with `on`, `rule` with
   `variant` or `system`, `uploads` with `on`, `init` with `name`, `lore` with anything but
-  `list`, `import` with `as: "world"`, `model` with anything but a bare `list`). The entry says `role: "player"`; the admin-only
+  `list` and `list` with `disabled`, `import` with `as: "world"`, `model` with anything but `list` without `provider` or `lane`, `report` with `reveal`). The entry says `role: "player"`; the admin-only
   arguments are refused with `forbidden`. See the table in [6.8](#68-the-engines-commands).
 - `text.forms` lists the viewer's language table (or the other one when it is empty). The
   server accepts the forms of both tables.

@@ -1,302 +1,1097 @@
 *[English](protocol.md) · 中文*
 
-# Loreweaver 联网 TUI —— 协议 2.6
+# Loreweaver 协议 3.0
 
-这是 loreweaver 服务器（通过 `python -m app --serve` 启动）与 OpenTUI 终端客户端之间开放、带版本的协议。引擎本身（确定性内核加 AI 守秘人）和用什么传输无关；与传输无关的会话逻辑在 `net.session.SessionCore` 里，这份文档描述的是接口，不绑定任何编程语言。
+这份文档是 Loreweaver 服务器与客户端之间开放、带版本的协议：客户端发什么，服务器回什么，按什么顺序。照着它就能写出一个客户端，不必去读服务器代码。协议版本：`"3.0"`。
 
-控制流使用 `{"type": ...}` 形状的 JSON 帧，协议版本为 `"2.6"`。同一套帧和 `join` 握手可以跑在两种传输上：
+以代码为准。所有客户端共用的帧类型、载荷形状和上限都在 `loreweaver-protocol` 包里，入口是 `loreweaver-protocol/v3`（`clients/protocol/src/v3/`）：`frames.ts`（帧、事件与信号的载荷、上限），`views.ts`（内置视图及其 JSON Schema），`bytes.ts`（字节通道），`decode.ts`（客户端接受什么、丢弃什么），`client.ts`（不做 I/O 的参考客户端会话）。这份文档和那个包说法不一致时，以包为准，是文档有错。
 
-- **Iroh** 是 `--serve` 实际启动的默认传输：点对点 QUIC，服务端打印可分享 ticket，不需要域名、证书或端口转发。控制帧是在长连接双向流上的 newline-delimited JSON；媒体字节使用同一连接上的额外双向流。
-- **WebSocket**（`net.tui_server`）只留作离线测试和本机回环，不是 `--serve` 的一个选项。控制帧是文本消息，媒体字节是二进制消息。
+**3.0 是一个新协议。** 它和 2.x 不兼容：协议本身、房间数据库、扩展包和模组格式都不兼容。传输层的 ALPN 带着协议主版本号（`loreweaver/3`），所以 2.x 客户端会直接连不上，而不是误读帧。
 
-两种传输驱动的是同一个 `SessionCore` / `RoomHub`。
+## 目录
 
-**2.6（增量）**新增 `state.actions`：房间里**玩家可以直接调用**的模组动作——由钩子注册的机制（`defineAction(name, {player: true, …})`，见 `docs/hooks.zh.md`），任何成员都能运行，不需要守秘人跑一轮。每个条目是 `{id, label, description, params?}`；`label` 和其他服务端显示名一样解析，`params` 是作者写的参数形状自由文本提示。想提供这些动作的客户端，通过普通的 `input` 帧发送 `.act <id> <参数>`（参数是一个 JSON 对象，或一段纯文本——服务端会包成 `{"text": …}`），所以没有新的客户端帧；结果以来自 `system` 的普通 `narrative` 返回，像 `.ra` 的结果一样广播，动作声明了掷骰时还会有 `dice` 帧。这份列表来自服务端的缓存，服务端每次为房间构建钩子引擎时刷新它（每个守秘人回合、每次 `.act`、安装钩子、开关技能），所以可能短暂落后于变化；房间没有时整个省略。2.5 客户端会忽略这个字段，照样可以输入 `.act`。
+1. [概念](#1-概念)
+2. [传输](#2-传输)
+3. [帧](#3-帧)
+4. [连接](#4-连接)
+5. [请求与结果](#5-请求与结果)
+6. [命令](#6-命令)
+7. [事件日志](#7-事件日志)
+8. [事件类型](#8-事件类型)
+9. [信号](#9-信号)
+10. [视图](#10-视图)
+11. [字节通道](#11-字节通道)
+12. [客户端守则](#12-客户端守则)
+13. [会话示例](#13-会话示例)
+14. [3.0 还没有的](#14-30-还没有的)
 
-**2.5（增量）**在原始 id **旁边**加显示名，全部可有可无：`state.variables` 里 `enum` 条目的 `value_label`（包给当前选项起的名字）、`state.character.attribute_labels`（每个属性键的显示名）、`dice` 帧的 `subsystem_label`，以及 `state.pregens` 条目的 `blurb` / `claimed_by_name`。原来是 id 的一个都不变——`value`、属性键、`subsystem` 照旧，`visible_when`、钩子和命令继续用它们。2.4 客户端忽略新字段、照旧显示原始 id；2.5 客户端拿不到显示名时（旧服务端、包没起名）回退到原始 id。面板模板多一条规则（`docs/lwf/formats/panels.md` §5.1 第 7 条）：**显示**变量值的绑定，若该条目带 `value_label`，就显示它。
+---
 
-**显示名与语言。**线上所有由服务端解析的显示名——上面这些，以及原有的 `Resource.label`、`variables[].label`、`outcome.label`、`expr`——都按服务端运行的语言解析（它的 `settings.locale`，即 `welcome.locale`）。`join` 不携带语言，所以连同一个服务端的所有连接收到的是同一种语言；帧仍是**按连接**构建的，将来若要每条连接各用各的语言，这一点是前提。面板文本（`{en,zh}` 映射）不同：由客户端自己挑。
+## 1. 概念
 
-**2.4（增量）**新增 `report` 帧（服务端 → 客户端）：HTML 团报（`.report html`，以及仅管理员可用的 `.report html reveal`），存为房间不公开 blob，只通知请求它的那条连接。2.3 客户端忽略此帧，只是收不到文件。
+Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。协议只有四个概念：**事件日志**（桌上发生了什么，编号并存储）、**调用**（客户端要什么，每个调用回答一次）、**视图**（服务器为某个客户端持续更新的结构化值）和**字节通道**（文件，在控制流旁边传输）。
 
-**版本控制。**`"2.0"` 是对 1.x 的一次性破坏性整合——主版本号即兼容契约：客户端与服务端必须在主版本（`2`）上一致，`welcome.protocol` 主版本不同的客户端应拒绝连接（或明确警告）。`loreweaver-protocol` 自带这个判定（`protocolMismatch`），任何客户端都不必自己写；两个参考客户端——TUI 与 Loreweaver Studio——都取更强的那一档：**拒绝连接**、断开、并把两边的版本号都说出来。继续与主版本不同的服务端对话，结果是误读帧而不是失败，比拒绝难排查得多。版本号解析不出来时不算证据，不能当成版本不一致来处理。同一个主版本里，小版本只做增量；客户端忽略无法识别的帧类型与字段——但有**一条规范性例外：能拦下渲染的字段永远不可忽略**。客户端遇到带 `visible_when` 的面板模板块而无法对该条件求值（不实现这个字段、不实现语法的某个角落、或求值本身出错）时，**必须不渲染该块**：无视这个条件，等于把作者藏起来的内容画到屏幕上，所以判不出来的一律不画，和 `$var` 取不到值是同一条规矩。线上没有任何东西能让服务端核对这一点（`welcome.protocol` 报的是**服务端**版本，`join` 不携带客户端版本），因此这是一条客户端一致性要求，用到 `visible_when` 的包即以 2.1 为最低版本。同时也要看清它**不是**什么：带条件的块，内容无论条件成不成立都随清单下发——`visible_when` 决定的是块**何时**画出来，不是其内容是否到达客户端；保密靠 `audience`（服务端解析）与 `state` 变量过滤器。2.0 打破了哪些东西，各自了结了哪个老毛病：
+| 术语 | 含义 |
+|---|---|
+| 房间 | 一桌：它的成员、它的故事、它的日志。每把钥匙恰好属于一个房间。 |
+| 钥匙 | 一个秘密字符串，持有者凭它以一个身份进入一个房间。没有注册。 |
+| 身份 | `player`、`admin` 或 `observer`，由钥匙决定。见 [4.4](#44-身份)。 |
+| 守秘人 | AI 游戏主持人。它不是成员，也不持有钥匙。 |
+| 管理员 | 持有管理员钥匙的人。管理员也玩；“管理员”从来不指 AI。 |
+| 成员 | 房间里的一条连接。一个人开两条连接，就是两个成员，共用一个成员 id。 |
+| 成员 id | 由钥匙派生的稳定 id（`m:` 加 12 位十六进制数字）。不会泄露钥匙。 |
+| 事件 | 房间日志里的一条：有编号（`seq`）、会存储、按顺序发给每个成员。 |
+| 信号 | 发给桌面的临时消息：不存储，不回放。 |
+| 视图 | 为某一个查看者计算的具名结构化值，变化时推送。 |
+| 命令 | 人执行的唯一一种操作：引擎命令、规则包命令和模组命令都是命令。 |
+| 回合 | 守秘人对一句发言的回答。回合按房间编号。 |
+| `epoch` | 房间的代次。日志被改写时（撤销、重置、导入）它会前进。 |
+| `seq` | 事件在所属房间日志里的编号。在一个房间里永不复用，撤销之后也不复用。 |
+| `head` | 房间已经发出的最大 `seq`（从未记过日志的房间为 0）。 |
+| `rid` | 客户端自选的请求 id；服务器对该请求的那一个 `result` 带着它。 |
 
-- `dice` 帧围绕引擎的中立检定结果契约重新设计：1.x 的 CoC 形状 `rank:int(-2..4)` / `level:string` 字段删除；分级检定携带 `outcome:{id,label,success,critical,fumble,tier,margin?}`，客户端按语义标志上色，而不是内嵌某个规则系统的成功阶梯。1.x 的 `kind:"sanity"` 变为通用的 `kind:"subsystem"` + `subsystem` id；系统形状的附加数据（奖励/惩罚骰、SAN 损失、幸运消耗、优势候选骰）放入不透明的 `detail` 对象。
-- 流式传输收敛为两种帧、一条规则：`narrative_delta` 帧携带草稿气泡的文本增量；同 `id` 的那一条收尾 `narrative` 帧携带**完整**最终文本并**替换**草稿。1.x 的尾缀式 `done` 帧、`stream`/`done` 布尔组合、以及“普通 narrative 顶替未完成草稿”的规则全部删除——生成后修正直接落在最终文本里。
-- `state.character` / `state.party[]` 的生命体征改为一个通用 `resources:[{id,label,value,max}]` 列表；1.x 的按系统字段名（`hp`、`hpmax`、`san`……）与 `hpmax`/`hpMax` 大小写不一致一并删除。
-- `dice` 帧只来源于工具绑定的结构化 payload；1.x 服务端“从工具的本地化文本反解析猜 rank”的回退路径不复存在。
+## 2. 传输
 
-客户端发的第一帧**必须**是 `join`。服务端回一个 `welcome` 或 `error`，出错就关连接。握手超时之内没等到 `join`（`TRPG_TUI__JOIN_TIMEOUT`，默认 10 秒），服务端会用 `error join_timeout` 把连接关掉，而不是一直等下去。离线的 WebSocket 传输还额外支持 `TRPG_TUI__MAX_CONNECTIONS` 并发上限；超出的连接在读 `join` 之前就会收到 `error too_many_connections`。
+### 2.1 Iroh
 
-## 客户端 → 服务端
+服务器通过 [iroh](https://iroh.computer) 通信：点对点 QUIC，凭 **ticket**（连接凭据，一个 iroh endpoint ticket 字符串）拨号。不需要域名、TLS 证书或开放端口。
 
-- `join` — 认证并将连接绑定到房间：
-  `{type:"join", key:string, name?:string, client?:{name,version}}`
-- `input` — 命令行或玩家言辞，正是玩家键入的内容：
-  `{type:"input", text:string}`
-- `media_offer` — 打开字节通道前先提交图片/音频元数据：
-  `{type:"media_offer", name:string, mime:string, size:int, sha256:string}`
-- `media_set_enabled` — 仅管理员可用的房间媒体上传开关：
-  `{type:"media_set_enabled", enabled:boolean}`
-- `avatar_set` — 将本房间已经上传的一张图片绑定到调用者自己的当前角色头像。服务端会拒绝试图指定其他角色/用户的帧：
-  `{type:"avatar_set", hash:string}`
-- `panel_intent`— 一次模组面板交互。服务端先校验所指面板确在**这名成员自己的**清单里（否则 `error forbidden`），然后把 value 完全按“这名玩家自己敲的”来路由——面板特权模型一步到位：`choice` 与 `input` 把 `value` 原样送进普通输入那条通道（限速、回合锁、命令权限一样都不少）；`roll` 以该玩家身份执行公开的 `.r <value>`，由真实骰子引擎校验表达式。`value` 上限 2000 字符（超出 `error input_too_long`）：
-  `{type:"panel_intent", panel:string, kind:"choice"|"input"|"roll", value:string}`
-- `list_pack_cards`（v2.2）— 请求已安装扩展包携带的卡文件清单，是「从已安装包导入」选择器背后的结构化通道。对玩家开放：回复只携带**文件名**（运营者的安装横幅本来就打印过），绝不携带卡内容；world/companion 导入动词的守秘人门与引用的发现方式无关，照常生效：
-  `{type:"list_pack_cards"}`
-- `ping`: `{type:"ping", t:number}`
+- **ALPN：**`loreweaver/3`。随协议主版本变化。
+- **控制流**是客户端在连接上打开的第一个双向流，与连接同生共死。客户端打开后立刻在上面写 `hello`（QUIC 流在客户端发送数据之前，服务器是看不到的）。
+- **之后客户端在同一连接上打开的每个双向流**都是字节通道的一次操作（[第 11 节](#11-字节通道)）。字节流从不阻塞控制流。
 
-## 服务端 → 客户端
+运营者用 `loreweaver serve` 启动服务器，它打印一个 JSON 对象，里面有 `ticket`（第一次使用某个数据目录时还有 `first_key`：房间 `main` 的一把管理员钥匙）。更多钥匙用 `loreweaver key <room> <admin|player|observer> <name>` 签发。客户端需要一个 ticket 和一把钥匙；除此之外没有任何东西标识服务器或人。
 
-- `welcome` — 成功 `join` 时发送一次：
-  `{type:"welcome", protocol:"2.6", features:["media","audio","imagegen"?,"demo"?,"update"?], room:string, you:{id:string,name:string,role:"player"|"keeper"}, locale:string, server:string, version?:string}`
-  `version` 是服务端自己的发布版本（和客户端一比就能看出两边不一致）。`"update"` 特性仅在守秘人连接且服务端运维配置了自更新命令时出现，有它才允许发 `admin_update_server`。
-  `demo` 表示服务端正在用离线示例守秘人、向量功能已启用，且本次检查时这个守秘人房间为空。服务端会在房间回合锁内再次检查，过期 flag 不会覆盖战役状态；客户端收到 `admin_config{using_demo:false}`（例如从模型页保存后）会立即移除入口，否则重连时重新计算，过期操作也会被服务端拒绝。
-- `error` — 本地化的故障通知；`bad_key`、`join_timeout` 和 `too_many_connections` 关闭连接（它们仅在 `join` 握手期间或之前发生），其他不关闭：
-  `{type:"error", code:"bad_key"|"bad_frame"|"input_too_long"|"rate_limited"|"server_error"|"join_timeout"|"too_many_connections"|"demo_unavailable"|媒体错误码, message:string}`
-- `media_accept` — 上传被接受；若 `existing` 为 true，则无需 PUT：
-  `{type:"media_accept", upload_id:string, existing?:boolean, media?:MediaFrame, audio?:AudioLibraryItem}`
-- `media` — 媒体元数据广播和历史回放条目；字节按需拉取：
-  `{type:"media", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number}`
-- `media_enabled` — 房间的玩家上传政策。管理员切换时向全房间广播；成员加入时若上传处于关闭态（非默认态）会在回放阶段补发一帧（加入时没有此帧即默认：允许上传）。客户端可以据此显示或禁用自己的上传入口：
-  `{type:"media_enabled", enabled:boolean}`
-- `audio_library_item` — 由上传音频 blob 生成的房间音频库条目：
-  `{type:"audio_library_item", id:string, hash:string, mime:string, size:int, name:string, from:string, ts:number, title?:string, license?:string, source?:string, tags?:string[]}`
-- `audio_control` — 客户端本地播放意图：
-  `{type:"audio_control", id:string, action:"play"|"stop"|"pause"|"resume"|"volume", layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, loop?:boolean, volume?:number, fade_ms?:int, position_ms?:int, server_ts?:number}`
-- `audio_state` — 尽力持久化的 BGM/环境音状态，在加入房间时回放：
-  `{type:"audio_state", layers:[{layer:"bgm"|"ambience"|"sfx", hash?:string, mime?:string, name?:string, title?:string, playing:boolean, volume?:number, loop?:boolean, started_at?:number}]}`
-- `narrative` — 一行**完整的**故事/聊天文本：
-  `{type:"narrative", id:string, speaker:"kp"|"player"|"system"|"npc", name?:string, text:string, format:"markdown"|"plain"}`
-  对于 `speaker:"npc"`，`name` 携带 NPC 名称。`narrative` 帧永远携带完整的最终文本：当其 `id` 与客户端由 `narrative_delta` 累积出的草稿气泡匹配时，最终文本**替换**该草稿（生成后修正已折入）；否则就是一条普通的单发文本。**空的最终文本是撤销，不是消息**：服务器用它收掉被放弃的草稿（守秘人换了下一轮工具草稿、或回合中途夭折），客户端必须**移除**——绝不渲染——最终文本为空的气泡。
-  **加入时的回放。** 每次加入，服务器都把房间最近的记录（最后 30 条对话历史）作为普通 `narrative` 帧回放——只回放故事通道，不回放点命令回显；自 v2.3 起，桌上现场出现过的每个 `dice` 与 npc `narrative` 帧（守秘人的掷骰、同伴的回合、手打的 `.ra`）都紧接在它现场所跟随的那条记录之后回放，交错顺序就是大家当时看到的那样（见"回合流程"第 5–6 步）。成员回放进行期间发布的现场帧，在回放之后按序、且只送一次。回放帧与现场帧刻意不可区分：客户端按到达顺序渲染，并按 `id` 去重 `narrative`。
-- `narrative_delta` — 草稿气泡的一段流式文本增量：
-  `{type:"narrative_delta", id:string, speaker:"kp", name?:string, text:string}`
-  客户端把共享同一 `id` 的增量拼接进草稿气泡（按 markdown 渲染）。流在**同 `id`** 的 `narrative` 帧到达时结束；服务端保证这条收尾帧一定会来（回合失败也会以已流出的文本收口）。服务端在 AI 守秘人生成的同时就往外发，并且边发边清理：拿不准的一律不发，机关和 MVU 块永远不会流出去。
-- `dice` — 一次掷骰子/检定，由客户端渲染；**绝不**携带守秘人的秘密：
-  `{type:"dice", actor:string, kind:"roll"|"check"|"subsystem"|"opposed"|"init", expr:string, rolls:number[], total:number, target?:number, effective_target?:number, subsystem?:string, subsystem_label?:string, outcome?:Outcome, detail?:object}`
-  `Outcome = {id:string, label:string, success:boolean, critical:boolean, fumble:boolean, tier:number, margin?:number}`
-  分级检定携带 `outcome`：`id` 是规则系统自己的等级词汇（仅用于展示——客户端绝不据此分支），`label` 是已本地化的显示标签，客户端按语义标志（`critical`/`fumble`/`success`）上色，可按 `tier`（阶梯序数，越高越好）做深浅。`kind:"subsystem"` 标记规则子系统检定（`subsystem` 是它在包里的稳定 id，如 `sanity_check`；v2.5 的 `subsystem_label` 是规则包给这个子系统的显示名，如 "理智" / "Sanity"——显示它，缺省时回退到 id）。与 `outcome.label`、`expr` 一样，这个显示名在掷骰发生时解析一次，加入回放按录下的原样重发：回放的掷骰保持录制时的语言，2.5 之前录下的没有 `subsystem_label`；`kind:"opposed"` 在 `detail.left`/`detail.right`（`{name,total,target?,outcome?}`）与 `detail.winner:"left"|"right"|"tie"` 里携带双方。`detail` 的其余内容是系统声明的掷骰数据（奖励/惩罚骰、损失/剩余、优势候选……），客户端可原样展示、永远无需理解。
-- `ui`— 房间事件钩子发出的声明式模组 UI（技能/卡片 `hooks.js` 里的 `emitUI(blocks, opts?)`，见 `docs/plugins.md`），在它所附着的那条守秘人 `narrative` 之后、`state` 快照之前广播。这些块在服务端（`core.hooks`）过白名单、做校验、按大小截断，客户端拿到就能直接画。内容是玩家可见的作者产出，信任层级与叙事相同：钩子绝不能把仅守秘人可见的秘密发进来，引擎也从不把守秘人工具结果写入此帧。不参与加入时的历史回放——想要常驻面板的钩子每回合重新发射即可：
-  `{type:"ui", blocks:[UiBlock], panel:"inline"|"sidebar", id?:string, replace?:boolean}`
-  `UiBlock = {kind:"meter", label:string, value:number, min:number, max:number}`
-  `| {kind:"stat", label:string, value:number|string|boolean}`
-  `| {kind:"badge", label:string, tone?:"info"|"warn"|"danger"}`
-  `| {kind:"text", text:string, style?:"quote"|"warning"}`
-  `| {kind:"divider"}`
-  `| {kind:"choices", prompt?:string, options:[{id:string,label:string,input:string}]}`
-  `| {kind:"image", hash:string, mime?:string, size?:int, caption?:string, alt?:string}`
-  `| {kind:"letter", body:string, from?:string, to?:string, date?:string}`
-  `| {kind:"clipping", headline:string, body:string, source?:string, date?:string}`
-  `| {kind:"map_pin", hash:string, mime?:string, size?:int, label:string, x:number, y:number, note?:string}`
-  `| {kind:"title_card", title:string, subtitle?:string, act?:string}`
-  后四种是 M19 的**演出模板**：声明式，不是标记语言。富客户端把 `letter` 画成信笺、把 `title_card` 画成整幅幕卡；文本优先客户端把同样的字段打成几行。`map_pin` 的 `x`/`y` 是地图图片自身画框的**比例**（0..1），客户端按自己渲染的尺寸缩放标记。它们由房间的演出导演（`agent.stage_director`）在剧情节拍上发出，钩子与模组面板同样可用。
-  `image` 块用**内容 hash** 指名一张图——正是媒体字节通道已经在应答的地址（`{op:"get", hash}`）。服务端只会发出**本房间**可取的 hash（房间自己的媒体，或本房间已启用包的资产），并盖上权威 `mime`，因此客户端可以像对待任何媒体一样拉取与缓存；取不到的 hash 在组帧前就已在服务端丢弃。文本优先客户端降级为 `caption`/`alt` 一行文字加自己既有的媒体查看方式。
-  `panel:"inline"` 渲染进叙事流，`"sidebar"` 渲染进常驻侧栏区域。`id` 命名一个 UI 区域：后到的同 `id` sidebar 帧替换该区域内容；带 `replace:true` 的 inline 帧可以就地更新前一个同 `id` 的 inline 帧（不支持就地更新的客户端顺序追加即可）。玩家点选 `choices` 选项时，客户端把该选项的 `input` 原样作为普通 `input` 帧发回——不新增客户端→服务端帧类型。
-- `ui_manifest`— **这名观看者**的完整模组面板清单：`join` 时紧随首个 `state` 帧下发，管理员执行 `.panels enable|disable` 后向每个在线成员重新推送。全量替换语义：帧携带整张清单（空表 = 没有面板，重连时也借此清掉旧面板）。包声明的 `audience` 在服务端按观看者的 keystore 角色**先行**解析——仅守秘人可见的面板在结构上就不会出现在玩家清单里，`audience` 字段本身也永不上线。面板/模板形状见下文“模组 UI 面板”：
-  `{type:"ui_manifest", panels:[UiManifestPanel]}`
-- `panel_event`— 房间钩子经 `emitPanel(panelId, payload)` 发射的不透明 JSON 载荷（见 `docs/plugins.md`），供目标面板自己的代码（Tier 2）消费。在本回合 `ui` 帧之后送达，且**只**送达清单中含该面板的成员；每回合 ≤ 20 条（超额丢弃并记日志）、单条序列化 ≤ 32 KB。不运行面板代码的客户端（TUI）直接忽略：
-  `{type:"panel_event", panel:string, payload:any}`
-- `state` — 一个面板快照，在 `join` 时和每回合后发送：
-  `{type:"state", character?:{name,system,resources:[Resource],attributes:{},attribute_labels?:{},status_effects:[],avatar?:{hash,mime,size,name?}}, party:[{name,online:boolean,active:boolean,initiative?:int,resources?:[Resource],ai?:boolean,avatar?:{hash,mime,size,name?}}], scene?:{name,focus?}, clock?:{time,round?}, initiative:[{name,value:int,current:boolean}], online:int, variables?:[{id:string,label:string,kind:"number"|"bool"|"text"|"enum",value:number|boolean|string,value_label?:string,min?:int,max?:int,hidden?:boolean}], pregens?:[{name:string,claimed_by:string,blurb?:string,claimed_by_name?:string}], systems?:[{id:string,make_char?:string}], actions?:[{id:string,label:string,description:string,params?:string}], reset?:boolean}`
-  `Resource = {id:string, label:string, value:number, max?:number}` — 规则系统的生命体征条（HP、理智、魔法值……）作为通用数据：客户端按列表渲染条形量表，无需知道任何系统的字段名。条目按渲染顺序到达。`label` 已解析好，用的是服务端的语言（见「显示名与语言」）：规则包的 `sheet.resources[].label` 可写成语言映射，于是同一个包在 `en` 服务端和 `zh` 服务端上都读得对。
-  `character.attributes`（v2.3）只含卡的**特征值**——规则系统 `sheet.attributes` 声明的那些键，按包自己的顺序（CoC 7e 的 `STR CON SIZ …`、D&D 5e 的 `STR DEX CON …`、社区包自己系统的自己那套）；生命体征**不**在这里重复（它们是 `resources`），派生值从不发送——客户端照线上顺序原样渲染，每个键都是 `.st <key>=<n>` 接受的名字。没有声明卡表规格的系统按存储原样发送。
-  `character.attribute_labels`（v2.5，可有可无）把 `attributes` 的每个键映射到它的显示名，数据来自规则系统自己（键对应的规范名，再经规则包的 `display` 表）：`zh` 服务端上的 CoC 7e 发 `{"APP":"外貌", …}`。显示 `attribute_labels[key]`，没有就显示键本身；`attributes` 的**键**不变，仍是 `.st` 接受的名字。找不到名字的键不进这张表，表为空时（没有卡表规格的系统）整个省略。
-  `pregens` 是模组可认领的预设角色（`.pc list`/`.pc claim`）；`claimed_by` 是认领者的成员 id，未认领时为 `""`；没有名册时整个省略。v2.5 新增两项，各自只在非空时出现：`blurb`，卡里写给玩家挑角色看的一句话人设（绝不是作者写给守秘人的备注，也不是角色卡）；`claimed_by_name`，认领者认领当时的显示名（随认领一起存下，所以离线的认领者也有名字；释放时清掉）。显示 `claimed_by_name`，没有就显示 `claimed_by`。
-  `variables`（v1.6，增量字段，可有可无——房间没有就整个省略）是房间的确定性模块变量，且只含玩家可见子集：仅守秘人可见的变量在引擎内部（`core.modvars.player_entries`）就被过滤，永远不会到达任何传输层。条目按定义顺序到达（按原样渲染，不要排序）；`label` 已本地化（用服务端的语言，见「显示名与语言」）；`min`/`max` 只出现在有界的 `number` 变量上（客户端可将其渲染为进度条）。`value_label`（v2.5，可有可无）只出现在包给**当前**选项起了名字的 `enum` 上（卡格式里的 `option_labels`），解析方式同 `label`：**显示**时用它代替 `value`，但比较、保存、发送都用 `value`——`visible_when`、钩子和 `.var set` 认的是原始选项 id。导入的 SillyTavern MVU 卡片变量共用同一列表：`id` 带 `mvu.` 前缀、点分路径作为 `label`（只有标量叶子，数量由服务端封顶）——不新增帧类型，客户端无需改动。MVU 的叶子由**管理员挑着放出来**（默认全部隐藏，没公开的一律不发）：玩家帧只携带管理员公开过的路径（`.var expose`）；管理员自己的连接收到的帧额外携带未公开的其余叶子，每条带 `hidden:true` 标记（增量字段，可有可无——不认识它的客户端照常渲染，认识的可以画成置灰或者加把锁）。
-  `systems`（v2.3，可有可无）是本服务端发现的全部规则系统，每条带上「在这个系统里建卡」用的方言词（`make_char`；规则包没声明就没有这个字段）。客户端要提供建卡入口，需要的就是这两样，不必认识任何一个规则系统——于是自带系统的内容包，不用等客户端发版就会出现在每个客户端的选择器里。
-  `reset:true` 标记的是战役被清空（`.reset` / `admin_reset_room`）之后服务端推的那份快照：面板数据已经是最新的（空的），客户端还应该把本地攒下的聊天记录也清掉。
-- `pack_cards`（v2.2）— 对 `list_pack_cards` 的单播回复：每个已安装扩展包携带的卡文件。`ref` 就是 `.import <ref>` 接受的引用；`pack` 与 `name`（文件名主干）用于展示。`kind`（v2.3）是这张卡的拆卡归类，它决定用哪个动词：`character` 走 `.import <ref> pc`，`world` 是模组机器部件，只能走管理员的 `.import <ref> world`（面向玩家的选择器应把它标成管理员专用，而不是当角色卡给出）。2.3 之前的服务端不发 `kind`，缺失按 `"character"` 处理。没有任何包携带卡文件时 `cards` 为空数组（不是缺省）：
-  `{type:"pack_cards", cards:[{ref:string, pack:string, name:string, kind:"character"|"world"}]}`
-- `presence` — 连接的玩家名单，在加入/离开时发送：
-  `{type:"presence", players:[{id,name,online}], online:int}`
-- `system` — 带外通知：`{type:"system", level:"info"|"warn", text:string}`
-- `turn_status` — 临时的房间级 AI-KP 活动状态。`busy` 携带正在结算其行动的 actor，`idle` 清除状态。客户端应显示动画忙碌指示，并设置安全超时以防结束帧丢失：
-  `{type:"turn_status", status:"busy", actor:string, activity?:"reading"|"dice"|"cast"|"bookkeeping", round?:int}` 或 `{type:"turn_status", status:"idle"}`。
-  长回合每进入一个工具轮会重发一次 `busy`，携带可选的 `activity` 与 `round`（2.3.1 新增）：`activity`
-  是该轮开头那类工作的粗分类，绝不含工具名或参数；`round` 从 1 开始计数。开场的 `busy` 以及更早版本的
-  服务器都不带这两个字段，忽略它们的客户端行为与以前完全一致；重复的 `busy` 应视为同一个指示器的刷新，
-  而不是新一轮回合。
-- `report`（v2.4）— 服务端生成的团报已为**本连接**准备好。只发给发出该 `.report html` / `.report html reveal` 的那一条连接——绝不广播、不进加入回放、不出现在任何列表里：
-  `{type:"report", hash:string, name:string, size:int, mime:"text/html", variant:"player"|"reveal"}`
-  页面是一个自包含的 HTML 文件（内联 CSS，无脚本，无外部资源），存为房间的**不公开** blob；用普通的媒体 GET（`{op:"get", hash}`）拉取并校验 sha256。`variant:"reveal"` 是管理员的剧透复盘版：它的 blob 只回应本房间守秘人密钥连接的 GET——其他连接得到 `media_not_found`，与房间里不存在的哈希完全一样。`name` 是建议文件名，按不可信处理（只保留基础文件名）。
-  **客户端规则（规范性）：**客户端**不得**在自己的界面里渲染团报（不用 webview、不做内联 HTML 面板）——只把文件存下来，**可以**把存好的文件交给系统浏览器打开。页面内容是不可信的桌面文本；浏览器打开本地文件才是它被设计面对的沙箱，客户端自己的界面不是。
-- `pong`: `{type:"pong", t:number}`
+### 2.2 分帧
 
-## 一个回合怎么走
+控制帧是按行分隔的 JSON：每行一个紧凑的 JSON 对象，UTF-8，以 `\n` 结尾。空行跳过。每一帧都是一个对象，带一个字符串 `type`。
 
-当房间 `R` 中的客户端发送 `input` 帧时，服务器：
+不是合法 JSON 的行按读不懂的帧处理（`bad_frame`，[4.5](#45-连接级错误)）。
 
-1. 从房间的 `SessionSource` 构建一个 `AgentCtx`（`chat_key = "tui:group:{room}"`，`user_id` = 客户端的密钥派生 id，`locale`）。
-2. 前置层：`RateLimiter.allow(user)` + `allow(room)`；如果被阻止，仅向该客户端发送 `error rate_limited`（回合在此停止）。
-3. 向整个房间广播 `narrative{speaker:"player", name, text}`（每个人都看到该操作，包括发送者）。
-4. 如果 `CommandRouter.dispatch(ctx, text)` 返回非 `None`，该字符串是回复（一个 `.`/`/` 命令或 SealDice 风格的内联掷骰子）。
-   否则，服务器先广播 `turn_status{status:"busy", actor:name}`，再由 `run_kp_turn(ctx, services, toolset, text, output_review=censor)` 驱动 AI 守秘人，返回一个 `KPTurnResult`。
-5. AI 守秘人运行**期间**，每次工具调用的公开后果**即时**广播，顺序就是模型调用的顺序（v2.3——此前是回合结束后从完整 trace 里读出来再发，流式服务商上会让叙述排在它所叙述的那次掷骰**上面**）：掷骰/检定工具（`roll_dice`、`skill_check`、`sanity_check`、`opposed_check`、`initiative_tracker`）按分发时绑定的结构化 payload 逐一产生 `dice` 帧（未发射 payload 的工具没有 dice 帧——帧永不从工具文本反解析重建）；`speak_as_npc` 产生 `narrative{speaker:"npc", name, text, format:"markdown"}`，`name` 是工具调用的 `npc` 参数，`text` 是玩家安全的工具结果。因此在流式服务商上这些帧会夹在 `narrative_delta` 分片**之间**到达；客户端不得假设增量流是连续的。
-6. 同一批 dice / npc 帧在**发生时**记录（`turn_event_history`），各自锚定到它所跟随的那条记录，加入房间时回放在同一位置——见上文 `narrative` 条目的加入回放说明。加入者看到的顺序与现场一致，含同伴子回合。
-7. 将回复广播为 `narrative{text: reply}`——命令回复为 `speaker:"system"`，AI 守秘人的回复是 `speaker:"kp", format:"markdown"`。回复已经过配置好的输出词表；守秘人专用工具的原始结果不会被代码直接抄进这一帧，但主守秘人模型看过那些结果，仍有可能自己复述出来，所以这部分风险由真模型红线评测另行实测。
-8. 对回合内事件钩子经 `emitUI` 缓冲的每条发射，各广播一个 `ui` 帧——服务端已经校验并截断过；没有钩子的房间完全不会出现此帧。
-9. 对钩子经 `emitPanel` 缓冲的每条发射，各送达一个 `panel_event` 帧——**不是**广播：每条只送达自己清单里含目标面板的成员。
-10. AI-KP 分支结束时（包括错误清理）广播 `turn_status{status:"idle"}`；命令回复不发送回合状态。
-11. 重新构建并广播一个 `state` 帧（`net.state.build_room_state`）。
+### 2.3 Ping
 
-密钥映射到同一房间的多个客户端共享一个 AI-KP 会话；上述每个描述为“广播”的帧都发送给当前连接到该房间的每个成员。
+客户端随时可以发 `{"type":"ping","t":<number>}`，`hello` 之前也可以；服务器立刻回 `{"type":"pong","t":<same number>}`。只有客户端发 ping：服务器从不发 ping，也不要求客户端发。用它测往返时间，或发现断掉的链路。
 
-## 模组 UI 面板
+## 3. 帧
 
-`.lwpack` 可以携带命名 UI 面板（`contents.panels` + `ui/panels.yaml`——创作指南见 `docs/plugins.md`）；管理员用 `.panels enable <packId>` 才把已安装包的面板准入房间（安装 ≠ 启用，与技能完全一致）。房间清单按观看者解析后经 `ui_manifest` 下发（见上文）。特权模型一句话说完：**面板以正在观看它的玩家身份行事**——入站只收到该观看者过滤后的数据，出站（`panel_intent`）只能发出该玩家自己能敲出的东西。
+共 11 种帧。
 
-`UiManifestPanel`（`audience` 永不出现——已在服务端解析）：
+客户端发往服务器：
 
-```jsonc
-{"id": "<packId>/<panelId>", "title": {"en": "...", "zh": "..."}, "slot": "sidebar|tray|modal",
- "tier": 1, "blocks": [/* 模板块 */]}
-// 或 tier 2：
-{"id": "...", "title": {...}, "slot": "modal", "tier": 2,
- "entry": {"hash": "<sha256>", "size": 1234},
- "assets": [{"path": "app.js", "hash": "<sha256>", "size": 999, "mime": "text/javascript"}],
- "fallback": [/* 模板块 */] /* 或 null */}
+| `type` | 字段 | 用途 |
+|---|---|---|
+| `hello` | `protocol`、`key`、`name?`、`locale`、`client {name, version}`、`caps`、`resume? {epoch, after}` | 第一帧：认证并加入钥匙所属的房间。 |
+| `input` | `rid`、`text` | 人打的一行字：发言，或文本命令。 |
+| `call` | `rid`、`method`、`params` | 客户端要的其他一切。 |
+| `ping` | `t` | 测往返时间。 |
+
+服务器发往客户端：
+
+| `type` | 字段 | 用途 |
+|---|---|---|
+| `welcome` | `protocol`、`server {name, version}`、`room {id, locale}`、`you {id, name, role}`、`features`、`epoch`、`head`、`first` | 对 `hello` 的回答。 |
+| `event` | `seq`、`id`、`ts`、`kind`、`turn?`、`data` | 房间日志的一条，发给每个成员，按 `seq` 顺序。 |
+| `signal` | `kind`、`data` | 临时：不记日志，不回放。 |
+| `view` | `name`、`rev`、`at`、`data` | 这条连接订阅的某个视图的当前值。 |
+| `result` | `rid`、`ok`，然后是 `data?` 和 `text?`（成功）或 `error {code, message}`（失败） | 对一个 `input` 或 `call` 的唯一回答，只发给调用者。 |
+| `error` | `code`、`message`、`fatal` | 只用于连接级：没有可回答的 `rid`。 |
+| `pong` | `t` | 对 `ping` 的回答。 |
+
+`rid` 是 1 到 64 个字符的字符串，由客户端选定，在它尚未得到回答的请求之间唯一。客户端帧里的未知字段，服务器忽略。
+
+## 4. 连接
+
+### 4.1 `hello`
+
+```json
+{"type":"hello","protocol":"3.0","key":"rT9vQ2xLm8Kc3PzW0aYbN5sEdF7gHjU1","name":"Ada","locale":"en","client":{"name":"my-client","version":"0.1.0"},"caps":[]}
 ```
 
-**Tier-1 模板块**是 v1.7 `UiBlock` 词汇表加两个模板扩展，由**客户端**对照自己的 `state.variables` 解析（id 与该列表完全一致——modvar id、带 `mvu.` 前缀的叶子）：
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `protocol` | string | `"3.0"`。只比较主版本。 |
+| `key` | string | 访问钥匙。 |
+| `name` | string，可选 | 显示用的名字。会去掉首尾空白；为空或缺省时用钥匙自己的名字。最多 64 个码点。 |
+| `locale` | string | 客户端的语言，如 `en`、`zh`、`zh-CN`。只取 `-` 或 `_` 之前的部分；服务器没有该语言的文本时回退到 `en`。发给这个成员的结果、错误和视图都用这种语言写。 |
+| `client` | `{name, version}` | 客户端自己的名字和版本，都是字符串。 |
+| `caps` | string[] | 客户端能做什么。3.0 服务器没有定义任何取值，会忽略这个列表；发 `[]`。 |
+| `resume` | `{epoch, after}`，可选 | 房间代次和这个客户端持有的最后一个 `seq`。整数。见 [7.4](#74-续传与回放上限)。 |
 
-- 任何标量字段可写 `{"$var": "<变量 id>"}`；该变量对本观看者不存在/未公开时，若该字段是**必填**则**整块省略**，若是可选字段则只丢掉该字段、块保留（拿不准就不显示——面板永远没法让人多看见东西；线上那道 `state` 过滤器仍然是唯一的关口）；
-- `{"repeat": {"prefix": "<id 前缀>", "block": <模板块>}}` 对每个 id 以该前缀开头的可见变量渲染一个实例（≤ 32 个）；块内 `{"$leaf": "id"|"label"|"value"}` 代入匹配变量的对应字段；
-- （2.5）这类绑定若是拿变量的值来**显示**（文本字段、`stat` 的值），而该条目带 `value_label`，就显示这个名字；`visible_when`、徽章的 `tone` 和所有数值字段一律读原始 `value`（`docs/lwf/formats/panels.md` §5.1 第 7 条）。
+服务器按以下顺序检查，遇到第一个不通过的就以**致命** `error` 拒绝（然后关闭连接）：
 
-`image` 与 `map_pin` 是由服务端**改写**而非原样透传的模板块：作者写包内相对路径 `src`，清单里携带的是解析后的 `{hash, mime, size}` 加该块自己的（本地化）字段——寻址由打包过程决定，因此面板只可能指向**它自己这个包所附带**的图片。拉取方式与 Tier-2 资产一致，走媒体字节通道。其余演出模板都是普通的本地化文本；`map_pin` 的 `x`/`y` 可以绑定 `{$var}`，让标记随剧情移动。
+1. `protocol` 的主版本是 3，否则 `protocol_mismatch`（消息里写出双方的版本）；
+2. 钥匙是已知的，否则 `bad_key`；
+3. 去掉首尾空白后的 `name` 最多 64 个码点，否则 `bad_name`（拒绝，从不截断）。
 
-**`visible_when`（2.1）**——任何模板块都可以带 `visible_when: "<条件>"`，由**客户端**针对本观看者自己的 `state.variables` 求值。`$var` 的「不存在即隐藏」表达不了**按值**开关（「day >= 46 之后才显示」），而值在运行时才变，服务端无法按观看者预先过滤。语法是一个刻意很小的**可移植子集**（子集之外的表达式在打包时就被拒绝，所以到达客户端的条件必然在子集内）：
+语言在这些检查之前就从 `hello` 里取出，所以即使是这些拒绝，也用客户端的语言写。
 
-- 比较 `=== !== == != >= <= > <`；逻辑 `&& || !`（也接受 `and`/`or`/`not`）；
-- 字面量：数字、`'字符串'`、`"字符串"`、`true`/`false`/`null`/`undefined`；
-- 引用：裸的点分路径（含中日韩文），按**变量 id** 在 `state.variables` 里查；查不到即 `null`。
-- **不在子集内**：算术、函数调用（含 `getvar`）、方括号取值。
+### 4.2 先 `welcome`，再回放
 
-语义以参考实现为准，而非 JavaScript 自己的运算符：`==`/`!=` 会对数字字符串做强制转换，`===`/`!==` 是严格比较（布尔永远不严格等于数字），无法比较大小的组合（`"abc" > 5`、`null > 5`）是**错误**。**求值出错、或客户端无法求值的条件必须隐藏该块**——判不出来就不显示，和 `$var` 取不到值是同一条规矩，也是小版本新增字段里唯一一个不许被忽略的（见「版本控制」）。这条规则对条件可以落在的每一种块都成立，`repeat` 也不例外：条件写在 repeat 自己身上，整段就不展开；写在它内层的模板上，就一个实例一个实例地判。隐藏变量在求值前就被剔除，因此条件永远无法把线上过滤掉的东西试探出来；反过来说，带条件的块，内容无论条件成不成立都在清单里，所以 `visible_when` 是展示手段，绝不是保密手段。`tests/fixtures/visible_when_vectors.json` 是各实现共用的一致性向量表。
+成功时，服务器按以下顺序发送，中间不夹任何别的东西：
 
-本地化文本是 `{en,zh}` 映射；客户端按自己语言选取（回退 `en`）。点选 Tier-1 `choices` 选项发送 `panel_intent{kind:"choice", value: <选项的 input>}`。文本客户端（TUI）用既有块渲染器画 Tier-1，`tray`/`modal` 收进侧栏分区，Tier-2 渲染其 `fallback` 块，对显式 `fallback: null` 显示一行本地化的“请在富客户端查看”。
+1. `welcome`；
+2. 回放：客户端应得的事件（[7.4](#74-续传与回放上限)），按 `seq` 顺序；
+3. 此后是实时流量。
 
-**Tier-2 资产**按内容寻址：对清单里的每个 hash 走**既有**媒体字节通道拉取（`{op:"get", hash}`——见「媒体传输」）；线上 `path` 是相对 entry 文档所在目录的路径（每个面板是一个自包含静态根）。缓存前校验 sha256（不可变，按 hash 键）。
-
-## 媒体传输（v1.2+）与音频（v1.3）
-
-所有媒体都经服务器存储转发。JSON 控制流只传元数据；原始字节永远不进入 JSON，也不做 base64。支持上传的 MIME 为 `image/png`、`image/jpeg`、`image/webp`、`image/gif`、`image/svg+xml`、`audio/mpeg`、`audio/ogg`、`audio/wav`、`audio/flac`、`audio/mp4`、`audio/aac`。图片默认限制为单文件 8 MiB、每房间 512 MiB；音频默认限制为单文件 128 MiB、每房间 2 GiB。二者共用每成员每分钟 10 次上传限速。服务端只把媒体当不透明 blob 存储，解码和播放只发生在客户端。
-
-SVG 是“不透明存储”的例外：服务端只接受静态安全子集（`svg`、`g`、`rect`、`line`、`polyline`、`text`、`tspan`、`title`、`desc`），会用 `error media_bad_svg` 拒绝脚本、foreignObject、事件属性、外链、data URL 和 CSS/url 执行面。TUI 的 SVG 预览只把这些静态绘图信息解析成终端文本，不会像浏览器那样执行 SVG 内容。
-
-上传流程：
-
-1. 客户端在控制流发送 `media_offer{name,mime,size,sha256}`。
-2. 服务端校验 MIME、大小、房间配额、限速和房间上传开关，然后返回 `media_accept{upload_id}` 或 `error`。如果本房间已有相同 hash，可返回 `media_accept{upload_id:"", existing:true, media|audio}` 并直接广播元数据，无需 PUT。
-3. 客户端通过 MediaChannel 发送 PUT：header `{op:"put", upload_id}` 加原始字节。
-4. 服务端校验精确大小和 sha256，存入 `data_dir/media/<room>/<sha256>`，登记 `media_index(hash, room, mime, size, name, uploader, created_at)`；图片广播 `media`，音频广播 `audio_library_item`。
-
-下载流程：
-
-1. 客户端通过 MediaChannel 发送 GET：header `{op:"get", hash}`。
-2. 服务端确认该 hash 属于调用者房间，然后返回 `{op:"get",hash,size,mime,name}` 加原始字节。客户端应校验 sha256，并可缓存到 `~/.loreweaver/cache/media/<hash>`。
-3. 不属于房间媒体的 hash 会继续在**本房间已启用**包的已安装资产里解析——这就是面板资产的拉取路径。回复形状相同；服务端在返回前会把字节重新对照 manifest 摘要校验。房间没启用的包，它的 hash 仍然返回 `media_not_found`——这个接口不能被当成任意文件的下载口。
-4. （v2.4）房间里还可能有**不公开** blob：服务端生成的团报（`text/html`，见 `report` 帧）。它们从不作为 `media` 广播、不在加入时回放、也不进房间导出。`members` 受众（玩家版）回应本房间任何成员的 GET；`keeper` 受众（复盘版）只回应守秘人密钥连接，对其他人一律 `media_not_found`——与未知哈希的回复相同。`text/html` **不是**可上传类型：客户端永远不能提交 HTML。团报字节计入房间的图片配额。
-
-MediaChannel 的传输格式：
-
-- Iroh：在同一连接上打开新的双向流。流以一行 JSON header 开头（`\n` 结尾）。PUT 时客户端随后按不超过 64 KiB 的块写入原始字节，服务端存好后回一行 `{op:"put_ok", hash}`（拒收则回一行 `{type:"error", code, message}`）；GET 时服务端先写一行 `{op:"get",hash,size,mime,name}` 响应 header，再按不超过 64 KiB 的块写入原始字节，出错则只回一行 `{type:"error", ...}`、无字节体。
-- WebSocket：一条二进制消息为 `uint32_be header_length` + UTF-8 JSON header + 原始字节。PUT 发送 `{op:"put", upload_id}` 加 body，成功以房间广播的 `media` / `audio_library_item` 帧为准，拒收则以标准 `error` 文本帧返回。GET 发送 `{op:"get", hash}` 且无 body；服务端回复 `{op:"get",hash,size,mime,name}` 加 body。
-
-音频控制与字节传输是分离的。上传音频文件只会创建或更新房间音频库。管理员的命令，比如 `.bgm play <音频>`、`.ambience stop`、`.sfx <音频>` 会广播 `audio_control` 帧；TUI 客户端用同一套 GET 流程拉取字节并在本机播放。服务端自身不播放音频。
-
-## 认证与密钥
-
-没有注册。部署者运行离线管理员命令以创建绑定到房间的密钥：
-
-```
-python -m app --tui-key add --room R --name N [--role player|keeper]
+```json
+{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2,"first":1}
 ```
 
-密钥存在 TOML 文件（默认 `keys.toml`，可用 `--keys FILE` 或 `TRPG_TUI_KEYS` 环境变量覆盖），每个密钥一个表：
+| 字段 | 含义 |
+|---|---|
+| `protocol` | 服务器的版本。主版本不同时，客户端拒绝。 |
+| `server` | 服务器的名字和版本。 |
+| `room.id` | 钥匙所属的房间。 |
+| `room.locale` | 房间的语言：事件和信号用它写。 |
+| `you` | 你的成员 id、你显示的名字和你的身份。 |
+| `features` | 服务器在协议之外提供什么。3.0 服务器发 `[]`。 |
+| `epoch` | 房间当前的代次。 |
+| `head` | 房间已经发出的最大 `seq`。 |
+| `first` | 房间仍保存的**最早**事件的 `seq`（日志为空时为 0）。`head` 从不后退——重置之后不退，撤销之后也不退——所以它说明不了还有多少历史；`first` 能说明。 |
 
-```toml
-["<opaque-key>"]
-room = "R"
-name = "N"
-role = "player"  # 或 "keeper"；默认为 "player"
+回放和加入在服务器上是一个不被打断的步骤，所以不会有实时事件落在两条回放事件之间，也不会漏掉。回放只有事件，没有视图。如果此刻正有守秘人回合在运行，服务器在回放之后紧跟一个 `turn` 信号（`busy`，带 `actor`），让在回合中途连上的客户端知道；没有回合在运行就什么都不发，客户端从空闲状态开始。
+
+### 4.3 `welcome` 之后
+
+已加入的连接上再发 `hello`，回一个非致命的 `bad_frame`。在成功的 `hello` 之前发其他帧（`input`、`call`），连接以致命的 `hello_first` 结束。`ping` 随时都回答。
+
+视图不会自动订阅：想要视图的客户端在 `welcome` 之后调用 `view.subscribe`，每次重连之后都要再调一次（[10.2](#102-订阅)）。
+
+### 4.4 身份
+
+| 身份 | 可以 |
+|---|---|
+| `player` | 发言，运行玩家命令，订阅视图，上传（上传开启时），获取房间媒体。 |
+| `admin` | 玩家能做的一切，加上管理员命令和仅限管理员的参数，以及获取仅限管理员的文件。 |
+| `observer` | 观看：接收事件、信号和视图，运行少数标明旁观者可用的命令（`help`、`recap`、不带 `reveal` 的 `report`、只列出的 `panels`、不带参数的 `uploads`、只列服务商的 `model`，即不带 `provider` 和 `lane` 的 `list`），获取房间媒体。旁观者的发言被拒绝（`observer_speech`），上传也被拒绝（`observer_upload`）。 |
+
+身份属于钥匙，不能从连接上更改。房间管理员用 `key` 命令（[6.8](#68-引擎的命令)）更改一把钥匙的身份：持有者现有的连接随即结束，客户端重连后在 `welcome` 里带着新身份回来。“守秘人”从来不是一种身份：守秘人是 AI。持有管理员钥匙的人是房间管理员。
+
+### 4.5 连接级错误
+
+`error` 帧回答没有 `rid` 的东西。带 `fatal: true` 时，服务器发完就关闭连接；客户端不得用同样的设置重新拨号（参考客户端把会话标记为已结束）。
+
+| 错误码 | 致命 | 何时 |
+|---|---|---|
+| `protocol_mismatch` | 是 | `hello.protocol` 的主版本不同。 |
+| `bad_key` | 是 | 钥匙未知。 |
+| `bad_name` | 是 | `hello.name` 超过 64 个码点。 |
+| `hello_first` | 是 | 在成功的 `hello` 之前收到了 `input` 或 `call`。 |
+| `hello_timeout` | 是 | 连接打开后 15 秒内没收到 `hello`（`HELLO_TIMEOUT_MS`）。 |
+| `bad_frame` | `welcome` 之前是，之后不是 | 读不懂的帧：不是 JSON、不是对象、没有字符串 `type`、未知的 `type`、缺必填字段、`input` 或 `call` 没有合法的 `rid`，或第二个 `hello`。 |
+
+格式有误但带着合法 `rid` 的 `input` 或 `call` 不算 `error`：它得到一个 `result` 拒绝（`input_too_long`、`invalid_params`）。
+
+**致命错误之后连接怎样结束。** 服务器写出 `error` 这一行，结束自己这一侧的控制流，让连接保持打开，等客户端挂断——最多 3 秒，之后服务器自己关闭连接。客户端读到致命 `error` 后关闭连接。（如果服务器立刻关闭，还在路上的那一行可能丢失，客户端本该读到 `bad_key`，看到的却是链路断开。）
+
+**等待第一句话。** 双方都以同样的 15 秒为限。没收到 `hello` 的服务器回 `hello_timeout` 并关闭。已发出 `hello`、却既没收到 `welcome` 也没收到致命 `error` 的客户端断开链路；和致命错误不同，这只是一次普通的连接失败，可以再次拨号。
+
+## 5. 请求与结果
+
+### 5.1 一个请求一个回答
+
+每个 `input` 和每个 `call` 都恰好得到一个 `rid` 相同的 `result`，只发给调用者。拒绝是 `ok: false` 的 `result`；它从来不是事件，也不会到达其他任何人。
+
+```json
+{"type":"result","rid":"r3","ok":true,"data":{"totals":[10]}}
 ```
 
-在 `join` 时，服务器查找 `key`；未知的密钥被拒绝，返回 `error bad_key` 并关闭连接。已识别的密钥将连接绑定到 `SessionSource(platform="tui", chat_type="group", chat_id=room, user_id="tui:" + sha1(key)[:8], user_name=name)` —— 见 `net/keystore.py` 和附带的 `keys.example.toml`。
+```json
+{"type":"result","rid":"r5","ok":false,"error":{"code":"forbidden","message":"That is for the room admin."}}
+```
 
-## 管理帧（v1.1，仅管理员）
+- `ok: true` 可以带 `data`（结构化数据，因方法或命令而异）和 `text`（同一个回答写给人看的版本，用调用者的语言）。可以只有一个，两个都有，或都没有。纯文本客户端打印 `text`。
+- `ok: false` 带 `error.code`（稳定，给程序用）和 `error.message`（给人看，用调用者的语言）。
 
-部署者（房间管理员）可以在终端客户端的管理员页面里，用**守秘人角色的密钥**在同一条连接上管理服务器。`join` 时绑在这条连接上的角色就是唯一的管理员判据，没有第二套认证。服务器只对 `keeper` 连接回答这些帧；其他连接得到 `admin_error{code:"forbidden"}`，且不会读取或修改数据。实现在 `net/admin.py`。
+结果之间没有顺序保证：排在守秘人回合后面的命令，会比之后发出的 `view.get` 更晚得到回答。按 `rid` 对应。
 
-客户端 → 服务器：
+**结果去哪。** 桌上发生的事以**事件**发布，发给每个成员。只关乎调用者的事（成功与否、为什么失败、查询的答案、任何秘密，比如暗骰）是**结果**。一个命令常常两样都有：`.r 2d6` 在日志里放一个 `dice` 事件，并以 `data.totals` 回答调用者。
 
-- `admin_get_config` — `{type:"admin_get_config"}`
-- `admin_set_model` — 切换实时 LLM provider/模型，并可设置该 provider 的 API key / `base_url`。字段省略时，只有 endpoint 未变才复用已保存凭据；显式空值会清空字段。提供新的 `base_url` 却不同时提供新 `api_key` 时，旧 key 会被清空，绝不会发往新 endpoint：
-  `{type:"admin_set_model", provider:string, chat_model?:string, api_key?:string, base_url?:string}`
-- `admin_set_imagegen` — 配置 OpenAI-compatible 生图 endpoint；遵循相同的 endpoint/key 隔离规则：
-  `{type:"admin_set_imagegen", provider:string, base_url?:string, model:string, api_key?:string, size?:string}`
-- `admin_list_models` — 获取某 provider 的实时模型列表。预览不同 `base_url` 时不会复用 saved/current key，除非同一请求明确提供 key；回复中也包含当前 `imagegen` 状态：
-  `{type:"admin_list_models", provider?:string, api_key?:string, base_url?:string}`
-- `admin_list_keys` — 只列出调用者 key 所绑定房间的访问 key：`{type:"admin_list_keys"}`
-- `admin_mint_key` — 只为调用者所绑定的房间创建访问 key；`room` 可省略，指定其他房间会被拒绝：
-  `{type:"admin_mint_key", room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_update_key` — 按稳定的非秘密 id 更新一个密钥。把房间**最后一个**守秘人加入密钥降级会被拒绝并返回 `admin_error{code:"last_keeper"}`（防锁死——请先铸造第二个守秘人密钥）：
-  `{type:"admin_update_key", id:string, room?:string, name?:string, role?:"player"|"keeper"}`
-- `admin_delete_key` — 按 id 删除一个密钥；删除房间最后一个守秘人加入密钥同样被拒绝（`last_keeper`）：
-  `{type:"admin_delete_key", id:string}`
-- `admin_delete_room` — 删除绑定到房间的每个访问密钥；房间数据保持不变：
-  `{type:"admin_delete_room", room:string}`
-- `admin_export_room` — 在服务器上写一个房间备份 JSON 文件。如果省略 `path`，服务器在 `<data_dir>/room_backups/` 下写入：
-  `{type:"admin_export_room", room:string, path?:string}`
-- `admin_import_room` — 恢复服务器端备份 JSON。如果提供了 `room`，快照在恢复前被重映射到该房间：
-  `{type:"admin_import_room", path:string, room?:string}`
-- `admin_delete_room_data` — 删除这个房间的访问密钥、按房间存的 KV 状态、文档向量和世界书向量。`backup` 默认为 `true`；启用备份时，删除仅在备份写入成功后进行：
-  `{type:"admin_delete_room_data", room:string, backup?:boolean, path?:string}`
-- `admin_reset_room` — 原地重开战役，保留密钥、绑定、在线连接和房间设置（语言、房规、已启用的技能），所以这一桌不用重新配置就能重开。不做备份，也不踢任何人（这点和 `admin_delete_room_data` 相反）。`scope` 决定清到哪一步：`"story"`（默认）只清剧情和进度（角色、模组、设定、媒体都留着）；`"chars"` 连角色一起换（模组留着）；`"all"` 全部清空（角色、模组、设定、媒体）。仅管理员可用，且限于调用者自己的房间：
-  `{type:"admin_reset_room", room:string, scope?:"story"|"chars"|"all"}`
-- `admin_update_server` — 管理员请求服务端原地自更新。不带参数：服务端跑的是运维自己配好的那条命令（`TRPG_TUI__UPDATE_COMMAND`，比如 `git pull && uv sync`），绝不执行客户端递过来的东西，且需要 `welcome` 中通告的 `"update"` 特性。成功后服务端会 re-exec 到新代码，客户端应预期短暂断连后重连：
-  `{type:"admin_update_server"}`
-- `admin_list_skills` — 列出所有可发现的守秘人技能（Layer B.1），并按调用者自己的房间标记 `enabled`。可选 `locale`（`"en"`/`"zh"`，增量字段）请求按客户端自身界面语言返回技能显示名/描述（技能需带 `name-zh`/`description-zh` frontmatter），与服务端语言无关；缺省时按服务端语言返回：
-  `{type:"admin_list_skills", locale?:string}`
-- `admin_enable_skill` — 为调用者房间启用/停用一个技能；回复一份新的 `admin_skills`（同样支持可选 `locale`）：
-  `{type:"admin_enable_skill", id:string, on:boolean, locale?:string}`
-- `admin_list_rules` — 列出所有可发现的规则系统（Layer A）：
-  `{type:"admin_list_rules"}`
-- `admin_generate` — 通过对应的 `agent.forge` 自扩展引擎，从自然语言描述创作并安装全新的技能/规则系统/模组（Layer B.3）；`kind:"module"` 的生成会安装进调用者自己的房间。这是一次较慢的 LLM 调用，按普通请求/应答处理——客户端在等待 `admin_generated` 期间显示加载动画：
-  `{type:"admin_generate", kind:"skill"|"rule"|"module", description:string}`
+### 5.2 `input`
 
-服务器 → 客户端：
+`{"type":"input","rid":"…","text":"…"}`。`text` 最多 8000 个码点；超过就以 `input_too_long` 拒绝。由服务器判断这一行是什么（[6.2](#62-两个入口)）：
 
-- `admin_config` — 实时、显示安全的 LLM 配置（api_key 已遮蔽）加上提供商目录、已有保存凭据的 provider（`saved_providers`）、运行时覆盖是否活跃，以及显示安全的图像生成状态：
-  `{type:"admin_config", provider:string, chat_model:string, base_url:string, api_key_masked:string, providers:string[], saved_providers:string[], override_active:boolean, imagegen?:ImageGenStatus, using_demo?:boolean, subscription_status?:""|"logged_in"|"logged_out"}`
-  `using_demo` 表示现在是不是还由离线示例守秘人在应答，让客户端在热切到真模型之后立刻撤掉过期的入口。`true` 本身不授权载入；只有按房间计算的 `welcome.features` 才能添加入口。
-  当前提供方实际走 ChatGPT / SuperGrok OAuth 时，`subscription_status` 为 `"logged_in"` 或 `"logged_out"`；空值或缺省表示经典 API-key 路径，包括显式配置代理 `base_url` 的 `chatgpt` / `gpt-subscription`。登录仍用私密聊天命令（`.model login`）；TUI 模型页只展示状态。
-- `admin_models` — 某 provider 的实时模型列表：
-  `{type:"admin_models", provider:string, models:string[], imagegen?:ImageGenStatus}`
-- `ImageGenStatus` — `{provider:string, base_url:string, model:string, size:string, api_key_masked:string, has_key:boolean, configured:boolean, saved_providers?:string[]}`。API key 永不以明文返回。
-- `admin_keys` — 仅含调用者自己房间的 key 名单；每个条目的 key 值被遮蔽。`mint` 请求会额外在 `minted` 里把新密钥明文返回一次，供管理员复制：
-  `{type:"admin_keys", keys:[{id:string, key_masked:string, room:string, name:string, role:"player"|"keeper"}], minted?:{key:string, room:string, name:string, role:"player"|"keeper"}}`
-- `admin_room_op` — 导出/导入/完全删除房间操作的结果：
-  `{type:"admin_room_op", action:"export"|"import"|"delete"|"reset", room:string, path?:string, keys:number, store_rows:number, vector_points:number, media_files?:number, scope?:"story"|"chars"|"all"}`
-  （`scope` 只在 `reset` 时出现，回显这次用的清除范围。）
-- `admin_update` — `admin_update_server` 的回复。`"restarting"`：命令成功、服务端正在 re-exec；`"failed"`：命令以非零码退出，`output` 为其合并 stdout/stderr 的末尾。（未配置命令时返回 `admin_error{code:"not_configured"}`。）
-  `{type:"admin_update", status:"restarting"|"failed", output?:string}`
-- `admin_skills` — 所有可发现技能，`enabled` 反映调用者房间的启用状态（`name`/`description` 已按请求的 `locale` 本地化）：
-  `{type:"admin_skills", skills:[{id:string, name:string, description:string, content_rating:string, enabled:boolean}]}`
-- `admin_rules` — 所有可发现的规则系统，`built_in` 区分内置系统（`coc7`/`dnd5e`）与生成/用户安装的系统：
-  `{type:"admin_rules", systems:[{id:string, built_in:boolean}]}`
-- `admin_generated` — 锻造引擎的结果；`ok` 为 `false` 时 `id`/`name` 为空、`error` 携带（未翻译的）诊断信息，且没有任何东西被安装。`detail` 携带按房间的安装结果——对 `kind:"module"` 它是模组是否真正落进房间的唯一信号（`ok` 只表示成功创作并写出了合法文档）；对 `skill`/`rule` 为空（无按房间安装步骤）：
-  `{type:"admin_generated", kind:"skill"|"rule"|"module", ok:boolean, id:string, name:string, error:string, detail:string}`
-- `admin_error` — 本地化的故障通知（不关闭连接）：
-  `{type:"admin_error", code:"forbidden"|"unknown_provider"|"bad_request"|"set_failed"|"not_found"|"op_failed"|"not_configured"|"last_keeper", message?:string}`
+- **文本命令**（前缀加命令词）：完全按 `command.run` 的方式运行，结果就是命令的回答。
+- **发言**（其他一切）：这一行立刻被接受。先发布它的 `narrative` 事件和其中内联掷骰的 `dice` 事件，然后调用者得到 `ok: true`（`text` 里写出解析失败的内联掷骰）。守秘人的回合随后排在房间锁后面，回复稍后以事件的形式到达。结果不等回复。
 
-`admin_set_model` 根据已知 provider 验证 `provider`（`infra.providers.is_known_provider`），通过 `services.runtime_config` 持久化覆盖，并热重配置共享的 `MutableLLM`——与 `.model set` 聊天命令走同一路径——然后回复新的 `admin_config`。API key / `base_url` 按 provider 成对保存在本地凭据簿；只有 endpoint 未变时才会复用。新 endpoint 必须在同一请求提供匹配 key，否则使用并持久化空 key。订阅 OAuth grant 也保存在同一凭据簿的规范 provider 名下。
+### 5.3 方法
 
-提供商目录是递增的。`chatgpt` / `gpt-subscription` 有两种模式：没有 `base_url` 时使用 `.model login chatgpt` 获取的 ChatGPT 订阅 OAuth grant；显式设置 `base_url` 时仍走经典 OpenAI-compatible 代理及其 API key。`supergrok` 始终使用 SuperGrok 订阅 OAuth（`.model login supergrok`），且该 grant 可与 SuperGrok 生图共享。
+| 方法 | params | 成功时的 `data` | 拒绝 |
+|---|---|---|---|
+| `command.run` | `{id, args?}` | 命令自己的回答（[6](#6-命令)） | `invalid_params`（`id` 不是最多 200 个码点的非空字符串），以及所有命令拒绝 |
+| `view.list` | `{}` | `{views: [{name, schema, title?}]}` | — |
+| `view.subscribe` | `{names}` | `{problems: [{name, code}]}`；当前值随后以 `view` 帧发来 | `invalid_params`（`names` 不是最多 64 个字符串的列表） |
+| `view.unsubscribe` | `{names}` | `{removed: [name]}` | `invalid_params` |
+| `view.get` | `{name}` | `{name, rev, at, data}` | `invalid_params`、`unknown_view`、`view_failed`、`too_large` |
+| `log.page` | `{before, limit?}` | `{events: [event frame]}`，最早的在前 | `invalid_params`（`before` 不是整数；`limit` 不是 1 到 100 的整数） |
+| `media.offer` | `{name, mime, size, sha256, purpose?}` | `{upload_id}` 或 `{existing}` | 见 [11.2](#112-申报文件) |
 
-房间备份快照包含房间的原始访问密钥以及战役状态和向量点。将导出的 JSON 视为 `keys.toml` 或 SQLite 数据库：这是敏感的服务器端数据，不应公开共享。
+未知方法以 `unknown_method` 拒绝。`params` 可以省略（此时为 `{}`）；给了但不是对象，以 `invalid_params` 拒绝。
 
-## NPC 帧（v1 新增）
+### 5.4 限流
 
-这一组帧是给 AI 驱动、知识受限的 NPC 子角色用的（`agent/npc.py`、`agent/npc_actor.py`、`agent/kp_tools_npc.py`）。守秘人自己的叙述之前，服务端会把每一次 `speak_as_npc` 的结果单独发成一帧 `narrative{speaker:"npc", name:<npc>, format:"markdown"}`。不认识这个 speaker 值的客户端，把它当普通叙事行渲染就行。
+每个成员有一个令牌桶：突发 5 个，每两秒补一个（服务器默认值）。每个 `input` 和每个 `command.run` 花一个令牌；用完时请求以 `rate_limited` 拒绝，不排队。视图、`log.page` 和 `ping` 不限流。上传有自己的限制（[11.2](#112-申报文件)）。
+
+## 6. 命令
+
+### 6.1 命令模型
+
+命令是人执行的唯一一种操作。引擎的命令、房间规则系统（它的“规则包”）的命令和房间模组的命令共用一张表，通过 `commands` 视图发现（[6.5](#65-发现命令commands-视图)）。
+
+| 来源 | id 的样子 | 例子 |
+|---|---|---|
+| `engine` | 一个普通单词 | `roll`、`undo`、`help` |
+| `pack` | `rules.<subsystem>` | `rules.sanity_check` |
+| `module` | `<module>/<name>` | `duel/strike` |
+
+### 6.2 两个入口
+
+同一个命令有两条路可以到达，身份检查、参数校验、限流和排队都相同：
+
+- 带文本形式的 `input`：`.r 2d6`；
+- `call` `command.run`：`{"id":"roll","args":{"expr":"2d6"}}`。
+
+文本形式的参数字符串被解析成和结构化调用传的完全一样的参数对象，然后两者都按命令的参数 schema 校验，到达同一个处理函数。命令在一个事务里运行：被拒绝时，房间保持原样。
+
+**顺序。** 命令和发言排在每个房间的一把锁后面，按到达顺序执行。命令不开启守秘人回合。有三个命令是**房间生命周期**命令，不等锁：`undo`、`reset` 和 `save`（导出与导入）。它们立刻运行，守秘人回合进行到一半也一样；旧代次仍在进行的工作（等模型的回合、排队的发言）会自己提交失败，进行中的回合照常以 `turn idle` 信号结束。`pack install`、`model`、`imagegen` 和 `key` 也不等锁：它们作用于服务器（一次下载、一次换模型、一把吊销的钥匙），不能排在回合后面。`genchar` 和角色卡的 `import`（各自要等自己的一次模型调用）、`report`（读的是当下的日志）也不等锁。换模型时正在进行的回合，用它开始时的模型跑完。
+
+### 6.3 文本形式
+
+去掉首尾空白后，一行在满足以下条件时是文本命令：
+
+1. 以三个等价前缀之一开头：`.`、`。`（U+3002）或 `/`；
+2. 后面可以有空白，然后是**命令词**：第一段连续的非空白字符，大小写折叠后精确匹配。没有粘连写法：`.r3d6` 的命令词是 `r3d6`，不是任何命令；
+3. 这个词是本房间的某个命令。
+
+命令词之后的一切（去掉首尾空白）是参数字符串，最多 4000 个码点（超过就以 `too_long` 拒绝，从不截断）。
+
+- 没有前缀、没有命令词，或命令词不是任何命令的行，是**发言**，原样在桌上说出。所以打错的命令会作为发言到达守秘人。
+- 例外：某个已安装规则系统声明了、但本房间规则系统没有的命令词，以 `not_in_system` 拒绝，而不是变成发言。
+- 引擎的形式优先于规则包的形式。每个命令都有一张英文别名表和一张中文别名表；两张总是都查，调用者的语言优先。
+- 模组命令唯一的文本入口是完整 id 加一个 JSON 对象：`.duel/strike {"target":"Bo"}`（没有参数字符串即 `{}`；不是 JSON 对象的一律以 `module_args` 拒绝）。
+
+**内联掷骰。** 发言里最多可以带 8 个写成 `[[expr]]` 的内联掷骰，如 `I swing the lantern [[1d6]]`。每个都会掷出，并紧跟在这一行的 `narrative` 事件之后作为 `dice` 事件发布。解析失败的掷骰被跳过，并在结果的 `text` 里写出；超过 8 个则一个都不掷。
+
+### 6.4 拒绝
+
+命令拒绝是一个带稳定错误码和调用者语言消息的 `result`。客户端最常遇到的错误码：
+
+| 错误码 | 含义 |
+|---|---|
+| `unknown_command` | 本房间没有这个 id（或文本形式）的命令。 |
+| `forbidden` | 这个命令，或给出的某个参数，是房间管理员专用的；或者旁观者试了一个没有标明旁观者可用的命令。 |
+| `usage` | 文本形式的参数读不懂；消息里带着用法行。 |
+| `unknown_arg`、`missing_arg`、`invalid_arg` | 参数对象不符合 schema；消息里写出路径（`expr`、`a.skill`、`writes.0.value`）。 |
+| `too_long` | 文本形式的参数字符串超过 4000 个码点。 |
+| `no_rule_system`、`not_in_system`、`no_media` | 这个命令此刻在本房间不可用（同样的词也出现在 `commands` 视图的 `reason` 里）。 |
+| `stale_generation` | 命令等待期间，房间被回退、重置或替换了。请重试。 |
+| `rate_limited` | 成员的突发额度用完了。 |
+| `module_args`、`module_unavailable` | 模组命令的参数不是 JSON 对象；模组拒绝了（原样显示它自己的理由）。 |
+| `command_failed` | 服务器出错；什么都没改。 |
+
+命令还有自己的错误码（`bad_dice`、`no_character`、`name_taken`、`reset_not_armed`、`undo_out_of_range`、`undo_beyond_depth`、`not_uploaded`、`not_a_card`、`last_admin`……）。没有专属文字的错误码，用一条包含该错误码的通用消息表述。不认识的错误码当作普通拒绝处理，显示 `message`。
+
+### 6.5 发现命令：`commands` 视图
+
+`commands` 视图（[10.4](#104-内置视图)）列出这个查看者能看到的命令，以及这个查看者此刻能怎样使用它们：
+
+```json
+{"id":"roll","source":"engine","title":"Roll dice","description":"Roll a dice expression for the table to see. A comparison straight after a dice group counts the dice that meet it (5d10>=7); compare a total in parentheses ((5d10)>6). d% is a d100. N# rolls N times; adv/dis keeps the better or worse of two.","params":{"type":"object","properties":{"expr":{"type":"string","minLength":1,"maxLength":1000},"repeat":{"type":"integer","minimum":1,"maximum":20},"mode":{"type":"string","enum":["adv","dis"]}},"additionalProperties":false},"role":"player","available":true,"text":{"forms":["roll","r"],"usage":".r [N#][expr] [adv|dis] — e.g. .r 3d6+2, .r 2#1d20 adv, .r 5d10>=7"}}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `id` | `command.run` 接受的 id。 |
+| `source` | `engine`、`pack` 或 `module`。 |
+| `title`、`description` | 用查看者的语言（模组的按模组写的原样）。 |
+| `params` | 参数，一个 JSON Schema 对象（[6.6](#66-参数-schema)）。 |
+| `text` | 可选：`forms`（运行它的词，不带前缀）和 `usage`（一行用法说明）。没有文本形式的命令没有这个字段。 |
+| `role` | `player`（玩家和管理员）或 `admin`（仅管理员）。 |
+| `danger` | 破坏性命令带这个字段且为 `true`：运行前先确认（`undo`、`reset`、`save`）。 |
+| `available` | 这个查看者此刻能否在这里运行它。 |
+| `reason` | 不可用时：`observer`、`no_rule_system`、`not_in_system`、`no_media`，或模组自己的理由代码。 |
+
+- 管理员命令根本不会列给非管理员。
+- 有些玩家命令的某些参数需要管理员（`bot` 带 `on`，`rule` 带 `variant` 或 `system`，`uploads` 带 `on`，`init` 带 `name`，`lore` 的 `list` 以外的任何用法以及带 `disabled` 的 `list`，`import` 带 `as: "world"`，`model` 除不带 `provider` 和 `lane` 的 `list` 以外的任何用法，`report` 带 `reveal`）。条目写的是 `role: "player"`；仅限管理员的参数以 `forbidden` 拒绝。见 [6.8](#68-引擎的命令) 的表。
+- `text.forms` 列出查看者语言的那张表（那张为空时列另一张）。服务器两张表的形式都接受。
+- 模组命令的 `text.forms` 是模组声明的模板（如 `strike {target}`），给人看的；它的 `available` 对任何玩家都是 `true`：模组在使用的那一刻回答。
+
+### 6.6 参数 schema
+
+引擎和规则包的参数 schema 用的是 JSON Schema 的以下子集，服务器严格校验：
+
+| 关键字 | 用于 |
+|---|---|
+| `type` | `"object"`、`"string"`、`["string","null"]`、`"integer"`、`"number"`、`"boolean"`、`"array"` |
+| `properties`、`required`、`additionalProperties` | 对象；`additionalProperties` 为 `false`（不允许其他名字）、`true`（任何对象）或一个适用于所有其他名字的 schema |
+| `maxProperties` | 对象（默认上限 64 个名字） |
+| `enum`、`minLength`、`maxLength` | 字符串（长度按码点计；默认上限 4000） |
+| `minimum`、`maximum` | 整数和数 |
+| `items`、`maxItems` | 数组（默认上限 64 项） |
+
+schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小数部分的 JSON 数，数必须是有限的 JSON 数，都不能是文本 `"5"`；以 `null` 给出的参数只在类型允许 `null` 时有效；嵌套超过 8 层被拒绝。模组命令的 `params` 是模组声明的 schema。
+
+### 6.7 房间生命周期命令（客户端视角）
+
+- **`undo`**（管理员）：把房间回退 `turns` 个回合（默认 1，最多 64，且不能超过服务器的撤销窗口，`undo_beyond_depth`）。桌面收到一个 `rewind` 事件（[8.5](#85-rewind)）；调用者的结果带 `data {turn, epoch, removedTurns}`。撤销一个回合，也会撤回该回合开始之后运行的每个命令。
+- **`reset`**（管理员）：分两步。`{"scope":"story"}`（或 `chars`、`all`；默认 `story`）为这个成员、这个房间*预备*一次重置，有效 60 秒，回答 `data {armed: <scope>}`；此时什么都没变。在窗口内发 `{"confirm":true}` 才执行：桌面收到一个 `reset` 事件（[8.6](#86-reset)），调用者得到 `data {scope, epoch}`。没有预备就确认是 `reset_not_armed`；确认时指定了另一个范围是 `reset_scope_mismatch`。
+- **`save`**（管理员）：`{"op":"export"}` 把整个房间作为一个存档包放在 `data` 里回答，只给调用者（里面有房间的所有秘密）。`{"op":"import","bundle":{…}}` 用一个存档包替换房间。导入会替换房间——换成另一份日志、另一套编号——所以没有事件宣布它：回答管理员之后，服务器**结束**房间里每个成员的连接（没有 `error` 帧；链路直接关闭）。每个客户端像任何一次断线后那样重新拨号；随后的 `welcome` 给出新的 `epoch`，客户端丢弃自己持有的日志，回放把房间现在的样子交给它。存档包里自带的 `rewind` 和 `reset` 事件不导入：它们是房间早先经历的标记。
+
+### 6.8 引擎的命令
+
+由服务器的命令表（`server/src/gateway/commands/`）生成。这里的每个 id 也都列在 `commands` 视图里，带完整的参数 schema；`?` 表示可选参数。文本形式写作“英文表 / 中文表”；前缀可用 `.`、`。`、`/` 中任意一个。
+
+| id | 身份 | 文本形式 | 参数 | 说明 |
+|---|---|---|---|---|
+| `roll` | player | `roll`, `r` / `r`, `rd` | `expr?`（1–1000，默认 `1d20`）、`repeat?`（1–20）、`mode?`（`adv`\|`dis`） | 每次掷骰一个 `dice` 事件；`data {totals}`。 |
+| `hidden_roll` | player | `rh`, `hroll` / `rh` | `expr?`、`mode?` | 没有事件：桌面不会知道。`text` 和 `data {expr, rolls, total}` 只给调用者。 |
+| `check` | player | `check`, `attack`, `cast`, `ra`, `rc` / `ra`, `rc`，加上规则系统自己的检定词 | `skill?`、`target?`、`difficulty?`、`bonus?`（0–10）、`penalty?`（0–10）、`mode?`、`proficient?`、`params?`（整数对象，≤16）、`repeat?`（1–20） | 房间的规则系统能评定检定时可用（`no_rule_system`）。每次检定一个 `dice` 事件。 |
+| `opposed` | player | `opposed`, `rav`, `rcv` / `rav`, `rcv` | `a` `{skill?, value?, bonus?, penalty?}`、`b?`（同上） | 规则系统有对抗时可用（`not_in_system`）。 |
+| `init` | player；`name`：admin | `init`, `initiative`, `ri` / `ri`, `init` | `op`（`show`\|`roll`\|`next`\|`clear`）、`value?`、`name?` | 先攻顺序。 |
+| `sheet` | player | `sheet`, `st` / `st` | `op`（`show`\|`set`\|`clear`\|`finalize`）、`writes?`（≤32 个 `{name, op: "="\|"+="\|"-=", value}`） | 你的角色卡。 |
+| `rename` | player | `rename`, `nn` / `nn` | `name`（1–64） | 给你扮演的角色改名。 |
+| `new_character` | player | 已安装规则系统的建卡词（内置的有：`coc`、`coc7`、`dnd`、`dnd5e`） | `system`、`name?` | 创建并入座一个角色；一个 `narrative` 系统事件；`data {id, name, system, violations}`。 |
+| `genchar` | player | `genchar` / `genchar`, `生卡`, `生成角色` | `description`（字符串；为空是 `genchar_empty`，超过 2000 个码点是 `genchar_too_long`）、`name?`（1–64；默认同 `new_character`）、`system?`（1–64：规则系统的 id 或名字；默认房间的） | 按描述生成角色。服务器的模型把描述当作数据读，用一次调用提出一个构想——职业或职阶、侧重的属性、几项技能、一行背景；角色卡由规则系统掷出、数值由它分配（模型一个数都不写），模型写的内容经过服务器的词语过滤，角色的创建和入座与 `new_character` 相同（同样一个 `narrative` 系统事件；没有规则系统的房间采用这次指定的系统）。`text` 是用文字写出的角色卡；`data {id, name, system, method: "rolled"\|"standard_array", violations, dropped}`（`dropped`：模型回答中超出上限的部分）。不排在房间的回合后面。每个成员每小时最多 5 次，角色导入也算在内（`genchar_rate_limited`）。拒绝：`genchar_no_system`、`unknown_system`、`name_taken`、`genchar_no_model`（没有配置模型）、`genchar_failed`（模型出错，或它的回答不能用；消息里说明是哪种）。文本形式：`genchar [system] [name] \| <description>`、`genchar [system] <description>`（第一个词是规则系统名时选中它；`｜` 等同 `\|`）。 |
+| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op`（`list`\|`claim`\|`release`）、`name?`（≤128） | 可供选用的角色池。 |
+| `recap` | player, observer | `recap` / `recap`, `前情提要`, `前情` | — | 不剧透的前情提要。 |
+| `lore` | player；`list` 以外的全部，以及带 `disabled` 的 `list`：admin | `lore` / `lore`, `设定`, `設定` | `op`（`list`\|`add`\|`enable`\|`disable`\|`bind`\|`unbind`\|`restore`）、`title?`（≤200）、`content?`（≤16000）、`condition?`（≤500）、`disabled?` | 房间的设定。 |
+| `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op`（`list`\|`expose`\|`hide`\|`set`\|`add`）、`path?`（≤200）、`value?`（≤4000）、`delta?` | 房间的变量；`expose` 把一个分支展示给玩家。 |
+| `npc` | admin | `npc` / `npc`, `角色` | `op`（`list`\|`show`\|`delete`）、`name?` | 回答只给调用者。 |
+| `chronicle` | admin | `chronicle` / `chronicle`, `编年史`, `年史` | `op`（`list`\|`summary`\|`threads`\|`note`）、`text?` | 回答只给调用者。 |
+| `habits` | admin | `habits` / `habits`, `习惯`, `習慣` | `op`（`show`\|`forget`）、`text?`（≤200） | 守秘人对这一桌了解到的习惯。 |
+| `rule` | player；`variant`、`system`：admin | `rule` / `rule`, `规则`, `規則` | `variant?`（字符串或 `null`）、`system?`（字符串或 `null`） | 查看或设置规则系统及其房规阶梯；`null` 回到默认。 |
+| `bot` | player；`on`：admin | `bot` / `bot` | `on?`（布尔） | 查看或设置守秘人是否回应。 |
+| `language` | admin | `language` / `language`, `语言`, `語言` | `locale`（`en`\|`zh`） | 设置房间的语言；以新语言的一个 `narrative` 事件宣布。 |
+| `undo` | admin, danger | `undo` / `undo`, `撤销`, `撤銷` | `turns?`（1–64） | 生命周期（[6.7](#67-房间生命周期命令客户端视角)）。 |
+| `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?`（`story`\|`chars`\|`all`）、`confirm?` | 生命周期；先预备，再确认。 |
+| `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op`（`export`\|`import`）、`bundle?`（对象） | 生命周期。 |
+| `uploads` | player, observer；`on`：admin | `uploads` / `uploads`, `上传` | `on?`（布尔） | 查看或设置房间的上传开关。服务器保存文件时可用（`no_media`）。 |
+| `import` | player；`as: "world"`：admin | `import` / `import`, `导入` | `file?`（64 位十六进制内容哈希）、`pack?`（1–64）、`card?`（1–512）、`as`（`world`\|`character`）、`name?`（1–64） | 导入调用者以 `purpose: "import"` 上传的卡片文件（[11.6](#116-导入卡片)），或某个已启用扩展包自带的卡片（`pack` 和 `card`，即卡片在包里的路径；`pack_not_enabled`、`card_not_in_pack`）。没有媒体存储且没装任何扩展包时为 `no_media`。作为角色导入：按房间规则系统掷出一张角色卡，并像 `genchar` 那样偏向服务器的模型从卡片人设里读出的东西（与它共用每小时上限）；没有模型、超出上限或回答不能用时，角色卡就照常掷出，`text` 说明原因——`data.concept` 为 `applied`、`no_model`、`rate_limited`、`model_failed`、`unusable`、`aborted` 或 `none`。角色导入不排在房间的回合后面。 |
+| `pack` | player；`enable`、`disable`、`install`：admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op`（`list`\|`enable`\|`disable`\|`install`）、`id?`（1–64）、`ref?`（1–2000） | `list`：管理员看到所有已安装的扩展包，玩家按名字看到本房间的。`enable`/`disable` 在本房间开关一个已安装的扩展包（`unknown_pack`、`too_many_packs`、`module_id_taken`）；禁用时，正在播放它某个音频提示的层会停止（每层一个 `audio` `stop` 信号）。`install`（文本形式 `install <ref>`）：`ref` 是服务器上的路径、一个 `https://` URL 或 `gh:owner/repo[@tag]`；在服务器上安装扩展包并在这里启用它和它的技能；`data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`，`text` 是用文字写出的信任卡；一个 `narrative` 系统事件。它不排在房间的回合后面，下载和安装都完成时才给出它唯一的结果。拒绝：`not_https`、`bad_gh_ref`、`source_not_found`、`archive_too_large`、`fetch_failed`、`too_many_redirects`、`no_pack_asset`、`bad_release`、`bad_archive`、`invalid_pack`、`engine_too_old`、`already_installed`、`index_unreadable`、`install_failed`、`install_unavailable`。 |
+| `skill` | admin | `skill`, `skills` / `skill`, `技能` | `op`（`list`\|`enable`\|`disable`）、`id?`（1–64） | 本房间可以启用的守秘人技能：内置的，以及已启用扩展包的（`skill_not_available`、`too_many_skills`）。 |
+| `report` | player, observer；`reveal`：admin | `report` / `report`, `团报`, `跑团记录` | `format?`（`text`\|`html`）、`reveal?`（布尔） | 团报。不带参数：结果的 `text` 是一份简短的成绩单（`data {format: "text", players, turns, lines}`）。`html`：整场会话印成一个自包含的页面；`data {format: "html", edition, media: {hash, mime, size, name}}`——见下文。`reveal`（文本形式 `reveal`、`复盘`）：管理员的版本，还印出对玩家隐藏的内容。不产生事件；不等房间锁。服务器没有文件存储时为 `report_no_files`。 |
+| `jrrp` | player | `jrrp`, `luck` / `jrrp` | — | 今日人品。 |
+| `draw` | player | `draw` / `draw`, `抽牌` | — | 从洗好的牌堆里抽一张牌。 |
+| `help` | player, observer | `help`, `h` / `help`, `帮助` | `id?`（1–128） | 把 `commands` 视图写成文字；带 `id`（id 或文本形式）时只说一个命令。 |
+| `audio` | admin | `audio` / `audio`, `音频`, `音訊` | `op`（`list`\|`set`\|`remove`）、`query?`（1–400）、`title?`（1–400）、`layer?`（`bgm`\|`ambience`\|`sfx` 或 `null`）、`tags?`（≤16 个，每个 1–32） | 房间的音频库（[10.4](#104-内置视图) `audio`）：房间管理员以 `purpose: "audio"` 上传的声音（[11.2](#112-申报文件)），以及已启用扩展包的音频提示，名为 `<pack>/<cue>`。`list`：`data {sounds: [{id, title, layer, tags, source}]}`。`set` 修改上传声音的标题、层和标签；`remove` 把上传的声音移出音频库（正在播放它的层停止；它的字节被删除，除非桌面的日志或某个已启用扩展包还在用）。扩展包的音频提示只读（`audio_read_only`）。文本形式：`audio [list]`、`audio set <sound> title=<t> layer=<l> tags=a,b`（带空格的值加引号）、`audio remove <sound>`。服务器保存文件时可用（`no_media`）。 |
+| `bgm`, `ambience`, `sfx` | admin | `bgm` / `bgm`, `背景音乐`, `背景音樂`; `ambience`, `amb` / `ambience`, `amb`, `环境音`, `環境音`; `sfx` / `sfx`, `音效` | `op`（`play`\|`stop`\|`pause`\|`resume`\|`volume`）、`query?`（1–400）、`loop?`、`volume?`（0–1 的数）、`fadeMs?`（0–60000） | 每层一个命令。`play` 用 `query` 指定音频库里的一个声音——先按 id，再按精确标题（或上传声音的文件名，或不带扩展包名的音频提示 id），再按 id 或标题的唯一前缀，最后按唯一子串——并播放它（`bgm` 和 `ambience` 循环播放，除非 `loop: false`；音量默认 1）；`stop`、`pause`、`resume`、`volume` 作用于该层正在播放的声音（什么都没在播时为 `audio_not_playing`）。向桌面发一个 `audio` 信号（[9.4](#94-audio)）；`data {layer, action, …}`。拒绝：`audio_not_found`、`audio_ambiguous`（消息里列出最多五个候选）、`audio_bad_volume`、`audio_bad_fade`。文本形式：`bgm [play] <sound> [--loop\|--once] [--volume 0.7\|70%] [--fade 2000]`、`bgm stop\|pause\|resume [--fade N]`、`bgm volume <0–1\|N%>`；中文词 `播放`、`停止`、`暂停`、`继续`、`音量` 也可以。 |
+| `model` | 不带 `provider`/`lane` 的 `list`：player, observer；其余全部：admin | `model`, `models` / `model`, `模型` | `op`（`show`\|`list`\|`set`\|`key`\|`reset`）、`lane?`（`keeper`\|`npc`\|`scribe`\|`director`\|`memory`；默认 `keeper`）、`provider?`（1–64）、`model?`（1–200）、`key?`（1–1000）、`baseUrl?`（1–2000）、`wire?`（`openai-compatible`\|`anthropic`\|`openai-responses`）、`effort?`（`low`\|`medium`\|`high`\|`xhigh`\|`max`）、`contextWindow?`、`maxOutputTokens?`、`timeoutMs?`（正整数）、`promptCacheKey?`（布尔） | 每个通道用的模型，**对整个服务器生效**（每个房间都跟着变）。`show`：`data` 是 [`admin/model`](#104-内置视图) 的值。不带 `provider` 或 `lane` 的 `list`：这个服务器知道的服务商，任何人都可以看（`data {providers}`）；带了它们，或由管理员发出时：向该服务商询问它的模型——`data {providers, provider, models, total, truncated, skipped}`，最多 500 个 id，每个最多 200 个码点，不符合的 id 被跳过并计数（`model_list_timeout`、`model_list_too_large`、`model_list_failed`（消息里写出服务商的失败类别）、`model_not_configured`、`unknown_provider`）。`set`：该通道改为与 `provider`（一个预设，或任何带 `baseUrl` 的名字）通信；没给密钥时，用为该服务商保存的密钥，或服务器自己的（`unknown_provider`、`model_required`、`model_wire_mismatch`、`bad_provider`、`bad_model_id`、`bad_base_url`、`bad_key`、`too_many_credentials`）；`data {lane, keySaved}`。`key`：该通道当前所用服务商的密钥，为该服务商保存。`reset`：该通道（或全部通道）回到服务器的设置；已保存的密钥保留；`data {reset, keeper}`。密钥返回时是遮罩过的（`sk-a...wxyz`）。下一个回合用新模型；进行中的回合用它开始时的模型跑完。不排在房间的回合后面。没有事件。文本形式：`model [show]`、`model list [provider] [lane=…]`、`model set <provider> [model] [key=…] [base_url=…] [wire=…] [effort=…] [context=N] [max_output=N] [timeout=N] [cache=on\|off] [lane=…]`、`model key <key> [lane=…]`、`model reset [lane]`；词 `show`/`查看`、`list`/`列表`、`set`/`use`/`切换`、`key`/`密钥`、`reset`/`重置`。 |
+| `imagegen` | admin | `imagegen` / `imagegen`, `图片生成`, `圖片生成` | `op`（`show`\|`set`\|`off`）、`provider?`（1–64：`openai`、`xai`，或带 `baseUrl` 的名字）、`model?`（1–200）、`size?`（`WIDTHxHEIGHT` 或 `auto`）、`key?`、`baseUrl?` | 图片生成，对整个服务器生效。不带 `baseUrl` 的 `set` 需要一个地址已知（`openai`）或已保存的服务商（`image_base_url_required`、`bad_image_size`）；`off` 停止出图，直到管理员再次设置服务商。`data {imagegen}`，同 `admin/model` 里的。没有事件。文本形式：`imagegen [show]`、`imagegen set <provider> [model] [size] [key=…] [base_url=…]`、`imagegen off`。 |
+| `key` | admin | `key`, `keys` / `key`, `钥匙`, `鑰匙` | `op`（`list`\|`mint`\|`rename`\|`role`\|`revoke`）、`id?`（钥匙 id，`k:` 加 12 位十六进制数字）、`name?`（1–64）、`role?`（`player`\|`admin`\|`observer`） | 只涉及本房间的访问钥匙。`list`：`data {keys}`，同 [`admin/keys`](#104-内置视图)。`mint {name, role?}`（默认 `player`）：`data {id, name, role, key}`——新钥匙只出现在这个回答里，永远不会出现在别处。`rename {id, name}`。`role {id, role}`：持有者现有的连接结束，以新身份重连。`revoke {id}`：钥匙失效，持有者现有的连接结束；用它重新拨号的客户端得到 `bad_key`。房间的最后一把管理员钥匙不能吊销或降级（`last_admin`）；只要还有另一把管理员钥匙，管理员可以吊销自己正在使用的钥匙，回答之后即被断开。不属于本房间的 id 为 `unknown_key_id`。没有事件。文本形式：`key [list]`、`key mint [player\|admin\|observer] <name>`、`key rename <id> <name>`、`key role <id> <role>`、`key revoke <id>`；`新建`、`改名`、`角色`、`吊销` 也可以。 |
+| `panels` | player, observer；`enable`、`disable`：admin | `panels`, `panel` / `panels`, `面板`, `模组面板` | `op`（`list`\|`enable`\|`disable`）、`id?`（`<pack>/<panel>`，1–129） | 房间已启用扩展包的面板（[10.6](#106-面板)）。每个默认都开着；管理员的开关是一项房间设置，重置后仍保留。没有哪个已启用扩展包有这个 id 时为 `panel_not_available`。 |
+
+**团报页面。** 带 `format: "html"` 的 `report` 回答的是对文件的引用，而不是文件本身：`data.media` 是 `{hash, mime: "text/html", size, name}`，客户端用 `hash` 通过字节通道获取（[11.3](#113-get)），以 `name` 保存或直接打开。页面是一个自包含的 HTML 文件——没有脚本，不从任何地方加载任何东西——用调用者的语言写。它是房间的*不列出的*文件：没有 `media` 事件宣布它，它也不出现在任何列表里；只有调用者知道它的哈希。玩家版只由事件日志生成，房间里任何持有该哈希的成员都可以获取。复盘版为管理员保存：其他任何人用它的哈希只会得到 `media_not_found`。新页面会替换房间里同一版本的上一个页面，旧页面的哈希随之失效——页面一给出就获取，不要留着哈希以后再用。
+
+**规则包命令**取决于房间的规则系统。内置系统里只有 `coc7` 有：
+
+| id | 文本形式 | 参数 |
+|---|---|---|
+| `rules.sanity_check` | `sc`, `sanity` | `success?`、`failure?`（损失记法，1–100）、`tag?`（≤64） |
+| `rules.skill_growth` | `en`, `growth` | `skill` |
+| `rules.random_madness` | `ti`, `li` | `table?`（1–64） |
+
+### 6.9 发送机密
+
+`model` 和 `imagegen` 接受 API 密钥，`key mint` 的回答里有一把访问钥匙。客户端应当用 **`command.run`** 发送机密，从它自己的一个输入框里发（输入时遮罩），绝不要作为写发言的地方里打出的一行：命令词打错，这一行就成了发言，而发言会原样在桌上说出（[6.3](#63-文本形式)）。
+
+不管哪种方式，服务器都只把机密留给调用者。这些命令不发布事件，所以密钥不会到达桌面，不会进入日志（`log.page`），也不会进入守秘人读到的命令记录；拒绝只带错误码，从不带参数；回答和 `admin/model` 只显示遮罩过的密钥：前四个和后四个字符（`sk-a...wxyz`），16 个字符及以下的密钥只显示星号。`key mint` 生成的访问钥匙只出现在那一个回答里，别处都没有。从聊天里设置的密钥存在服务器的数据库里，只有服务器的所有者能读。
+
+## 7. 事件日志
+
+### 7.1 外层结构
+
+```json
+{"type":"event","seq":5,"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","ts":1764240000123,"kind":"narrative","turn":2,"data":{"speaker":"kp","text":"The lantern catches, and the quay comes out of the dark.","format":"markdown"}}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `seq` | 事件在房间日志里的编号，≥ 1 的整数。按发送顺序递增；在房间里永不复用。 |
+| `id` | 事件的 id（字符串）。`narrative` 事件沿用它所替换的草稿的 id（[9.1](#91-draft)）；带 `replace: true` 的 `blocks` 事件沿用被它替换的那个事件的 id，所以日志里的 id 不唯一。 |
+| `ts` | 自 Unix 纪元起的毫秒数，服务器时间。 |
+| `kind` | `narrative`、`dice`、`blocks`、`media`、`rewind` 或 `reset`（[8](#8-事件类型)）。 |
+| `turn` | 事件所属的守秘人回合，属于某个回合时才有。 |
+| `data` | 该类型的载荷。 |
+
+**有 `turn`** 的是回合里的事件：玩家的那一行、其中的内联掷骰、守秘人的回复，以及为该回合产生的 NPC 台词和演出。**没有 `turn`** 的是不属于回合的事件：命令产生的事件、共享的文件（`media`）、`rewind` 和 `reset`。
+
+### 7.2 日志里有什么，按什么顺序
+
+- 每个成员收到每个事件，按 `seq` 顺序，在它追加时收到。
+- 事件按发送时的样子存储，用当时房间的语言。回放的事件就是记录下来的那个：改房间语言不会改写过去。
+- `seq` 有空洞。撤销会删除事件，它们的编号不再发出；重置清空日志，但 `head` 留在原处。永远不要从 `seq` 推算数量。
+- 回合是交错的。一行发言在被接受时记入日志并在那时编号；它的回复在守秘人回合结束时记入日志。一个回合运行期间被接受的发言立刻拿到后续的回合号，所以日志可能是这样的：第 1 回合的发言、第 2 回合的发言、第 1 回合的回复、第 2 回合的回复。
+- 一个回合的有些事件在它的 `turn idle` 信号之后才到：导演的演出（带该回合编号的 `blocks` 事件）和它的 `audio` 信号来自回合结束后运行的一趟处理，这趟处理不占用房间，可能在之后的发言已经记入日志后才到。
+
+### 7.3 `epoch` 与 `head`
+
+`welcome.epoch` 是房间的代次。它从 1 开始，每次撤销、重置和房间导入都加一。同一个 `epoch` 内，日志只在末尾增长，所以在同一 `epoch` 里按 `seq` 续传的客户端什么都不会漏。`epoch` 变了，客户端手里的日志副本就作废。
+
+`welcome.head` 和每个 `seq` 都来自每个房间一个只增不减的计数器。
+
+### 7.4 续传与回放上限
+
+`welcome` 之后的回放由 `hello.resume` 和协议的 `RESUME_LIMIT` = **200** 算出：
+
+- **带 `resume` 且 `resume.epoch == welcome.epoch`：** `seq > max(resume.after, head − 200)` 的事件。
+- **其他情况**（没有 `resume`，或 `epoch` 不同）：`seq > head − 200` 的事件。`welcome` 的 `epoch` 告诉客户端它手里的一切都作废了。
+
+所以在同一个 `epoch` 里离开超过 200 个事件的客户端只收到最新的一段，中间有一个**空缺**：`resume.after < seq < head − 199` 的每个 `seq` 都可能有它没有的事件。用 `log.page` 补上。
+
+### 7.5 分页：`log.page`
+
+`{"method":"log.page","params":{"before":<seq>,"limit":<1..100>}}` 回答 `{events: [...]}`：`seq < before` 的最新 `limit` 个事件，**最早的在前**，都是完整的事件帧（和实时事件形状相同）。`limit` 默认为 `PAGE_LIMIT` = **100**，最多也是这个数；要更多会被拒绝（`invalid_params`），不会截到 100。返回的事件少于 `limit` 个，说明日志里没有更早的了。分页拿到的事件是历史：其中的 `rewind` 或 `reset` 服务器已经执行过，对客户端没有任何影响。
+
+### 7.6 在本地保存日志
+
+参考客户端（`client.ts`）这样做，保存日志的客户端也应当这样做：
+
+1. **收到 `welcome` 时：** 如果手里的日志是在另一个 `epoch` 下建的，或其最新 `seq` 大于 `welcome.head`，丢弃它。如果手里没有日志，那么 `first` 为 0（房间没有事件）或 `first > head − 200`（最早的事件在回放的那一段之内）时，日志是完整的。如果手里有日志且 `head − lastSeq > 200`，记下一个空缺 `(lastSeq, head − 199)`。
+2. **收到每个事件时：** 按 `seq` 插入，已有的 `seq` 忽略。按下文处理 `rewind` 和 `reset`。记住见过的最大 `seq`，**包括你不认识的类型的事件**（它们照样占着日志里的一个位置）：这个数就是下次的 `resume.after`。
+3. **收到 `rewind {from, kept, epoch}` 时：** 丢掉 `seq ≥ from` 的每个事件，`seq` 在 `kept` 里的除外；如果 `epoch` 比你的大就采用它。然后保留这个 `rewind` 事件本身（它在日志里）。
+4. **收到 `reset {scope, epoch}` 时：** 丢掉手里的一切和所有草稿；采用 `epoch`。这个 `reset` 事件是新日志的第一条。
+5. **重连时：** 发 `resume {epoch, after: lastSeq}`。
+
+### 7.7 为什么撤销会从中间删
+
+撤销第 N 回合时，保留 N 之前各回合的每个事件，不管它落地多晚；删除第 N 回合及之后的每个事件，以及这些事件中第一个之后记入的每个无回合事件。因为回合是交错的，删掉的不一定是一个后缀：第 1、2 回合的发言都在任何回复之前被接受时，日志是 `1 (line, turn 1)`、`2 (line, turn 2)`、`3 (reply, turn 1)`、`4 (reply, turn 2)`，撤销第 2 回合后剩下 1 和 3。`rewind` 事件说的正是这个：`{"from":2,"kept":[3],"epoch":2}`。通常情况下 `kept` 为空。
+
+## 8. 事件类型
+
+客户端渲染它认识的类型，跳过其他的（[12.1](#121-向前兼容)）。
+
+### 8.1 `narrative`
+
+```json
+{"speaker":"player","name":"Ada","member":"m:15b5f3445045","text":"I light the lantern.","format":"plain"}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `speaker` | `player`（成员的发言）、`kp`（守秘人）、`npc`（说话的非玩家角色）、`system`（引擎的通告，如新角色、改了的设置）。 |
+| `name` | 谁在说：`player` 是角色（或成员）名，`npc` 是 NPC 的名字。`kp` 没有；`system` 通常没有。 |
+| `member` | `player` 专用：发言成员的 id。 |
+| `text` | 这一行。 |
+| `format` | `markdown`（守秘人的叙述）或 `plain`（原样显示）。 |
+
+### 8.2 `dice`
+
+桌面看到的一次掷骰或检定。它从不带只给守秘人的信息。
+
+```json
+{"actor":"Alice","kind":"check","expr":"1d100","rolls":[19],"total":19,"target":25,"effectiveTarget":25,"outcome":{"id":"regular","label":"Success","success":true,"critical":false,"fumble":false,"tier":2,"margin":6},"detail":{"skill":"Spot Hidden","modifier":0,"modifiers":[],"params":[]}}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `actor` | 谁掷的：角色名或成员名。 |
+| `kind` | `roll`（普通掷骰）、`check`（评级检定）、`subsystem`（规则子系统，如理智检定）、`opposed`（对抗）、`init`（先攻）。 |
+| `expr` | 掷的记法，规范形式。 |
+| `rolls` | 每颗骰子的结果。 |
+| `total` | 结果。 |
+| `target`、`effectiveTarget` | 检定专用：掷骰对照的值，以及计入难度和调整后的值。 |
+| `subsystem`、`subsystemLabel` | `subsystem` 专用：它的稳定 id，以及它在房间语言里的名字。 |
+| `outcome` | 评级掷骰专用：见下文。 |
+| `detail` | 规则系统声明的附加信息（一个对象）。愿意的话原样显示；永远不要据此分支。普通掷骰带 `detail.text`，一个可读的写法，如 `"2d6 (5, 5) = 10"`。 |
+
+**结果约定**与规则系统无关，所以一个客户端能渲染所有系统：
+
+| 字段 | 含义 |
+|---|---|
+| `id` | 系统自己的等级词（`regular`、`hard`、`extreme`……）。只用于展示：永远不要据此分支。 |
+| `label` | 等级，已经是房间语言。显示这个。 |
+| `success`、`critical`、`fumble` | 布尔。按这些上色。 |
+| `tier` | 一个数；越大越好。愿意的话按它调深浅。 |
+| `margin` | 可选：比目标高（正）或低（负）多少。 |
+
+### 8.3 `blocks`
+
+放进故事里的声明式内容：模组的卡片，导演的演出。
+
+```json
+{"blocks":[{"kind":"title_card","title":"Act II","subtitle":"The Drowned Quay"},{"kind":"letter","from":"M.","body":"Come alone."}],"replace":true}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `blocks` | 最多 256 个块，按顺序渲染。 |
+| `replace` | 为 `true` 时，这个事件原地更新之前那个事件 `id` 相同的 `blocks` 事件（在之前那个的位置渲染它，或替换掉之前那个；不要两个都显示）。 |
+
+| 块 `kind` | 字段 | 渲染为 |
+|---|---|---|
+| `meter` | `label`、`value`、`min`、`max` | 一个量表 |
+| `stat` | `label`、`value`（数、字符串或布尔） | 一个带标签的值 |
+| `badge` | `label`、`tone?`（`info`\|`warn`\|`danger`） | 一个标签 |
+| `text` | `text`、`style?`（`quote`\|`warning`） | 一个段落 |
+| `divider` | — | 一条分隔线 |
+| `choices` | `prompt?`、`options`（≤64 个 `{id, label, command, args?}`） | 一组按钮；按下一个就是以按下它的成员身份调用 `command.run {id: command, args}` |
+| `image` | `hash`、`mime?`、`size?`、`caption?`、`alt?` | 一张图，用 `hash` 通过字节通道获取 |
+| `letter` | `body`、`from?`、`to?`、`date?` | 一封信或一张便条 |
+| `clipping` | `headline`、`body`、`source?`、`date?` | 一张剪报 |
+| `map_pin` | `hash`、`mime?`、`size?`、`label`、`x`、`y`、`note?` | 图片 `hash` 上 (`x`, `y`) 处的一个图钉 |
+| `title_card` | `title`、`subtitle?`、`act?` | 一张章节卡 |
+
+**不确定就不画。** 未知 `kind` 的块被跳过，事件的其余部分照常显示。已知类型的块缺字段、类型不对，或带着客户端不认识的枚举值（某个 `tone`、某个 `style`），整个事件就算格式有误：丢掉它，不要画错。
+
+### 8.4 `media`
+
+与桌面共享的一个文件。
+
+```json
+{"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","mime":"image/png","size":48213,"name":"map.png","from":"m:15b5f3445045"}
+```
+
+`hash` 是字节内容的小写十六进制 SHA-256，通过字节通道获取；`from` 是共享它的成员的 id，或 `server`。
+
+### 8.5 `rewind`
+
+```json
+{"from":3,"kept":[],"epoch":2}
+```
+
+一次撤销：日志失去了编号为 `from` 及以上的每个事件，`seq` 在 `kept` 里的**除外**，房间进入代次 `epoch`。按 [7.6](#76-在本地保存日志) 处理。
+
+### 8.6 `reset`
+
+```json
+{"scope":"all","epoch":3}
+```
+
+战役被清除了（`story`：故事；`chars`：故事和角色；`all`：一切），或者房间被一次导入替换了（总是 `all`）。清空滚动记录和所有草稿；采用 `epoch`。视图随后带着新值到来。`all` 的重置还会清掉房间正在播放的东西：停止每个音频层（没有 `audio` 信号告知）。较轻的重置不停音乐。
+
+## 9. 信号
+
+`{"type":"signal","kind":…,"data":…}`。信号发给每个成员，从不存储或回放。来自过去代次的工作（被撤销取消的回合）的信号不发送，`turn idle` 除外。
+
+### 9.1 `draft`
+
+守秘人回复的流式文本。
+
+```json
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"The lantern catches, "}}
+```
+
+```json
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","discard":true}}
+```
+
+- `{id, text}` 往流式气泡 `id` 里**追加**一段；某个 id 的第一段打开气泡，显示在最新事件之后。每段大约 48 个字符，或遇到换行就发出。
+- `{id, discard: true}` 移除气泡：这一轮模型调用原来是要调用工具，或服务商重试了。重试会用新的 id 重新流式发送。
+- `id` 相同的 `narrative` 事件**替换**气泡。以事件为准；草稿显示的可以比事件少，绝不会比事件多（可能属于隐藏块的文本会被扣下，也可能被丢弃）。
+- 收到 `turn idle` 时，丢掉所有还开着的气泡：失败的回合或被撤销取消的回合，不一定会丢弃自己的草稿。
+- 某个 id 的 `narrative` 事件你已经有了，再来的该 id 的草稿就是过期的：忽略。
+
+### 9.2 `turn`
+
+```json
+{"type":"signal","kind":"turn","data":{"status":"busy","actor":"Ada"}}
+```
+
+```json
+{"type":"signal","kind":"turn","data":{"status":"idle"}}
+```
+
+`busy` 表示守秘人正在处理一个回合；`actor` 是它所回答的那一行的发言者名字。`idle` 表示它结束了（回复了、失败了或被取消了）。把 `busy` 当作状态，而不是事件。回合进行中连上的成员会在回放之后立刻收到 `busy`。协议还定义了两个可选的 `busy` 字段：`activity`（`reading`\|`dice`\|`cast`\|`bookkeeping`，只用于展示：未知值忽略）和 `round`（整数）；3.0 服务器不发它们。
+
+### 9.3 `notice`
+
+发给桌面的一行带外消息，用房间的语言。
+
+```json
+{"type":"signal","kind":"notice","data":{"level":"warn","code":"provider_transient","text":"The AI provider is still temporarily unavailable after retrying. Please try again shortly."}}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `level` | `info` 或 `warn`。 |
+| `code` | 可选，稳定。目前会发的：`turn_failed`、`reply_blocked`、`provider_auth`、`provider_quota`、`provider_transient`、`provider_content`、`unavailable`。 |
+| `text` | 显示它。 |
+| `spinner` | 可选布尔（有一个耗时操作在进行）。3.0 服务器不发。 |
+
+### 9.4 `audio`
+
+一次播放**转换**；字节用 `hash` 通过字节通道获取（[11.3](#113-get)）。每一层**此刻**在播放什么，看 `audio` 视图（[10.4](#104-内置视图)）。
+
+```json
+{"type":"signal","kind":"audio","data":{"id":"01J…","action":"play","layer":"bgm","sound":"harbor/rain","hash":"3f9a…","mime":"audio/ogg","size":48213,"title":"Rain on the quay","loop":true,"volume":0.8,"fadeMs":1500}}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `id` | 这个信号自己的 id。 |
+| `action` | `play`、`stop`、`pause`、`resume`、`volume`。 |
+| `layer` | `bgm`、`ambience` 或 `sfx`。`bgm` 和 `ambience` 各放一个声音，默认循环；`sfx` 是一次性的：每次 `play` 响一次，和其他的同时响。 |
+| `sound` | 声音在音频库里的 id（`<pack>/<cue>`，或上传声音的哈希）：`play` 时，以及 `bgm` 或 `ambience` 层的转换时，它作用的那个声音。 |
+| `hash`、`mime`、`size` | 仅 `play`：要获取的声音，以及它的字节数。 |
+| `title` | 仅 `play`，可选：用于显示。 |
+| `loop` | 仅 `play`。 |
+| `volume` | `play` 和 `volume`：0 到 1。 |
+| `fadeMs` | 可选：在这么多毫秒内淡入淡出（最多 60,000）。 |
+
+**视图是状态，信号是转换。** 客户端：
+
+1. 每次连接（和重连）时，订阅 `audio`，按 `playing` 开始播放：每一层的声音用它的 `volume`，按 `loop` 决定是否循环，`paused` 时暂停；
+2. 之后跟着信号走：`play` 替换该层正在放的（`sfx`：响一次），`stop` 结束它，`pause` / `resume` 暂停和继续它，`volume` 改变它——给了 `fadeMs` 就在这段时间内渐变；
+3. 两者可能不一致时，以视图为准：重连之后（信号不回放），以及 `all` 的 `reset` 之后（它停止每一层，[8.6](#86-reset)）。
+
+信号来自两个地方，走同一条路径，每个信号都同步推进房间的状态：管理员的 `bgm`、`ambience` 和 `sfx` 命令（以及 `audio remove` 或 `pack disable` 停掉正在放的声音），还有回合结束后导演的那趟处理（扩展包的音频提示，[7.2](#72-日志里有什么按什么顺序)）。撤销不改变正在播放的东西，也不发 `audio` 信号。
+
+## 10. 视图
+
+### 10.1 视图是什么
+
+视图是为一个查看者计算的具名结构化值：这个成员、他的身份、他的语言和他扮演的角色。里面的名字和标签用**查看者的**语言；id 从不翻译。客户端订阅它想要的视图；服务器立刻发出视图的当前值，之后每当这个值对这个查看者有变化就再发。每次更新都带完整的值。
+
+```json
+{"type":"view","name":"room","rev":1,"at":2,"data":{"locale":"en","localeLabel":"English","system":{"id":"coc7","label":"CoC"},"variant":null,"keeperMuted":false,"uploads":true}}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `name` | 视图的名字。 |
+| `rev` | 按连接、按视图名计数，只增不减：一个 rev 从不对应两个不同的值。同一连接上取消订阅后它继续累计，换一条新连接则重新开始。保留当前连接上 rev 最大的那个值。 |
+| `at` | 这个值所反映的日志 `head`。 |
+| `data` | 值。 |
+
+服务器在每个守秘人回合、每个命令、每个生命周期命令、回合结束后的那趟处理之后，以及每当有成员加入或离开时（在线状态是 `party` 的一部分），重新计算已订阅的视图，只发送变了的值。单单一行发言不会刷新视图。
+
+### 10.2 订阅
+
+- **`view.list`** 回答这条连接可以订阅的视图，每个带它的 JSON Schema（模组视图还带 `title`）。
+- **`view.subscribe {names}`** 先回答 `{problems: [{name, code}]}`，再把每个新订阅的视图的当前值作为 `view` 帧发出。已经订阅的名字不会再发一次。问题代码：`unknown_view`（没有这个视图，或这条连接不能看）、`too_many_views`（一条连接上超过 64 个订阅）、`too_large`、`view_failed`。
+- **`view.unsubscribe {names}`** 回答 `{removed: [...]}`：原本已订阅的那些名字。
+- **`view.get {name}`** 回答 `{name, rev, at, data}`：此刻重新计算的视图，不管这条连接有没有订阅。只有当值与该名字下上一次发出的值不同时，rev 才会前进，所以没变的值带着旧的 rev 回来。
+
+订阅属于**连接**，随连接消失。重连之后要重新订阅（参考客户端维护一个想要的集合，每次收到 `welcome` 都重新订阅）。
+
+一次调用最多指定 `MAX_VIEW_NAMES` = 64 个视图；一条连接最多 64 个订阅；视图名最多 200 个码点；超过 512 KiB（按紧凑 JSON 计）的值不发送（`too_large`；上一次发出的值保持有效）。
+
+### 10.3 谁看到什么
+
+每个内置视图都按查看者、由服务器针对每个查看者的投影算出：玩家看到玩家能看的，管理员还能看到对玩家隐藏的（视图里有这类条目时标 `hidden: true`），旁观者看到桌面看到的。同一成员的几条连接，身份、语言和角色都相同时，共用一次计算。成员的角色或身份变了，下一次刷新就按新的查看者计算。
+
+名为 `admin/…` 的视图只给管理员。其他任何人都收不到，连空的也收不到：`view.list` 不列出它们，`view.subscribe` 对它们回答 `unknown_view`，`view.get` 拒绝它们。
+
+### 10.4 内置视图
+
+JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` 里。
+
+**`me`**：查看者和他扮演的角色。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `member` | `{id, name, role, roleLabel}` | `roleLabel` 是查看者语言里的身份名。 |
+| `character` | object 或 `null` | 旁观的人（没有角色）为 `null`。 |
+| `character.id`, `.name`, `.pack` | string | `pack` 是角色的规则系统 id。 |
+| `character.status` | string[] | 状态。 |
+| `character.resources` | `[{id, label, value, max}]` | HP、理智之类的量表。 |
+| `character.attributes`, `.skills` | `[{key, label, value}]` | `value` 是数或字符串。只有角色卡是查看者自己的时才填。 |
+
+**`party`**：谁在桌上，各自扮演什么，以及战斗的顺序。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `members` | `[{id, name, role, online, character}]` | 先是在线成员，再是不在线但已入座的成员。不在线的 `role` 为 `null`；`character` 是角色 id 或 `null`。 |
+| `characters` | `[{id, name, pack, status, resources, player}]` | 每个已入座的角色，以及房间保存的、不在角色池里供选用的其他角色（同伴）。`player` 是 `{id, name}` 或 `null`。 |
+| `initiative` | `{round, acting, order: [{name, value}]}` 或 `null` | 没有战斗时为 `null`。`acting` 是名字或 `null`。 |
+
+**`scene`**：桌面正在看的东西，以及时间。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `name`, `focus` | string | 未设置时为空字符串。 |
+| `established` | `[{text, at}]` | 场景里已确立的事实；`at` 是时间文本或 `null`。 |
+| `time` | string 或 `null` | 时钟的文本。 |
+| `clockModule` | string 或 `null` | 掌管时钟的模组；由守秘人掌管时为 `null`。 |
+| `round` | integer 或 `null` | 有战斗时是战斗轮次，否则是模组时钟的轮次，再否则为 `null`。 |
+
+**`variables`**：这个查看者能看的房间变量。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `module` | `[{id, kind, label, value, valueLabel?, min?, max?, options?, hidden?}]` | 声明的变量。`kind` 是 `number`、`bool`、`text` 或 `enum`；`value` 是数、布尔或字符串。 |
+| `tree` | `[{path, value, description?, hidden?}]` | 导入的变量树的叶子；`value` 是标量或标量列表。 |
+
+玩家只看到玩家可见的变量和已展示的叶子；管理员看到全部，玩家看不到的标 `hidden: true`。
+
+**`characters`**：可以扮演什么。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `claimable` | `[{id, name, blurb, source: {kind, id}, player}]` | 供选用的角色；`source.kind` 是 `pack` 或 `module`；`player` 是扮演它的人的 `{id, name}`，或 `null`。 |
+| `systems` | `[{id, label, active}]` | 能创建新角色的规则系统；`active` 标出房间用的那个。 |
+| `mine` | string 或 `null` | 查看者扮演的角色的 id。 |
+
+**`commands`**：`{commands: [entry]}`，这个查看者的命令表（[6.5](#65-发现命令commands-视图)）。
+
+**`room`**：房间的设置。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `locale`, `localeLabel` | string | 房间的语言，以及它在查看者语言里的名字。 |
+| `system` | `{id, label}` 或 `null` | 当前的规则系统。 |
+| `variant` | string 或 `null` | 它里面的房规阶梯；默认为 `null`。 |
+| `keeperMuted` | boolean | 为 `true` 时守秘人不回应。 |
+| `uploads` | boolean | 成员能否上传文件。服务器不保存文件时为 `false`。 |
+
+**`usage`**：房间上一个守秘人回合的 token 数字。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `last` | object 或 `null` | 第一个回合之前（以及故事重置之后）为 `null`。 |
+| `last.turn` | integer | 回合。 |
+| `last.inputTokens`, `.outputTokens`, `.cachedInputTokens`, `.cacheWriteTokens`, `.reasoningTokens` | integer | 服务商报告的数字，整个回合累加。 |
+| `last.estimated` | boolean | 提示词的大小由引擎估算：服务商没有报告。 |
+
+**`packs`**：内容扩展包，按名字。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `packs` | `[{id, version, name, enabled, cards: [{file, name, kind}]}]` | 管理员看到每个已安装的扩展包，各自带着本房间是否启用；其他人看到本房间启用的扩展包。`kind` 是 `world` 或 `character`。 |
+
+**`panels`**：这个查看者的面板列表（[10.6](#106-面板)）。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `panels` | `[entry]` | 房间已启用扩展包里开着、且列给这个查看者的面板，先按扩展包启用的顺序，再按每个扩展包声明的顺序。 |
+| `entry.id` | string | `<pack>/<panel>`。 |
+| `entry.title` | string | 用查看者的语言。 |
+| `entry.slot` | string | `sidebar`、`tray` 或 `modal`。文本客户端可以把三种都并进侧栏。 |
+| `entry.kind` | string | `template` 或 `page`。 |
+| `entry.views` | `[{as, view}]` | 面板读取的视图，每个挂在它的路径所用的句柄下。订阅每一个 `view`。 |
+| `entry.source` | `{kind, id}` | `kind` 是 `pack`（3.0 里唯一的来源；`room` 留给房间自己发布的面板）。 |
+| `entry.blocks` | `[template block]` | 模板的块。 |
+| `entry.page` | `{hash, size, mime}` | 页面的 HTML（`mime` 为 `text/html`），用哈希通过字节通道获取（[11.3](#113-get)）。 |
+| `entry.fallback` | `[template block]` 或 `null` | 给运行不了页面的客户端的模板；为 `null` 时：显示一行“需要富客户端”。 |
+
+**`audio`**：房间的音频库，以及每个循环层正在放什么（[9.4](#94-audio)）。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `library` | `[sound]` | 房间管理员以 `purpose: "audio"` 上传的声音（最早的在前），然后是房间已启用扩展包的音频提示。 |
+| `sound.hash`, `.mime`, `.size` | string, string, integer | 通过字节通道获取它所需的东西（[11.3](#113-get)）：每个查看者都有，用于预取。非管理员每个文件只拿到一次，别的什么都没有。 |
+| `sound.id` | string | 仅管理员。音频库 id：扩展包的音频提示是 `<pack>/<cue>`，上传的声音是哈希。`bgm`/`ambience`/`sfx` 的 `query` 接受的就是它。 |
+| `sound.title` | string | 仅管理员。 |
+| `sound.layer` | string 或 `null` | 仅管理员。`bgm`、`ambience` 或 `sfx`：它打算用在哪一层（上传的声音在管理员设置之前为 `null`）。 |
+| `sound.tags` | string[] | 仅管理员。 |
+| `sound.source` | `{kind, id}` | 仅管理员。`kind` 为 `upload`（`id` 为 `null`）或 `pack`（`id` 为扩展包）。 |
+| `playing` | `{bgm?, ambience?}` | 每个循环层正在放什么；没在放的层不出现。`sfx` 从不在这里。 |
+| `playing.<layer>` | `{id, title, hash, mime, size, loop, volume, paused}` | 声音（它的音频库 id、标题和获取所需的东西），是否循环，音量（0 到 1），是否暂停。所有查看者都有。 |
+
+玩家只看到获取所需的东西，因为声音的名字也是内容：扩展包音频提示的标题和管理员上传的声音，可能在桌面听到之前就把故事说出去。正在播放的东西对所有人都写出名字。
+
+**`admin/model`**（仅管理员）：每个模型通道和图片生成当前用的是什么。对整个服务器生效：任何一个房间的管理员运行 `model` 或 `imagegen`，所有房间的管理员看到的都会变。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `lanes` | `[lane]` | `keeper`、`npc`、`scribe`、`director`、`memory`（编年史折叠），按这个顺序。 |
+| `lane.source` | string | `override`（管理员设置的）、`environment`（服务器自己的设置）、`default`（什么都没设置：守秘人没有模型；其他通道用守秘人的）。 |
+| `lane.sameAsKeeper` | boolean | 该通道用的是守秘人的客户端。 |
+| `lane.provider`, `.model`, `.baseUrl`, `.wire`, `.effort` | string 或 `null` | `provider` 是预设 id 或管理员给某个端点起的名字；服务器设置里只按地址指定的端点为 `null`。`wire` 是 `openai-compatible`、`anthropic` 或 `openai-responses`。 |
+| `lane.contextWindow` | integer 或 `null` | 以 token 计；未知时为 `null`。 |
+| `lane.key` | `{set, masked}` | 是否设置了密钥，以及它遮罩后的样子（没有时为 `null`）。从不给出密钥本身。 |
+| `providers` | `[{id, preset, wire, baseUrl, credential}]` | 先是这个服务器知道的预设，再是管理员用自己起的名字保存的端点；`credential`：为它保存了密钥（或服务器设置里有一个）。 |
+| `imagegen` | `{source, enabled, provider, model, size, baseUrl, key}` | 图片生成；`source` 同通道的（`enabled: false` 的 `override` 就是 `imagegen off`）。 |
+| `imageProviders` | `[{id, credential}]` | `openai`、`xai`，然后是保存的名字。 |
+
+**`admin/keys`**（仅管理员）：本房间的访问钥匙。从不包括别的房间的。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `keys` | `[{id, name, role, masked, created?, online}]` | `id` 是 `key` 命令接受的，从不是钥匙本身。`masked` 是钥匙的首尾几个字符。在开始记录创建时间之前签发的钥匙没有 `created`（毫秒）。`online`：此刻有人用它连着。钥匙变化时、成员连接或离开时刷新。 |
+
+**`admin/content`**（仅管理员）：本房间能用什么、开了什么。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `skills` | `[{id, title, enabled, source}]` | 本房间可以启用的守秘人技能（内置的，以及已启用扩展包的）。 |
+| `ruleSystems` | `[{id, title, enabled, source}]` | 服务器的规则系统；`enabled` 标出房间用的那个。 |
+| `packs` | `[{id, title, version, enabled}]` | 已安装的扩展包；`enabled`：本房间启用了它。 |
+| `source` | `{kind, id}` | `kind` 为 `builtin`（`id` 为 `null`）或 `pack`（`id` 为扩展包）。 |
+
+### 10.5 模组视图
+
+模组可以发布名为 `<module>/<name>` 的视图，每个带着模组声明的 JSON Schema 和标题（由 `view.list` 列出）。模组为每个查看者计算值，服务器不加过滤地转发，只发给那个查看者；超过 512 KiB 的值被丢弃。它们的形状由模组决定；不认识某个模组视图的客户端，通用地渲染它，或者干脆不渲染。以 `admin/` 开头的名字是保留的，模组永远不会提供。
+
+### 10.6 面板
+
+面板是故事旁边常驻的界面，由扩展包提供（[LWF panels](lwf/formats/panels.md)）。它的数据**只来自视图**：没有面板帧。客户端：
+
+1. 订阅 `panels`，以及每个条目在 `views` 里指定的每个视图；
+2. 对 `template`，调用 `instantiate({views, blocks}, values)`——`values` 是按名字排列的各视图数据——并绘制得到的块（与 `blocks` 事件相同的 `Block` 词汇，[8.3](#83-blocks)）；对 `page`，能的话在沙箱 frame 里运行 HTML，不能就实例化 `fallback`，再不行就显示一行“需要富客户端”；
+3. 把 `choices` 选项以及页面做的任何事，以查看面板的成员身份作为 `command.run {id: command, args}`（[6.2](#62-两个入口)）发出。
+
+模板块是一个 `Block`，它的字段可以是**绑定** `{"$view": "<path>"}`，任何块上还可以有 `visible_when`（一个条件），另外还有结构 `{"repeat": {"each": "<path>", "as": "<handle>", "prefix"?: "…", "block": <block>}}`。路径是 `<handle>.<segment>…`：句柄是条目 `views[].as` 之一（在 repeat 里也可以是它的 `as`）；一个 segment 指记录的一个属性、列表里按下标的一个元素，或列表里按 `id`/`key`/`path` 的一个元素。标了 `hidden` 的元素从不读取。解析不出的绑定会丢掉它所在的块（必填字段）或字段（可选字段）；判断不了的条件会隐藏它所在的块。语法、上限和完整规则见 LWF 面板文档 §4–§6；协议包里的 `instantiate`、`panelBlocks` 和 `panelViewNames` 实现了它们，包里的 `panels.vectors.json` 是每个实现都必须吻合的对照表。
+
+```json
+{"type":"view","name":"panels","rev":1,"at":12,"data":{"panels":[{"id":"harbor/tide","title":"The tide","slot":"sidebar","kind":"template","views":[{"as":"tide","view":"harbor/tide"}],"source":{"kind":"pack","id":"harbor"},"blocks":[{"kind":"meter","label":"Tide","value":{"$view":"tide.level"},"min":0,"max":10},{"kind":"text","text":"Flood warning!","style":"warning","visible_when":"tide.level >= 8"}]}]}}
+```
+
+给成员列哪些面板由服务器决定：扩展包限定给管理员的面板，或读取某个 `admin/*` 视图的面板，从不出现在玩家的 `panels` 里。页面的 HTML 和面板的图片是房间的不列出的媒体：房间成员可以获取（仅限管理员的页面只有管理员能获取），哪里都不列出，其他任何房间都不知道它们。
+
+## 11. 字节通道
+
+### 11.1 流
+
+文件在控制流旁边自己的流上传输。每次操作是同一连接上的一个新双向流：客户端写**一行头**（紧凑 JSON 加 `\n`），服务器回一行头，GET 的话再跟上字节；然后服务器结束这个流。
+
+- 每条连接同时最多打开 `MAX_BYTE_STREAMS` = **4** 个字节流（控制流不算）；第五个以 `too_many_streams` 拒绝。
+- 头这一行最多 `MAX_BYTE_HEADER_BYTES` = **2048** 字节，含换行（`header_too_long`）。
+- 一个流 `BYTE_STALL_MS` = **30 秒**内什么都没收到就会被关闭（`stalled`）。
+- 连接必须已经收到 `welcome`（否则 `not_open`，会话结束后也是）。
+- 被拒绝的流收到一行错误后关闭。连接及其控制流永远不受影响。
+
+内容按**哈希**寻址：字节内容的小写十六进制 SHA-256，正好 64 个字符。
+
+### 11.2 申报文件
+
+上传从控制流上的 `call media.offer` 开始：
+
+| 参数 | 类型 | 含义 |
+|---|---|---|
+| `name` | string | 文件名，最多 255 个码点（存储时会清理）。 |
+| `mime` | string | 文件类型（最多 128 个字符）。 |
+| `size` | integer | 字节数，大于 0。 |
+| `sha256` | string | 字节内容的小写十六进制 SHA-256。 |
+| `purpose` | `share`（默认）、`import` 或 `audio` | `share`：文件成为房间媒体，字节到齐后桌面看到一个 `media` 事件。`import`：给 `import` 命令用的卡片文件（[11.6](#116-导入卡片)），存在只有管理员能获取的地方，不通知任何人。`audio`（仅管理员，仅声音）：给房间音频库的声音，每个成员都能获取，没有事件宣布；它以去掉扩展名的文件名为标题加入 `audio` 视图的音频库（[10.4](#104-内置视图)）。 |
+
+成功时回答以下之一：
+
+- `{"upload_id":"…"}`：用 PUT 发送字节（[11.4](#114-put)）。这个 id 只能用一次，限这个成员，15 分钟内有效。
+- `{"existing":{hash, mime, size, name, from}}`：房间已经有这些字节了；什么都不用发。对 `share`，文件会再次向桌面宣布（一个新的 `media` 事件，`from` 是申报的成员）。对 `import`，文件已经可以给 `import` 命令用了。对 `audio`，声音已在音频库里（本来就在，或者房间原本就把这些字节作为每个成员都能获取的文件保存着）。
+
+接受的类型：`image/png`、`image/jpeg`、`image/webp`、`image/gif`、`image/svg+xml`（一个受限的子集）、`audio/mpeg`、`audio/ogg`、`audio/wav`、`audio/flac`、`audio/mp4`、`audio/aac`。`purpose: "import"` 只接受 `image/png`（内嵌数据的卡片）和 `application/json`；`purpose: "audio"` 只接受 `audio/…` 类型。
+
+默认上限：单张图片最多 8 MiB，每个房间的图片共 512 MiB；单个声音最多 128 MiB，每个房间的声音共 2048 MiB（这两项由运营者设置）；每个成员在每个房间每分钟 10 次申报（被拒绝的申报也算一次）；一个房间的音频库最多 100 个上传的声音。
+
+拒绝：`invalid_params`（某个字段形状不对）、`media_unavailable`（服务器不保存文件）、`observer_upload`、`forbidden`（非管理员申报 `audio`）、`audio_library_full`、`media_disabled`（房间的上传开关关着）、`media_rate_limited`、`media_bad_mime`、`media_bad_offer`、`media_too_large`、`media_bad_hash`、`media_quota_exceeded`。
+
+### 11.3 GET
+
+```
+client: {"op":"get","hash":"<64 hex>"}\n
+server: {"op":"get","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}\n  then exactly <n> bytes
+```
+
+成员能获取房间在其身份可见的范围内保存的东西：房间媒体（共享的文件、演出图片）、音频库的声音和房间已启用扩展包的文件，所有人都能获取（只有仅限管理员的面板用到的，限管理员）；导入文件限管理员。别的房间里的哈希、这个身份不能看的哈希、谁都没有的哈希，回答都一样：`media_not_found`。
+
+### 11.4 PUT
+
+```
+client: {"op":"put","upload_id":"<id>"}\n  then exactly the offered size in bytes, then it finishes its side of the stream
+server: {"op":"put","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}\n
+```
+
+客户端发完正文后**必须结束自己的发送侧**：服务器靠读到流的结尾来确认正文结束，一直开着的流会被当作 `stalled` 关闭。存储任何东西之前，字节会先经过检查（大小精确、SHA-256、声明类型的文件签名、SVG 子集）。对 `share`，`media` 事件先发给桌面，然后才是 PUT 的回答行。
+
+PUT 的拒绝：`media_unknown_upload`（这个成员没有该 id 的待传申报：从没申报过、过期、已经用过，或房间被清空了）、`media_size_mismatch`（字节比申报的多或少）、`media_hash_mismatch`、`media_bad_signature`、`media_bad_svg`、`media_quota_exceeded`、`media_disabled`、`media_bad_upload`、`media_storage_failed`、`audio_library_full`（期间另一次上传把音频库填满了；字节不保留）。任何失败的 PUT 都会用掉这次申报：重新申报。
+
+### 11.5 错误
+
+```
+server: {"ok":false,"code":"<stable code>","message":"<in the member's language>"}\n
+```
+
+字节通道自己的错误码：`bad_request`（头不是这个通道认识的请求）、`header_too_long`、`too_many_streams`、`stalled`、`not_open`、`byte_failed`（服务器出错；什么都没保留）；以及上面那些媒体错误码。
+
+### 11.6 导入卡片
+
+卡片（PNG 或 JSON 格式的 SillyTavern 角色卡，或 JSON 格式的原生卡片）分两步导入：用 `media.offer {purpose: "import"}` 上传（回答是 `upload_id` 时再做一次 PUT），然后运行 `command.run import {file: <hash>, as: "character"|"world"}`。只有上传文件的那个成员能导入它（否则 `not_uploaded`）。作为 `character`，任何玩家都可以把它变成自己的角色；作为 `world`（仅管理员），它成为房间的世界，桌面听到一行写出它名字的 `narrative`。
+
+## 12. 客户端守则
+
+### 12.1 向前兼容
+
+同一主版本内的小版本只做增量。客户端：
+
+- **忽略**未知 `type` 的帧、未知 `kind` 的事件（但要计入它的 `seq`，[7.6](#76-在本地保存日志)）、未知 `kind` 的信号，以及未知 `kind` 的块（显示事件的其余部分）；
+- 在任何地方都**忽略未知字段**；
+- 对决定怎么渲染的字段，**不确定就不画**：已知字段带着这个版本不认识的值（某个 `speaker`、`format`、dice `kind`、`role`、reset `scope`、audio `action` 或 `layer`、notice `level`、块的 `tone` 或 `style`），或已知字段类型不对，这一帧就算格式有误，格式有误的帧被丢弃，不画错。唯一的例外是 `turn.activity`，它只用于展示：未知值直接略去；
+- 给接受的东西设**上限**，超过上限的帧整个丢弃，而不是截断。参考解码器（`decode.ts`）用的是：短字符串（id、错误码、名字、视图名、语言、哈希）256 个字符，文本（叙述、草稿片段、通知、结果的文本、块的正文）200,000 个字符，骰子表达式 1024 个字符，每次掷骰 10,000 颗骰子，每个事件 256 个块，每个 `choices` 块 64 个选项，每个 `log.page` 回答 1000 个事件，rewind 的 `kept` 4096 项；
+- 原样透传不透明的值：模组视图的 `view.data`、`result.data`、骰子的 `detail`。
+
+内置视图的值会按它们的 schema 检查，但允许多出字段：更新的服务器可能给视图加字段。
+
+### 12.2 语言
+
+| 内容 | 语言 |
+|---|---|
+| 事件和信号（发给桌面的一切） | 房间的（`welcome.room.locale`；改过之后看 `room` 视图） |
+| `result` 的文本和错误消息、`error` 帧、字节通道的错误 | 成员的（`hello.locale`） |
+| 视图 | 查看者的（`hello.locale`） |
+
+### 12.3 服务器发来的文本
+
+每个字符串都来自人、守秘人、模组或卡片。把它当文本渲染。写到终端之前去掉终端控制字符：`loreweaver-protocol/v3` 为此导出了 `stripControlChars`。`format: "markdown"` 是服务器唯一标为 Markdown 的文本。
+
+### 12.4 上限
+
+| 上限 | 值 | 出处 |
+|---|---|---|
+| `input.text` | 8000 个码点 | `MAX_INPUT_CHARS` |
+| `hello.name` | 64 个码点 | 服务器 |
+| `rid` | 1–64 个字符 | `frames.ts` |
+| `command.run` `id` | 200 个码点 | 服务器 |
+| 文本命令的参数字符串 | 4000 个码点 | 服务器 |
+| 每行的内联掷骰 | 8 | 服务器 |
+| 字符串参数（默认） | 4000 个码点 | 参数 schema |
+| 列表参数（默认） | 64 项 | 参数 schema |
+| `welcome` 之后的回放 | 200 个事件 | `RESUME_LIMIT` |
+| `log.page` `limit` | 1–100 | `PAGE_LIMIT` |
+| 每次 `view.subscribe` / `view.unsubscribe` 的名字数 | 64 | `MAX_VIEW_NAMES` |
+| 每条连接的订阅数 | 64 | 服务器 |
+| 视图名 | 200 个码点 | 服务器 |
+| 视图值 | 512 KiB | 服务器 |
+| 请求（`input`、`command.run`） | 每个成员突发 5 个，之后每 2 秒一个 | 服务器默认值 |
+| 每条连接的字节流 | 4 | `MAX_BYTE_STREAMS` |
+| 字节流头行 | 2048 字节 | `MAX_BYTE_HEADER_BYTES` |
+| 字节流停滞 | 30 秒 | `BYTE_STALL_MS` |
+| `upload_id` | 64 个字符 | `MAX_UPLOAD_ID_CHARS` |
+| 申报的文件名 | 255 个码点 | `MAX_OFFER_NAME_CHARS` |
+| 申报 | 每个成员在每个房间每分钟 10 次 | 服务器默认值 |
+| 重置确认窗口 | 60 秒 | 服务器 |
+| `model list` 回答里的模型 id | 500 个，每个 ≤ 200 个码点 | 服务器 |
+| `model list` 等待服务商 | 15 秒 | 服务器 |
+
+### 12.5 结果错误码
+
+`result` 可能带的协议级错误码（命令拒绝见 [6.4](#64-拒绝)，上传拒绝见 [11.2](#112-申报文件)）：
+
+| 错误码 | 来自 |
+|---|---|
+| `input_too_long` | 超过 8000 个码点的 `input` |
+| `invalid_params` | `params`（或其中某个字段）形状不对的 `call` |
+| `unknown_method` | 调用了服务器没有的方法的 `call` |
+| `rate_limited` | `input`、`command.run` |
+| `observer_speech` | 旁观者的一行发言 |
+| `unknown_view`、`view_failed`、`too_large`、`not_open` | `view.get` |
+| `command_failed` | 服务器运行命令时出错；什么都没改 |
+
+## 13. 会话示例
+
+### 13.1 一场跑团
+
+下面每一行都是一帧，和它在连接上传输时完全一样（空白除外）。房间 `main` 说英语，用 `coc7` 规则系统，已经有两个事件：Bao 说了一句话，守秘人回答了。
+
+**1. Ada 发 hello。** 第一次来：没有 `resume`。
+
+```json
+{"type":"hello","protocol":"3.0","key":"rT9vQ2xLm8Kc3PzW0aYbN5sEdF7gHjU1","name":"Ada","locale":"en","client":{"name":"my-client","version":"0.1.0"},"caps":[]}
+```
+
+**2. `welcome`，然后是两个事件的回放**（`head` 是 2，在回放上限之内，所以这就是整份日志）。
+
+```json
+{"type":"welcome","protocol":"3.0","server":{"name":"loreweaver","version":"3.0.0-alpha.0"},"room":{"id":"main","locale":"en"},"you":{"id":"m:15b5f3445045","name":"Ada","role":"player"},"features":[],"epoch":1,"head":2,"first":1}
+{"type":"event","seq":1,"id":"2c1f8e7a-6b5d-4c3e-9f2a-1b0c9d8e7f6a","ts":1764240000001,"kind":"narrative","turn":1,"data":{"speaker":"player","name":"Bao","member":"m:b40a5aaa35ea","text":"I wait by the quay.","format":"plain"}}
+{"type":"event","seq":2,"id":"7d6e5f4a-3b2c-4d1e-8f9a-0b1c2d3e4f5a","ts":1764240002410,"kind":"narrative","turn":1,"data":{"speaker":"kp","text":"The fog thickens.","format":"markdown"}}
+```
+
+**3. Ada 订阅两个视图。** 先到的是回答，然后每个视图一个 `view` 帧。Ada 还没有角色，所以 `me.character` 是 `null`。
+
+```json
+{"type":"call","rid":"r1","method":"view.subscribe","params":{"names":["me","room"]}}
+{"type":"result","rid":"r1","ok":true,"data":{"problems":[]}}
+{"type":"view","name":"me","rev":1,"at":2,"data":{"member":{"id":"m:15b5f3445045","name":"Ada","role":"player","roleLabel":"Player"},"character":null}}
+{"type":"view","name":"room","rev":1,"at":2,"data":{"locale":"en","localeLabel":"English","system":{"id":"coc7","label":"CoC"},"variant":null,"keeperMuted":false,"uploads":true}}
+```
+
+**4. 一行带内联掷骰的发言。** 这一行立刻被接受：它的 `narrative` 事件（第 2 回合）和内联掷骰的 `dice` 事件发布出来，然后 Ada 的结果到达。接着是守秘人的回合：`busy`，两段草稿，替换它们的 `narrative` 事件（id 相同），`idle`。
+
+```json
+{"type":"input","rid":"r2","text":"I light the lantern. [[1d6]]"}
+{"type":"event","seq":3,"id":"5e4d3c2b-1a0f-4e9d-8c7b-6a5f4e3d2c1b","ts":1764240010000,"kind":"narrative","turn":2,"data":{"speaker":"player","name":"Ada","member":"m:15b5f3445045","text":"I light the lantern. [[1d6]]","format":"plain"}}
+{"type":"event","seq":4,"id":"0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d","ts":1764240010001,"kind":"dice","turn":2,"data":{"actor":"Ada","kind":"roll","expr":"1d6","rolls":[6],"total":6,"detail":{"text":"1d6 (6) = 6","inline":true}}}
+{"type":"result","rid":"r2","ok":true}
+{"type":"signal","kind":"turn","data":{"status":"busy","actor":"Ada"}}
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"The lantern catches, "}}
+{"type":"signal","kind":"draft","data":{"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","text":"and the quay comes out of the dark."}}
+{"type":"event","seq":5,"id":"9b4f6c1e-2d3a-4e5f-8a7b-1c2d3e4f5a6b","ts":1764240014820,"kind":"narrative","turn":2,"data":{"speaker":"kp","text":"The lantern catches, and the quay comes out of the dark.","format":"markdown"}}
+{"type":"signal","kind":"turn","data":{"status":"idle"}}
+```
+
+**5. 一个命令，两个入口。** 先打字，再用结构化调用：同一个命令，同样形状的结果。每次都在日志里放一个无回合的 `dice` 事件，并把总数回答给 Ada。不开启守秘人回合。
+
+```json
+{"type":"input","rid":"r3","text":".r 2d6"}
+{"type":"event","seq":6,"id":"3c2b1a0f-9e8d-4c7b-8a6f-5e4d3c2b1a0f","ts":1764240020000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[5,5],"total":10,"detail":{"text":"2d6 (5, 5) = 10"}}}
+{"type":"result","rid":"r3","ok":true,"data":{"totals":[10]}}
+{"type":"call","rid":"r4","method":"command.run","params":{"id":"roll","args":{"expr":"2d6"}}}
+{"type":"event","seq":7,"id":"8f7e6d5c-4b3a-4f2e-9d1c-0b9a8f7e6d5c","ts":1764240025000,"kind":"dice","data":{"actor":"Ada","kind":"roll","expr":"2d6","rolls":[3,4],"total":7,"detail":{"text":"2d6 (3, 4) = 7"}}}
+{"type":"result","rid":"r4","ok":true,"data":{"totals":[7]}}
+```
+
+**6. Ada 试图撤销。** `undo` 是管理员命令：拒绝只给 Ada。
+
+```json
+{"type":"input","rid":"r5","text":".undo"}
+{"type":"result","rid":"r5","ok":false,"error":{"code":"forbidden","message":"That is for the room admin."}}
+```
+
+**7. 管理员撤销上一个回合。** 在管理员的连接上：
+
+```json
+{"type":"call","rid":"a1","method":"command.run","params":{"id":"undo","args":{}}}
+```
+
+每个成员，包括 Ada，都收到 `rewind`。它删除 `seq` 3 起的一切：第 2 回合（发言、它的掷骰和回复），以及第 2 回合开始之后的那两次掷骰。房间现在处于 `epoch` 2。
+
+```json
+{"type":"event","seq":8,"id":"6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d","ts":1764240030000,"kind":"rewind","data":{"from":3,"kept":[],"epoch":2}}
+```
+
+管理员自己收到的回答：
+
+```json
+{"type":"result","rid":"a1","ok":true,"text":"Rewound 1 turn(s); the room is back at the end of turn 1.","data":{"turn":1,"epoch":2,"removedTurns":[2]}}
+```
+
+Ada 的日志现在有 `seq` 1、2 和 8。如果她带着 `"resume":{"epoch":1,"after":8}` 重连，`welcome` 会说 `"epoch":2`：她丢弃自己的日志，重新接收回放。
+
+### 13.2 字节通道
+
+Ada 共享一张 48,213 字节的 PNG。在控制流上：
+
+```json
+{"type":"call","rid":"r6","method":"media.offer","params":{"name":"map.png","mime":"image/png","size":48213,"sha256":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}}
+{"type":"result","rid":"r6","ok":true,"data":{"upload_id":"c4b3a291-8f7e-4d6c-9b5a-4f3e2d1c0b9a"}}
+```
+
+在一个新流上，先是 PUT 的头，然后是 48,213 个字节，然后 Ada 结束她这一侧：
+
+```json
+{"op":"put","upload_id":"c4b3a291-8f7e-4d6c-9b5a-4f3e2d1c0b9a"}
+```
+
+桌面（包括 Ada）在控制流上看到文件到达：
+
+```json
+{"type":"event","seq":9,"id":"e1d2c3b4-a5f6-4e7d-8c9b-0a1f2e3d4c5b","ts":1764240040000,"kind":"media","data":{"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","mime":"image/png","size":48213,"name":"map.png","from":"m:15b5f3445045"}}
+```
+
+PUT 流给出回答，然后关闭：
+
+```json
+{"op":"put","ok":true,"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","size":48213,"mime":"image/png","name":"map.png"}
+```
+
+Bao 在他自己的一个流上获取它；回答行之后正好跟着 48,213 个字节：
+
+```json
+{"op":"get","hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}
+{"op":"get","ok":true,"hash":"3f9a0c7d2b1e4f5a6c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d","size":48213,"mime":"image/png","name":"map.png"}
+```
+
+房间没有的哈希（或 Bao 不能看的哈希）：
+
+```json
+{"ok":false,"code":"media_not_found","message":"No such file."}
+```
+
+## 14. 3.0 还没有的
+
+以下内容在设计里有定义，或在代码里有保留，但 3.0 没有实现：
+
+- **`features` 和 `caps` 的取值。** 两个列表都在；服务器发 `features: []`，忽略 `caps`。
+- **运行页面。** `panels` 视图会列出页面，字节通道也提供它们的 HTML；但还没有参考客户端能运行页面（终端客户端显示 fallback）。页面桥接由桌面客户端来定义。房间在运行时发布的面板（`source.kind: "room"`）是保留的：没有服务器会产生它们。
+- **`turn.activity`、`turn.round` 和 `notice.spinner`** 在帧里有定义，但不发送。
