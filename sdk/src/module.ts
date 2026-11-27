@@ -182,13 +182,27 @@ export interface PlayableCharacter {
   readonly resources?: readonly Resource[];
 }
 
-/** What a command's `run` answers to the member who used it, and to nobody else. */
+/**
+ * What a command's `run` answers to whoever ran it, and to nobody else: the member who used
+ * it, or the Keeper (as its tool result) when the Keeper ran it.
+ */
 export interface CommandResult {
   readonly text?: string;
   readonly data?: Json;
 }
 
 type Awaitable<T> = T | Promise<T>;
+
+/**
+ * Who may run a command. `player` (default): players and admins, and the Keeper. `admin`:
+ * admins only — never the Keeper. `keeper`: the Keeper only; never shown to a member.
+ */
+export type CommandRole = "player" | "admin" | "keeper";
+
+/** Who is running a command now: the Keeper (its `run_command` tool, during a turn) or a member. */
+export interface CommandOrigin {
+  readonly by: "keeper" | "member";
+}
 
 export interface CommandSpec {
   readonly title: string;
@@ -197,12 +211,19 @@ export interface CommandSpec {
   readonly params?: JsonObject;
   /** Text forms such as `"attack {target}"`; data for the engine's parser. */
   readonly text?: readonly string[];
-  /** Who may use it. `player` (default): players and admins. `admin`: admins only. */
-  readonly role?: "player" | "admin";
-  /** Read-only. `true`, or a reason shown to that viewer. */
+  /** Who may run it; see `CommandRole`. Default `player`. */
+  readonly role?: CommandRole;
+  /**
+   * Read-only. `true`, or a reason shown to that viewer. Asked from a member's point of view:
+   * for a member's `commands` view, and at the moment of use (when the Keeper runs the
+   * command, `who` is the member whose turn it is).
+   */
   available?(who: Who, room: RoomSnapshot): Awaitable<true | string>;
-  /** Mutating. */
-  run(args: JsonObject, who: Who, fx: PhaseEffects, room: RoomSnapshot): Awaitable<CommandResult | void>;
+  /**
+   * Mutating. `who` is the member the action belongs to — when the Keeper runs the command,
+   * the member who spoke this turn (or nobody). `call.by` says who is running it.
+   */
+  run(args: JsonObject, who: Who, fx: PhaseEffects, room: RoomSnapshot, call: CommandOrigin): Awaitable<CommandResult | void>;
 }
 
 export interface ViewSpec {

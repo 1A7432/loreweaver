@@ -6,7 +6,7 @@
 // What the test host does NOT do is the engine's half: it applies nothing, and it does
 // not enforce the engine's size limits (see the README for them). Effects come back
 // exactly as the module requested them.
-import type { ClockAdvance, ClockReading, Json, JsonObject, ModuleDefinition, Role, RollResult, RoomSnapshot, VariableWrite, Who } from "./module.ts";
+import type { ClockAdvance, ClockReading, CommandOrigin, Json, JsonObject, ModuleDefinition, Role, RollResult, RoomSnapshot, VariableWrite, Who } from "./module.ts";
 import {
   type CallValue,
   type CommandOutcome,
@@ -114,12 +114,19 @@ export interface TestHost {
   /** The verdicts, in call order: `true`, or the first denial's reason. */
   toolUse(calls: readonly ToolCallInput[], who?: Who, room?: RoomInput): Promise<TestCall & { readonly verdicts: readonly (true | string)[] }>;
   replyPhase(input: ReplyPhaseInput): Promise<TestCall>;
-  /** Runs a command as `who`, with the role and `available` checks the engine makes. */
+  /** Runs a command as the member `who` (`call.by` is `member`), with the role and `available` checks the engine makes. */
   command(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCall & { readonly outcome: CommandOutcome }>;
+  /**
+   * Runs a command as the Keeper does with its `run_command` tool (`call.by` is `keeper`),
+   * with the same checks: `player` and `keeper` commands run, `admin` ones are refused.
+   * `who` is the member whose turn it is (default: the host's `who`).
+   */
+  keeperCommand(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCall & { readonly outcome: CommandOutcome }>;
   /** A view's data for `who`; throws when there is no such view or it failed. */
   view(name: string, who?: Who, room?: RoomInput): Promise<Json>;
   /**
-   * Whether `who` may use a command: `"role"` when the role forbids it, otherwise what the
+   * Whether the member `who` may use a command: `"role"` when the role forbids it (always,
+   * for a `keeper` command), otherwise what the
    * command's `available` answers (`true` when it has none).
    */
   available(name: string, who?: Who, room?: RoomInput): Promise<Json>;
@@ -199,6 +206,20 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     return rendered;
   }
 
+  async function runCommand(by: CommandOrigin["by"], name: string, args: JsonObject, caller: Who | undefined, room: RoomInput | undefined) {
+    const seen = snapshot(room);
+    const value = await runner.command({
+      module: description.id,
+      command: name,
+      args,
+      who: caller ?? defaultWho,
+      by,
+      seed: `${seedPrefix}:${seen.turn}:command:${name}`,
+      room: seen,
+    });
+    return { ...report(value), outcome: value.outcome };
+  }
+
   return {
     get id() {
       return description.id;
@@ -246,17 +267,11 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       });
       return report(value);
     },
-    async command(name, args = {}, caller, room) {
-      const seen = snapshot(room);
-      const value = await runner.command({
-        module: description.id,
-        command: name,
-        args,
-        who: caller ?? defaultWho,
-        seed: `${seedPrefix}:${seen.turn}:command:${name}`,
-        room: seen,
-      });
-      return { ...report(value), outcome: value.outcome };
+    command(name, args = {}, caller, room) {
+      return runCommand("member", name, args, caller, room);
+    },
+    keeperCommand(name, args = {}, caller, room) {
+      return runCommand("keeper", name, args, caller, room);
     },
     async view(name, caller, room) {
       const rendered = await renderFor(caller ?? defaultWho, room);

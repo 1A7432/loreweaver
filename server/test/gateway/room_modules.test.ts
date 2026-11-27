@@ -88,3 +88,40 @@ test("the scene view shows the clock a module keeps, before any turn has run", a
   // `kitchen` keeps the room's clock (its reading is "hp <n>", its round the lines it heard).
   expect(views(ada.sent, "scene").at(-1)?.data).toMatchObject({ clockModule: "kitchen", time: "hp 10", round: 0 });
 });
+
+test("a keeper command is no member's: refused like a role they lack, nothing applied, absent from their commands view", async () => {
+  const b = setup({ modules: ["omens"] });
+  const ada = b.join(KEYS.ada);
+  const root = b.join(KEYS.root);
+  const before = b.store.moduleStates(ROOM).get("omens");
+  ada.receive({ type: "call", rid: "run", method: "command.run", params: { id: "omens/advance", args: {} } });
+  ada.receive({ type: "input", rid: "typed", text: ".omens/advance" });
+  root.receive({ type: "call", rid: "admin", method: "command.run", params: { id: "omens/advance", args: {} } });
+  ada.receive({ type: "call", rid: "look", method: "command.run", params: { id: "omens/look", args: {} } });
+  await b.settled();
+  for (const [sent, rid] of [
+    [ada.sent, "run"],
+    [ada.sent, "typed"],
+    [root.sent, "admin"],
+  ] as const) {
+    const refused = resultFor(sent, rid);
+    // The same refusal an admin command gives a player: it names no command and carries nothing of the module's.
+    expect(refused).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(JSON.stringify(refused)).not.toContain("OMEN_DUE");
+    expect(JSON.stringify(refused)).not.toContain("advance");
+  }
+  // A player command answers a member as one.
+  expect(resultFor(ada.sent, "look")).toMatchObject({ ok: true, text: "member: you see the well" });
+  expect(events(ada.sent)).toEqual([]);
+  expect(events(root.sent)).toEqual([]);
+  expect(b.store.moduleStates(ROOM).get("omens")).toEqual(before ?? { hours: 0 });
+  // No action recorded for the Keeper's next prompt (`look` emits no fact; the refusals did nothing).
+  expect(b.actions).toEqual([]);
+
+  ada.receive({ type: "call", rid: "s", method: "view.subscribe", params: { names: ["commands"] } });
+  root.receive({ type: "call", rid: "s", method: "view.subscribe", params: { names: ["commands"] } });
+  await b.settled();
+  const listed = (sent: typeof ada.sent) => (views(sent, "commands").at(-1)?.data as { commands: { id: string }[] }).commands.map((entry) => entry.id).filter((id) => id.startsWith("omens/"));
+  expect(listed(ada.sent)).toEqual(["omens/look"]);
+  expect(listed(root.sent)).toEqual(["omens/look", "omens/wipe"]);
+});

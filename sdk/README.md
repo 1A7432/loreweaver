@@ -124,9 +124,10 @@ interface RoomSnapshot {
 
 It is the room as it is when the call starts. Every event *is* a snapshot (`turn`,
 `variables` and `clock` are fields of all three events), and every other handler gets
-one as its **last** parameter: `run(args, who, fx, room)`, `available(who, room)`,
-`for(who, room)`, `characters(room)`, `clock(room)`. A handler that does not need it
-simply leaves the parameter out.
+one as its **last** parameter: `available(who, room)`, `for(who, room)`,
+`characters(room)`, `clock(room)` — and a command's `run(args, who, fx, room, call)`, where
+only `call` (who is running it, see [Commands](#commands)) comes after it. A handler that
+does not need it simply leaves the parameter out.
 
 The snapshot is a **copy, made for each module and each call**: writing to it changes
 nothing, neither the room nor what the next module sees. To change a variable, ask with
@@ -151,7 +152,7 @@ defineModule({
     replyPhase(event, fx) {},
   },
 
-  commands: { attack: { title, description?, params?, text?, role?, available?(who, room), run(args, who, fx, room) } },
+  commands: { attack: { title, description?, params?, text?, role?, available?(who, room), run(args, who, fx, room, call) } },
   views: { status: { title?, schema, for(who, room) } },
 });
 ```
@@ -213,15 +214,57 @@ commands: {
 
 - `params` is a JSON Schema object schema for the arguments (default `{ type: "object" }`).
 - `text` lists text forms the engine's parser can match; it is data, nothing more.
-- `role`: `player` (default) — players and admins may use it; `admin` — admins only.
-  Observers use no command. The engine checks the role before your code runs.
+- `role`: who may run it. The engine checks it before your code runs.
+  - `player` (default): players and admins, and the Keeper.
+  - `admin`: admins only. The Keeper never runs it, whoever is speaking: admin commands
+    (resets, settings) are the human admin's.
+  - `keeper`: the Keeper only. It is Keeper machinery: never listed in a member's
+    `commands` view, and a member who names it anyway is refused as having the wrong role.
+    The Keeper sees it in its list of the room's commands and runs it with its
+    `run_command` tool.
+
+  Observers use no command.
 - `available(who, room)` (read-only) narrows it further: `true`, or a reason shown to that
-  member. It is asked when the engine renders what each member can do, and again at the
-  moment of use.
-- `run(args, who, fx, room)` is mutating. What it returns (`{ text?, data? }`) answers the
-  member who used the command, and nobody else. To tell the table, use `fx.fact`.
+  member. It is asked from a member's point of view: when the engine renders what each
+  member can do, and again at the moment of use (when the Keeper runs the command, `who`
+  is the member whose turn it is).
+- `run(args, who, fx, room, call)` is mutating. `call.by` is `"keeper"` when the Keeper runs
+  it (its `run_command` tool, during a turn) and `"member"` when a member does (typed text,
+  a panel, `command.run`). `who` is the member the action belongs to either way: when the
+  Keeper runs it, the member who spoke this turn, or `member: null` when nobody did. What
+  `run` returns (`{ text?, data? }`) answers whoever ran it and nobody else: the member, or
+  the Keeper as its tool result. To tell the table, use `fx.fact`. Effects are applied the
+  same way whoever ran the command.
 
 Commands are addressed as `<module id>/<command name>`.
+
+A command that only the Keeper should run — a clock it advances, a reveal it triggers —
+declares `role: "keeper"`. A command both may run can say more to the Keeper than to a
+player by branching on `call.by`: its answer goes only to whoever ran it.
+
+```ts
+commands: {
+  advance: {
+    title: "Advance the clock",
+    role: "keeper",                       // players never see or run it
+    params: { type: "object", properties: { hours: { type: "integer" } } },
+    run(args, _who, fx) {
+      hours += typeof args.hours === "number" ? args.hours : 1;
+      fx.fact({ text: `${hours} hours have passed.` });
+      return { text: hours >= 6 ? "Six hours: the bell tolls now." : `${hours} hours.` };
+    },
+  },
+  search: {
+    title: "Search the room",
+    run(_args, who, fx, _room, call) {
+      fx.fact({ text: `${who.character?.name ?? "Someone"} searches the room.` });
+      return call.by === "keeper"
+        ? { text: "Nothing found. (The letter is behind the mirror; it turns up on a second search.)" }
+        : { text: "You find nothing." };
+    },
+  },
+},
+```
 
 ### Views
 
@@ -349,9 +392,10 @@ The host:
 | `turnStart({ text, who?, turn?, seed?, variables?, clock? })` | Fires the event. `turn` defaults to one past the last. |
 | `toolUse(calls, who?, room?)` | `calls` are `{ id?, name, args? }`; returns `verdicts` in call order: `true` or the first denial's reason. |
 | `replyPhase({ reply, who?, turn?, seed?, variables?, clock?, rolls?, clockAdvances?, variableWrites? })` | Fires the event. |
-| `command(name, args?, who?, room?)` | Runs a command with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. |
+| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. |
 | `view(name, who?, room?)` | The view's data for `who`; throws if it failed. |
-| `available(name, who?, room?)` | `"role"` when the role forbids it, else what `available` answers. |
+| `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones are refused with `reason: "role"`. |
+| `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (always, for a `keeper` command), else what `available` answers. |
 | `characters(room?)`, `clock(room?)` | The read-only answers. |
 | `checkpoint` | The current checkpoint: what a restart would load. |
 | `description` | The static description the engine reads at load. |

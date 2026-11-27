@@ -26,6 +26,12 @@ function unknownCommand(commands: readonly ModuleCommand[], id: string): ToolRes
   return refuse("unknown_command", `No module command "${id}". This room's commands: ${known === "" ? "(none)" : known}.`);
 }
 
+const WHO_MAY_RUN: Readonly<Record<ModuleCommand["info"]["role"], string>> = {
+  player: "any player, and you",
+  keeper: "you only (players never see it)",
+  admin: "the room admin only; you cannot run it",
+};
+
 export const lookupCommandTool = defineTool({
   name: "lookup_command",
   description: "Look up one of this room's module commands: what it does, who may run it, and the full JSON Schema of its arguments. Use it before run_command when you do not know a command's parameters.",
@@ -41,7 +47,7 @@ export const lookupCommandTool = defineTool({
     const lines = [
       `Command ${commandId(command)}: ${info.title}`,
       info.description,
-      `Who may run it: ${info.role === "admin" ? "the room admin only" : "any player"}${info.checksAvailability ? " (the module may refuse it at the moment of use)" : ""}`,
+      `Who may run it: ${WHO_MAY_RUN[info.role]}${info.checksAvailability ? " (the module may refuse it at the moment of use)" : ""}`,
       `Arguments (JSON Schema): ${JSON.stringify(info.params)}`,
     ];
     return { text: lines.filter((line) => line !== "").join("\n") };
@@ -75,7 +81,8 @@ export const runCommandTool = defineTool({
       case "refused": {
         const reasons = {
           unknown: "the module does not have this command",
-          role: "it is reserved for the room admin",
+          // The Keeper may run any command but an admin's, whoever is speaking.
+          role: "it is reserved for the room admin; you cannot run it",
           invalid: "the arguments are not a JSON object within the size limit",
           unavailable: `the module says it is unavailable now${outcome.text === null ? "" : `: ${outcome.text}`}`,
         } as const;

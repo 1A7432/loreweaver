@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { defineModule, type Json, type ModuleDefinition, type Who } from "./module.ts";
-import { isValidName, mayUse, ModuleRunner } from "./runner.ts";
+import { isValidName, mayRun, mayUse, ModuleRunner } from "./runner.ts";
 
 const ada: Who = { member: { id: "m1", name: "Ada", role: "player" }, character: { id: "ada", name: "Ada" } };
 const eve: Who = { member: { id: "m3", name: "Eve", role: "observer" }, character: null };
@@ -99,6 +99,58 @@ test("roles: observers and nobody use nothing; admins use everything", () => {
   expect(mayUse(undefined, { member: null, character: null })).toBe(false);
 });
 
+test("roles: a keeper command is no member's; the Keeper runs player and keeper commands, never admin ones", () => {
+  const nobody: Who = { member: null, character: null };
+  expect(mayUse("keeper", ada)).toBe(false);
+  expect(mayUse("keeper", mo)).toBe(false);
+  for (const speaker of [ada, mo, eve, nobody]) {
+    expect(mayRun(undefined, "keeper", speaker)).toBe(true);
+    expect(mayRun("player", "keeper", speaker)).toBe(true);
+    expect(mayRun("keeper", "keeper", speaker)).toBe(true);
+    expect(mayRun("admin", "keeper", speaker)).toBe(false);
+  }
+  expect(mayRun("admin", "member", mo)).toBe(true);
+  expect(mayRun("keeper", "member", mo)).toBe(false);
+  expect(mayRun("player", "nobody" as never, ada)).toBe(false);
+});
+
+test("a command is told who runs it; a keeper command is refused to every member and run for the Keeper", async () => {
+  const seen: Json[] = [];
+  const r = runner(
+    defineModule({
+      id: "clockwork",
+      commands: {
+        advance: {
+          title: "Advance",
+          role: "keeper",
+          run(_args, who, fx, _room, call) {
+            seen.push([call.by, who.member?.name ?? null]);
+            fx.fact({ text: "time passes" });
+            return { text: call.by === "keeper" ? "advanced; the omen is due" : "advanced" };
+          },
+        },
+        look: { title: "Look", run: (_args, _who, _fx, _room, call) => ({ text: call.by }) },
+        wipe: { title: "Wipe", role: "admin", run: () => ({ text: "wiped" }) },
+      },
+    }),
+  );
+  const call = (command: string, by: "keeper" | "member", who: Who) => r.command({ module: "clockwork", command, args: {}, who, by, seed: "s", room: room(1) });
+  for (const member of [ada, mo, eve]) {
+    const refused = await call("advance", "member", member);
+    expect(refused.outcome).toEqual({ status: "refused", reason: "role" });
+    expect(refused.effects).toEqual([]);
+  }
+  expect(seen).toEqual([]);
+  const kept = await call("advance", "keeper", ada);
+  expect(kept.outcome).toEqual({ status: "ok", result: { text: "advanced; the omen is due" } });
+  expect(kept.effects.map((effect) => effect.kind)).toEqual(["fact"]);
+  expect(seen).toEqual([["keeper", "Ada"]]);
+  expect((await call("look", "keeper", eve)).outcome).toEqual({ status: "ok", result: { text: "keeper" } });
+  expect((await call("look", "member", ada)).outcome).toEqual({ status: "ok", result: { text: "member" } });
+  expect((await call("wipe", "keeper", mo)).outcome).toEqual({ status: "refused", reason: "role" });
+  expect((await call("wipe", "member", mo)).outcome).toEqual({ status: "ok", result: { text: "wiped" } });
+});
+
 test("a throwing call loses its effects and its state; the sibling keeps both", async () => {
   const r = runner(counterModule("a"), counterModule("b"));
   await r.turnStart(turn("one"));
@@ -108,11 +160,11 @@ test("a throwing call loses its effects and its state; the sibling keeps both", 
   expect(value.effects).toEqual([]);
   expect(r.checkpointOf("a")).toEqual({ count: 1 });
 
-  const failed = await r.command({ module: "a", command: "bump", args: { fail: true }, who: ada, seed: "c", room: room(2) });
+  const failed = await r.command({ module: "a", command: "bump", args: { fail: true }, who: ada, by: "member", seed: "c", room: room(2) });
   expect(failed.outcome).toEqual({ status: "failed", error: "Error: bump failed" });
   expect(failed.effects).toEqual([]);
   expect(failed.checkpoints).toEqual({});
-  const ok = await r.command({ module: "b", command: "bump", args: { by: 5 }, who: ada, seed: "c", room: room(2) });
+  const ok = await r.command({ module: "b", command: "bump", args: { by: 5 }, who: ada, by: "member", seed: "c", room: room(2) });
   expect(ok.outcome).toEqual({ status: "ok", result: { text: "6" } });
   expect(ok.checkpoints).toEqual({ b: { count: 6 } });
   const next = await r.turnStart(turn("two", 3));
@@ -202,7 +254,7 @@ test("load: two clock claims name both; a bad id or a malformed table fails the 
 test("command names are looked up as own, valid names only", async () => {
   const r = runner(counterModule("a"));
   for (const command of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
-    const value = await r.command({ module: "a", command, args: {}, who: ada, seed: "s", room: room(1) });
+    const value = await r.command({ module: "a", command, args: {}, who: ada, by: "member", seed: "s", room: room(1) });
     expect(value.outcome).toEqual({ status: "refused", reason: "unknown" });
   }
 });
@@ -272,7 +324,7 @@ test("each module gets its own copy of the room: a write by one never reaches th
   expect(seen).toEqual([{ hp: 7 }, { hp: 7 }, { hp: 7 }, { hp: 7 }]);
   expect(variables).toEqual({ hp: 7 });
 
-  const peek = await r.command({ module: "second", command: "peek", args: {}, who: ada, seed: "s", room: room(1, variables) });
+  const peek = await r.command({ module: "second", command: "peek", args: {}, who: ada, by: "member", seed: "s", room: room(1, variables) });
   expect(peek.outcome).toEqual({ status: "ok", result: { data: { hp: 7 } } });
   const rendered = await r.render({ viewers: [ada, mo], room: room(1, variables) });
   expect(rendered.viewers.map((viewer) => viewer.views.map((view) => ("data" in view ? view.data : null)))).toEqual([

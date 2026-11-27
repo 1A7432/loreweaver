@@ -8,7 +8,9 @@ import { worldCardData, worldCardId, WORLD_CARD_TYPE } from "../../../src/core/c
 import { documentCatalog } from "../../../src/core/documents/raw.ts";
 import { createNpc, npcData, NPC_TYPE } from "../../../src/core/npcs/index.ts";
 import { LLMError, toolCall } from "../../../src/infra/llm/index.ts";
-import { WorkerTimeout } from "../../../src/infra/room_worker.ts";
+import { RoomWorker, WorkerTimeout } from "../../../src/infra/room_worker.ts";
+import { spawnWorker } from "../../../src/infra/runtime/worker.ts";
+import { fixtureModule, WORKER_ENTRY } from "../../helpers.ts";
 import { addLore, putTree } from "../room_fixture.ts";
 import { fact, fakeLoreWorker, fakeWorker, Harness, promptText, ROOM } from "./harness.ts";
 
@@ -141,6 +143,57 @@ describe("tool rounds", () => {
     expect(promptText(h.keeper.requests[1]?.messages ?? [])).toContain("dock/hit: hp 9");
     // The command catalogue rides the cached head.
     expect(h.keeper.requests[0]?.messages[0]?.content).toContain("dock/hit");
+  });
+});
+
+describe("the Keeper runs module commands as the Keeper", () => {
+  const ROOT = { member: { id: "m-root", name: "Root", role: "admin" as const }, character: null };
+
+  async function withOmens(body: (worker: RoomWorker) => Promise<void>): Promise<void> {
+    const worker = new RoomWorker(() => spawnWorker(WORKER_ENTRY), [fixtureModule("omens")], { timeoutMs: 2000, onCheckpoint: () => {} });
+    try {
+      await body(worker);
+    } finally {
+      await worker.stop();
+    }
+  }
+
+  test("a keeper command and a player command run with by keeper; an admin command is refused, an admin speaking or not", async () => {
+    await withOmens(async (worker) => {
+      const h = new Harness();
+      h.keeper.script([
+        {
+          toolCalls: [
+            toolCall("lookup_command", { id: "omens/advance" }),
+            toolCall("run_command", { id: "omens/advance", args: {} }),
+            toolCall("run_command", { id: "omens/look", args: {} }),
+            toolCall("run_command", { id: "omens/wipe", args: {} }),
+          ],
+        },
+        "An hour slips by.",
+      ]);
+      const ran = await h.turn("We wait by the well.", { worker });
+      expect(ran.result.status).toBe("replied");
+      // The catalogue lists the Keeper's own command beside the others, in the usual line format.
+      const head = String(h.keeper.requests[0]?.messages[0]?.content);
+      expect(head).toContain("omens/advance");
+      expect(head).toContain("omens/look");
+      const tools = (h.keeper.requests[1]?.messages ?? []).filter((message) => message.role === "tool").map((message) => String(message.content));
+      expect(tools[0]).toContain("Who may run it: you only");
+      // `who` is still the member who spoke; the module knows the Keeper ran it, and its Keeper-only text reaches only the Keeper.
+      expect(tools[1]).toBe("omens/advance: keeper for Ada: hour 1, OMEN_DUE_AT_SIX");
+      expect(tools[2]).toBe("omens/look: keeper: the letter is in the well");
+      expect(tools[3]).toBe("omens/wipe refused: it is reserved for the room admin; you cannot run it.");
+      expect(narratives(ran.events, "system")).toEqual(["An hour passes (1)."]);
+      expect(h.wire()).not.toContain("OMEN_DUE_AT_SIX");
+      expect(h.wire()).not.toContain("the letter is in the well");
+
+      const admin = new Harness();
+      admin.keeper.script([{ toolCalls: [toolCall("run_command", { id: "omens/wipe", args: {} })] }, "No."]);
+      await admin.turn("Wipe it.", { worker, who: ROOT });
+      const refused = (admin.keeper.requests[1]?.messages ?? []).find((message) => message.role === "tool");
+      expect(refused).toMatchObject({ content: "omens/wipe refused: it is reserved for the room admin; you cannot run it.", isError: true });
+    });
   });
 });
 

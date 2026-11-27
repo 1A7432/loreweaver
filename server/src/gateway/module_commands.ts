@@ -67,6 +67,8 @@ export class RoomModuleCommands implements ModuleCommands {
     const entries: ModuleCommandEntry[] = [];
     for (const module of described.modules) {
       for (const command of module.commands) {
+        // A `keeper` command is the Keeper's machinery: no member's table lists it at all.
+        if (command.role === "keeper") continue;
         const entry: { -readonly [K in keyof ModuleCommandEntry]: ModuleCommandEntry[K] } = {
           id: `${module.id}/${command.name}`,
           title: command.title,
@@ -96,6 +98,7 @@ export class RoomModuleCommands implements ModuleCommands {
         command,
         args,
         who: context.who,
+        by: "member",
         seed: `${room}:${context.writer.epoch}:${context.turn}:${action}:command`,
         room: moduleRoom(context.services, room, context.turn, this.#rooms.moduleClock(room)),
       }),
@@ -107,6 +110,7 @@ export class RoomModuleCommands implements ModuleCommands {
           case "unknown":
             return refusal(locale, "unknown_command", { id });
           case "role":
+            // The same refusal for an admin command and for a `keeper` one: it says no more.
             return refusal(locale, "forbidden");
           case "invalid":
             return refusal(locale, "module_args");

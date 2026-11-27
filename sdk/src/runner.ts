@@ -23,6 +23,7 @@
 // a thread boundary. It runs no dice of its own: the host injects the engine's.
 import type {
   ClockReading,
+  CommandOrigin,
   CommandResult,
   CommandSpec,
   Effects,
@@ -159,7 +160,10 @@ export interface CommandRequest {
   readonly module: string;
   readonly command: string;
   readonly args: JsonObject;
+  /** The member the action belongs to: when the Keeper runs it, the member who spoke this turn. */
   readonly who: Who;
+  /** Who is running it: the Keeper, or the member in `who`. The role is checked against this. */
+  readonly by: CommandOrigin["by"];
   readonly seed: string;
   /** The room when the command is used: the same copy for `available` and `run`. */
   readonly room: RoomSnapshot;
@@ -219,12 +223,24 @@ export function isValidName(name: unknown): name is string {
   return typeof name === "string" && NAME_PATTERN.test(name) && !(name in Object.prototype);
 }
 
-/** Whether `who` may use a command declared with `role`. */
+/**
+ * Whether the member `who` may use a command declared with `role`. A `keeper` command is
+ * no member's, an admin's included.
+ */
 export function mayUse(role: unknown, who: Who): boolean {
   const member = who.member;
-  if (member === null) return false;
+  if (member === null || role === "keeper") return false;
   if (member.role === "admin") return true;
   return member.role === "player" && (role === undefined || role === "player");
+}
+
+/**
+ * Whether a command declared with `role` may be run by `by`. The Keeper may run `player`
+ * and `keeper` commands, whoever spoke; never an `admin` one. A member is `mayUse`.
+ */
+export function mayRun(role: unknown, by: CommandOrigin["by"], who: Who): boolean {
+  if (by === "keeper") return role === undefined || role === "player" || role === "keeper";
+  return by === "member" && mayUse(role, who);
 }
 
 type Context = "turnStart" | "toolUse" | "replyPhase" | "command" | "readOnly";
@@ -549,7 +565,7 @@ export class ModuleRunner {
   }
 
   /**
-   * One command, as `who`. The role and `available` are checked here, at the moment of
+   * One command, run by `by` on behalf of `who`. The role and `available` are checked here, at the moment of
    * use, inside the same exchange; a refused command changes nothing.
    */
   async command(request: CommandRequest): Promise<CommandValue> {
@@ -557,7 +573,7 @@ export class ModuleRunner {
     const instance = this.#modules.find((candidate) => candidate.id === request.module);
     const spec = instance ? lookup<CommandSpec>(instance.definition.commands, request.command) : undefined;
     if (!instance || !spec || typeof spec.run !== "function") return { ...out, outcome: { status: "refused", reason: "unknown" } };
-    if (!mayUse(spec.role, request.who)) return { ...out, outcome: { status: "refused", reason: "role" } };
+    if (!mayRun(spec.role, request.by, request.who)) return { ...out, outcome: { status: "refused", reason: "role" } };
     if (this.#skipBroken(instance, out)) return { ...out, outcome: { status: "failed", error: "module is broken" } };
     if (typeof spec.available === "function") {
       const verdict = await this.#read(instance, out, () => spec.available?.(structuredClone(request.who), structuredClone(request.room)));
@@ -566,7 +582,8 @@ export class ModuleRunner {
     }
     let result: Json = {};
     const done = await this.#mutate(instance, "command", request.seed, out, async (fx) => {
-      const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(request.who), fx, structuredClone(request.room));
+      const call: CommandOrigin = { by: request.by };
+      const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(request.who), fx, structuredClone(request.room), call);
       if (value === undefined) return;
       const json = toJson(value);
       // Inside the call: an answer JSON cannot carry fails the call like a throw would.
@@ -603,7 +620,8 @@ export class ModuleRunner {
         }
         for (const name of commandNames) {
           const spec = lookup<CommandSpec>(definition.commands, name);
-          if (!spec || typeof spec.available !== "function") continue;
+          // A viewer is a member, and a `keeper` command is no member's to be offered.
+          if (!spec || typeof spec.available !== "function" || spec.role === "keeper") continue;
           const read = await this.#read(instance, out, () => spec.available?.(structuredClone(who), structuredClone(request.room)));
           available.push(
             "value" in read ? { module: instance.id, command: name, verdict: read.value } : { module: instance.id, command: name, error: read.error },

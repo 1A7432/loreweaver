@@ -61,7 +61,7 @@ function reply(number: number, text = "the end") {
 }
 
 function command(name: string, args: Record<string, Json> = {}, who: Who = ada) {
-  return { module: "kitchen", command: name, args, who, seed: `room:1:command:${name}`, room: ROOM };
+  return { module: "kitchen", command: name, args, who, by: "member" as const, seed: `room:1:command:${name}`, room: ROOM };
 }
 
 test("load describes every module; a fresh module's state is kept at once", async () => {

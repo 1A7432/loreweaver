@@ -577,6 +577,7 @@ class KeeperTurn {
                 command: request.command,
                 args: request.args,
                 who: context.who,
+                by: "keeper",
                 seed: this.#seed(`command:${++this.#commands}`),
                 room: { turn: context.turn, variables: moduleVariablesJson(services, room), clock: clockReading(services, room, this.#moduleClock) },
               }),

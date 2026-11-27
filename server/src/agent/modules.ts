@@ -9,8 +9,8 @@
 // value's own. What is over a cap is DROPPED, never shortened into something else, and
 // every drop is reported in `problems` for the operator's log (never shown at the table).
 import { charCount } from "loreweaver-protocol/v3";
-import type { Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
-import { isValidName, mayUse } from "loreweaver/runner";
+import type { CommandOrigin, CommandRole, Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
+import { isValidName, mayRun, mayUse } from "loreweaver/runner";
 
 import type { RoomWorker } from "../infra/room_worker.ts";
 
@@ -99,7 +99,8 @@ export interface CommandInfo {
   /** JSON Schema object for the arguments. */
   readonly params: JsonObject;
   readonly text: readonly string[];
-  readonly role: "player" | "admin";
+  /** `keeper`: the Keeper's alone, never shown to a member; `admin`: never the Keeper's. */
+  readonly role: CommandRole;
   /** Whether availability depends on more than the role. */
   readonly checksAvailability: boolean;
 }
@@ -194,7 +195,7 @@ export interface ReplyPhaseOutcome extends Applied {
 export type CommandOutcome =
   | (Applied & {
       readonly status: "ok";
-      /** Answers the member who used the command, and nobody else. */
+      /** Answers whoever ran the command (the member, or the Keeper), and nobody else. */
       readonly result: { readonly text: string | null; readonly data: Json | null };
       readonly problems: readonly string[];
     })
@@ -216,7 +217,7 @@ export type Availability =
 export interface ViewerOutcome {
   /** The views this viewer may see, as computed for them; a failed view is absent. */
   readonly views: readonly { readonly module: string; readonly view: string; readonly data: Json }[];
-  /** Every command of every module, with whether this viewer may use it. */
+  /** Every command of every module but the Keeper's own (`keeper`), with whether this viewer may use it. */
   readonly commands: readonly { readonly module: string; readonly command: string; readonly availability: Availability }[];
 }
 
@@ -559,7 +560,7 @@ function validateCommands(module: string, raw: unknown, caps: ModuleCaps, proble
       !text.every((form) => shortText(form, caps.textFormChars) !== null)
     ) {
       drop(`its text forms are not up to ${caps.textForms} strings of 1 to ${caps.textFormChars} characters`);
-    } else if (role !== "player" && role !== "admin") drop("its role is neither player nor admin");
+    } else if (role !== "player" && role !== "admin" && role !== "keeper") drop("its role is not player, admin or keeper");
     else {
       commands.push({
         name,
@@ -722,6 +723,8 @@ export function validateRender(raw: unknown, viewers: readonly Who[], modules: r
         else views.push({ module: module.id, view: view.name, data });
       }
       for (const command of module.commands) {
+        // A viewer is a member; the Keeper's own commands are no part of what they are shown.
+        if (command.role === "keeper") continue;
         commands.push({ module: module.id, command: command.name, availability: availability(module.id, command, who, rawAvailable, find, caps, problems) });
       }
     }
@@ -900,7 +903,10 @@ export interface CommandCall {
   readonly command: string;
   /** Raw arguments: checked here to be a JSON object within `caps.argsBytes`. */
   readonly args: unknown;
+  /** The member the action belongs to: when the Keeper runs it, the member who spoke this turn. */
   readonly who: Who;
+  /** Who is running it: the Keeper (`run_command`) or the member in `who`. The role is checked against this. */
+  readonly by: CommandOrigin["by"];
   readonly seed: string;
   /** The room when the command is used. */
   readonly room: RoomSnapshot;
@@ -909,20 +915,22 @@ export interface CommandCall {
 /**
  * One command. Refused here, without a round trip, when the engine does not know the
  * command (including one left out at load), the role forbids it, or the arguments are
- * not a JSON object; the worker then checks `available` at the moment of use.
+ * not a JSON object; the worker then checks `available` at the moment of use. The role
+ * rule (`mayRun`): a member may run what their role allows, never a `keeper` command; the
+ * Keeper may run `player` and `keeper` commands whoever spoke, never an `admin` one.
  */
 export async function dispatchCommand(worker: RoomWorker | null, call: CommandCall, caps: ModuleCaps = DEFAULT_CAPS): Promise<CommandOutcome> {
   const described = await describeModules(worker, caps);
   const problems = described.problems;
   const command = described.modules.find((module) => module.id === call.module)?.commands.find((candidate) => candidate.name === call.command);
   if (worker === null || command === undefined) return { status: "refused", reason: "unknown", text: null, problems };
-  if (!mayUse(command.role, call.who)) return { status: "refused", reason: "role", text: null, problems };
+  if (!mayRun(command.role, call.by, call.who)) return { status: "refused", reason: "role", text: null, problems };
   if (!isRecord(call.args) || !isJson(call.args) || jsonBytes(call.args) > caps.argsBytes) {
     return { status: "refused", reason: "invalid", text: null, problems };
   }
   try {
     const room = boundedSnapshot(call.room, caps, problems);
-    const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, seed: call.seed, room });
+    const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, by: call.by, seed: call.seed, room });
     const outcome = validateCommand(raw, caps);
     return { ...outcome, problems: [...problems, ...outcome.problems] };
   } catch (error) {

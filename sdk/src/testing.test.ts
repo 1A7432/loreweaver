@@ -91,6 +91,48 @@ test("commands run as a given who, with the role and availability checks", async
   ]);
 });
 
+test("the host runs a command as a member or as the Keeper; a keeper command is the Keeper's alone", async () => {
+  let asked = 0;
+  const host = createTestHost(
+    defineModule({
+      id: "omens",
+      commands: {
+        advance: {
+          title: "Advance the clock",
+          role: "keeper",
+          available() {
+            asked += 1;
+            return true;
+          },
+          run: (_args, speaker, fx, _room, call) => {
+            fx.fact({ text: "an hour passes" });
+            return { text: `${call.by} for ${speaker.member?.name ?? "nobody"}` };
+          },
+        },
+        look: { title: "Look", run: (_args, _who, _fx, _room, call) => ({ text: call.by === "keeper" ? "the omen is in the well" : "you see the well" }) },
+        wipe: { title: "Wipe", role: "admin", run: () => ({ text: "wiped" }) },
+      },
+      views: { none: { schema: {}, for: () => null } },
+    }),
+    { who: ada },
+  );
+  for (const member of [ada, mo, eve]) {
+    const refused = await host.command("advance", {}, member);
+    expect(refused.outcome).toEqual({ status: "refused", reason: "role" });
+    expect(refused.facts).toEqual([]);
+    expect(await host.available("advance", member)).toBe("role");
+  }
+  await host.view("none", mo);
+  expect(asked).toBe(0);
+  const advanced = await host.keeperCommand("advance");
+  expect(advanced.outcome).toEqual({ status: "ok", result: { text: "keeper for Ada" } });
+  expect(advanced.facts.map((fact) => fact.text)).toEqual(["an hour passes"]);
+  expect((await host.keeperCommand("look", {}, eve)).outcome).toEqual({ status: "ok", result: { text: "the omen is in the well" } });
+  expect((await host.command("look")).outcome).toEqual({ status: "ok", result: { text: "you see the well" } });
+  expect((await host.keeperCommand("wipe", {}, mo)).outcome).toEqual({ status: "refused", reason: "role" });
+  expect(host.description.commands.map((command) => command.role)).toEqual(["keeper", "player", "admin"]);
+});
+
 test("views are per viewer; characters and clock read the state", async () => {
   const host = createTestHost(duel(), { snapshot: { hp: 3 } });
   expect(await host.view("hp", ada)).toBe(3);
