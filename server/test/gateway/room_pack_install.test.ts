@@ -123,7 +123,7 @@ test("the table hears one line, by name; the trust card is the caller's alone, i
   const done = await send(root, "i", `.pack install ${archiveFile()}`);
   const said = answerText(done);
   expect(said).toContain("已在服务器上安装 港口（harbor 1.0.0）。");
-  expect(said).toContain("它会在这台服务器上运行代码，没有沙箱：模块 tally。");
+  expect(said).toContain("它会在这台服务器上运行代码，没有沙箱：模组 tally。");
   await b.settled();
   const lines = events(ada.sent).filter((event) => event.kind === "narrative");
   expect(lines.map((event) => event.data)).toEqual([{ speaker: "system", text: "Pack installed and enabled: Harbor.", format: "plain" }]);

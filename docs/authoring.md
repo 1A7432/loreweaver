@@ -1,946 +1,571 @@
 *English · [中文](authoring.zh.md)*
 
-# Authoring a Loreweaver module
+# Making a Loreweaver pack
 
-*From an empty directory to an installable `.lwpack`, with a real module as the worked example.*
+*From an empty directory to a pack that is enabled in a room and doing something, then
+every kind of content a pack can carry.*
 
-This is the hands-on tutorial. The specification — every field, every limit, every trust rule —
-is [plugins.md](plugins.md); when the two disagree, that one is right. What you get here is the
-order to do things in, and real files rather than invented ones.
+A **pack** is how content reaches a Loreweaver server: one `.lwpack` file (a ZIP archive
+with a `pack.yaml` manifest) that can carry modules (code), cards and their lore, a
+rule-pack patch, skills for the Keeper, panels, and a presentation kit with pictures and
+sounds. The server validates the whole pack before it writes a single file.
 
-**The worked example** is 《汐浦送灯》 (*Xipu: The Lantern Sending*) — a real module, a 1925
-coastal-town mystery, played twice end to end by live models. Its own files are not published here
-(publishing a solved mystery spoils it), so treat the paths below as the shape of a pack rather than
-something to clone; every snippet is quoted in full, so this page stands on its own.
+This page is the order to do things in. The formats themselves are specified in
+[LWF](lwf/SPEC.md): [pack.md](lwf/formats/pack.md) (the manifest, what is refused, the
+trust card), [panels.md](lwf/formats/panels.md), [cards.md](lwf/formats/cards.md),
+[rulepacks.md](lwf/formats/rulepacks.md) and
+[skills-hooks.md](lwf/formats/skills-hooks.md) §1. When this page and a format document
+disagree, the format document is right. The contract around all of it — what may be
+extended, and the trust model — is [plugins.md](plugins.md). Cards have their own guide:
+[cards.md](cards.md).
+
+**The `loreweaver` command.** Below, `loreweaver` is the server's command: the compiled
+binary, or `bun server/src/cli/main.ts` from a checkout of this repository. Commands that
+touch installed packs use the server's data directory (`TRPG_DATA_DIR`, default `./data`),
+so run them with the same setting as the server. Every command prints one JSON object.
+
+**Words.** The *Keeper* is the AI game master. The *room admin* is a person holding an
+admin key for a room. The *operator* is whoever runs the server process.
 
 ---
 
-## 0. The shape of a module
+## 1. A first pack
 
-One directory. One manifest. Everything else is optional.
+A lantern the table can light: one module with one command. Two files.
 
 ```
-xipu-songdeng/
-  pack.yaml                     the manifest — the only required file
-  cards/
-    shipu.lorecard.json         the module itself: lore, cast, trackers, hooks
-    chaomai-st.json             a SillyTavern card, imported as-is
-  rulepacks/
-    coc7-xipu.yaml              a PATCH on CoC 7e: one skill, one night ladder, one madness table
-    chaozhan.yaml               a whole standalone mini-system, pure data
-  lorebooks/
-    yuyan.json                  a standalone lorebook
-  skills/
-    yingchao-zhuchi/
-      SKILL.md                  how the Keeper should RUN this module (procedure, not story)
-      hooks.js                  sandboxed turn-lifecycle behaviour
-  ui/
-    panels.yaml                 the table's instruments
-    presentation.yaml           the Stage Director's creative brief
-    dengzhen/                   a tier-2 panel: a real HTML/JS page
-  assets/
-    *.png *.mp3                 handouts, portraits, music
+lantern/
+├── pack.yaml
+└── src/lantern.ts
 ```
 
-A minimal manifest is six fields:
+`pack.yaml`:
 
 ```yaml
-id: harbour-bell            # lowercase slug; names the packs/<id>@<version> install dir
-version: 0.1.0              # semver
-name:
-  en: The Harbour Bell
-  zh: 港钟
-description:
-  en: A one-shot for two to four investigators.
-  zh: 一个 2-4 人的单本。
-authors: [ada]
+manifest_version: 3
+id: lantern
+version: 0.1.0
+name: { en: The Lantern, zh: 提灯 }
+description: A lantern the table can light.
 license: CC-BY-4.0
+modules:
+  - { id: lantern, entry: src/lantern.ts }
+```
+
+`src/lantern.ts`:
+
+```ts
+import { defineModule } from "loreweaver/module";
+
+let lit = false;
+
+export default defineModule({
+  id: "lantern",
+  create() { lit = false; },
+  load(snapshot) { lit = (snapshot as { lit: boolean }).lit; },
+  save() { return { lit }; },
+
+  on: {
+    turnStart(_event, fx) {
+      fx.inject(lit ? "The lantern is lit." : "The lantern is dark.");
+    },
+  },
+
+  commands: {
+    light: {
+      title: "Light the lantern",
+      run(_args, who, fx) {
+        lit = true;
+        fx.fact({ text: `${who.member?.name ?? "Someone"} lights the lantern.` });
+        return { text: "The lantern is lit." };
+      },
+    },
+  },
+
+  views: {
+    state: { title: "Lantern", schema: { type: "object" }, for: () => ({ lit }) },
+  },
+});
+```
+
+The module tells the Keeper every turn whether the lantern is lit (`fx.inject`), gives
+the players a command (`lantern/light`), and publishes a view (`lantern/state`) that a
+panel can read later. Its state survives a server restart through `save` and `load`.
+
+**Build it:**
+
+```sh
+loreweaver pack lantern
+```
+
+This writes `lantern-0.1.0.lwpack` in the current directory (`--out <file>` to choose)
+and prints the build's result: `{"ok":true,"out":…,"sha256":…,"trust":{…}}`. The builder
+bundles `src/lantern.ts` and everything it imports into one file, `modules/lantern.js`;
+`src/` itself is not in the archive. The same source tree always builds the same bytes.
+
+**Install it.** Either way runs the same checks.
+
+- *From chat*, as the room's admin — the pack is installed on the running server and
+  enabled in your room at once. The path is a path on the **server's** disk (an
+  `https://` URL or `gh:owner/repo[@tag]` works too):
+
+  ```
+  .pack install /path/to/lantern-0.1.0.lwpack
+  ```
+
+  The answer is the trust card in words:
+
+  ```
+  Installed The Lantern (lantern 0.1.0) on this server.
+  It is enabled in this room.
+  It runs code on this server, with no sandbox: modules lantern.
+  ```
+
+  The table hears one line: *Pack installed and enabled: The Lantern.*
+
+- *From the shell*, as the operator. Without `--yes` the command only prints the trust
+  card (as JSON) and writes nothing:
+
+  ```sh
+  loreweaver install lantern-0.1.0.lwpack          # the trust card, nothing written
+  loreweaver install lantern-0.1.0.lwpack --yes    # installs
+  loreweaver packs                                 # lists the installed packs
+  ```
+
+  Installing from the shell enables the pack nowhere, and a server that is running sees
+  it only when it next starts. Then a room's admin enables it: `.pack enable lantern`.
+
+**Use it.** Any player types:
+
+```
+.lantern/light
+```
+
+The player gets the command's answer (*The lantern is lit.*), the table sees the fact
+(*Ada lights the lantern.*), and from the next turn on the Keeper's prompt says the
+lantern is lit. A module command's only text form is its full id, followed by a JSON
+object when it takes arguments: `.lantern/light {"hours": 2}`. Clients also list module
+commands in the `commands` view, so `.help` shows it.
+
+## 2. Changing a pack and installing it again
+
+3.0 has no live-reload room and no separate lint command: you rebuild and reinstall. The
+builder runs every check a server runs, so a pack that builds also installs (unless the
+server is older than the pack's `engine` minimum).
+
+The same version cannot be installed twice (`already_installed`). Two ways round it:
+
+- **Raise the version** (`0.1.1`, or a pre-release such as `0.1.0-dev.2`), build, and
+  `.pack install` it again from chat. The new version takes the old one's place on the
+  running server, and every room that has the pack enabled reloads its worker and plays
+  the new version from then on. Its modules start from their saved state (`load`).
+- **From the shell:** `loreweaver uninstall lantern`, then `loreweaver install … --yes`,
+  then restart the server. Uninstalling is the operator's, from the shell only.
+
+## 3. Testing a module
+
+A module is tested with the SDK's test host under `bun test`: the same runner a room's
+worker uses, without a server. The SDK is the `sdk/` directory of this repository; it is
+not published to npm yet, so a pack's source tree depends on a checkout:
+
+```json
+{ "private": true, "devDependencies": { "loreweaver": "file:../loreweaver/sdk" } }
+```
+
+(the path to your checkout's `sdk/`). Then `bun install`, and a test beside the module:
+
+```ts
+import { expect, test } from "bun:test";
+import { createTestHost, who } from "loreweaver/testing";
+
+import lantern from "./lantern.ts";
+
+test("lighting the lantern tells the table", async () => {
+  const host = createTestHost(lantern);
+  const run = await host.command("light", {}, who("Ada"));
+  expect(run.facts.map((fact) => fact.text)).toEqual(["Ada lights the lantern."]);
+  expect(await host.view("state", who("Ada"))).toEqual({ lit: true });
+});
+```
+
+`package.json`, `node_modules/` and test files can live in the source tree: the builder
+reads only the files the manifest names. The test host is documented in
+[sdk/README.md](../sdk/README.md#testing-a-module).
+
+## 4. Every kind of content
+
+The lantern grows into a small pack with every content kind. Its finished tree:
+
+```
+lantern/
+├── pack.yaml
+├── src/lantern.ts
+├── cards/old-quarter.lorecard.json    a world card: lore, a secret, a variable
+├── rules/lantern-rules.yaml           a rule-pack patch on CoC 7e
+├── skills/lamplighter/SKILL.md        a skill for the Keeper
+├── ui/panels.yaml                     a panel
+├── presentation.yaml                  the presentation kit
+├── art/lantern.png
+└── sound/rain.ogg
+```
+
+and its manifest:
+
+```yaml
+manifest_version: 3
+id: lantern
+version: 0.2.0
+name: { en: The Lantern, zh: 提灯 }
+description: { en: A dark quarter and the lantern that lights it., zh: 一片黑街，和照亮它的一盏灯。 }
+authors: [You]
+license: CC-BY-4.0
+engine: { protocol: "3.0" }
+modules:
+  - { id: lantern, entry: src/lantern.ts }
 contents:
-  cards: [cards/harbour-bell.lorecard.json]
+  cards:
+    - { path: cards/old-quarter.lorecard.json, kind: world, notes: { en: Import as the world., zh: 作为世界导入。 } }
+  rulepacks: [rules/lantern-rules.yaml]
+  skills: [skills/lamplighter]
+  panels: [ui/panels.yaml]
+  presentation: [presentation.yaml]
 ```
 
-```console
-$ uv run python -m app --pack harbour-bell/
-Packed harbour-bell@0.1.0 -> …/harbour-bell/harbour-bell-0.1.0.lwpack
-   sha256: caeb3bc8e949a887b1c9b64dcf8565413c8120ab7ef1a07658f585c93410cd98
-📦 The Harbour Bell — harbour-bell@0.1.0
-   A one-shot for two to four investigators.
-   by ada · license: CC-BY-4.0
-   contains: 0 skill(s), 0 rulepack(s), 1 card(s), 0 lorebook(s), 0 UI panel(s), 0 asset(s) (0.0 MB) · hooks code: no · EJS templates: no
-Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
-```
+The picture and the sound do not need an `assets` entry: everything the kit and the
+panels name travels with the pack. List a file under `assets` only to give it a title, a
+licence or tags, or to ship a file nothing else names.
 
-That last line is worth pausing on, and section 1 explains it. Note also what you did *not* write:
-no file list, no hashes, no trust declaration. Those are computed at build time, and install
-recomputes them and refuses a mismatch — so a hand-assembled archive cannot understate what it
-ships.
+### 4.1 Cards and lore
 
----
+Lore comes into a room in cards: a SillyTavern card (`.png` or `.json`) or Loreweaver's
+own `*.lorecard.json`. There is no separate lorebook file in 3.0; a lorebook travels as
+a card's `character_book`. Each card entry says what the card is, `world` or
+`character`, and the builder checks that against the card itself
+(`card_kind_mismatch`): a card with any world machinery — variable declarations,
+templates, secret entries, typed variables — is a world card.
 
-## 1. The module document: `*.lorecard.json`
-
-A Loreweaver-native card is a flat JSON object. It is the module's own format, so it keeps the
-things a SillyTavern card has no safe place for: keeper-only lore, typed trackers, a claimable cast,
-per-entry conditions, stable ids, hook scripts.
+`cards/old-quarter.lorecard.json`:
 
 ```json
 {
   "format": "loreweaver.card",
   "format_version": 1,
-  "name": "汐浦送灯",
-  "description": "一九二五年，浙东沿海渔镇汐浦。十二年一度的迎潮节为期三日……",
-  "scenario": "调查员一行乘晚船抵达汐浦，入住望潮客栈，正逢迎潮节前夜。",
-  "tags": ["调查", "民俗恐怖", "coc7", "三日祭"],
-  "opening":  "…",
-  "alternate_openings": ["…"],
-  "author_notes": "…",
-  "worldbook": [ … ],
-  "variables":  [ … ],
-  "pregens":    [ … ],
-  "hooks":      [ "on('variables_changed', …)" ]
+  "name": "The Old Quarter",
+  "description": "A maze of streets where the gas lamps went out a year ago.",
+  "opening": "Fog rolls up from the river. Somewhere ahead, a lantern swings.",
+  "worldbook": [
+    { "title": "The lamplighters", "keys": ["lamplighter", "lamp"], "content": "The lamplighters' guild still meets on Tallow Street." },
+    { "title": "Who put out the lamps", "keys": ["lamps went out"], "secret": true, "content": "The guild master cut the gas to hide what walks at night." }
+  ],
+  "variables": [
+    { "id": "dread", "kind": "number", "labels": { "en": "Dread", "zh": "恐惧" }, "minimum": 0, "maximum": 10, "default": 0 }
+  ]
 }
 ```
 
-### Top level, field by field
+A card in a pack is not imported by enabling the pack. The room's admin imports it:
 
-| Field | Required | Meaning |
-|---|---|---|
-| `format` | yes | must be the literal `"loreweaver.card"` |
-| `format_version` | yes | `1`. Older documents upgrade through registered migrations; anything newer than the running build is refused cleanly rather than half-read |
-| `name` | yes in practice | the module's name |
-| `description` | | the pitch — what this is |
-| `personality` | | for a character card; a module usually leaves it empty |
-| `scenario` | | the situation at turn zero |
-| `tags` | | free-form strings |
-| `opening` | | the module's opening text |
-| `alternate_openings` | | other ways in |
-| `dialogue_examples` | | voice samples, for a character card |
-| `author_notes` | | notes to the Keeper that are not lore |
-| `worldbook` | | the lore entries — see below |
-| `variables` | | typed trackers — see below |
-| `pregens` | | the claimable cast — see below |
-| `hooks` | | JavaScript sources, or `{code: "…"}` objects |
-
-Caps that matter: 200 worldbook entries, 16,000 characters per entry, 64 variables, 8 pregens. These are
-the same limits a room applies on import, and they behave the same way: too many entries or variables is
-fatal at parse/pack time, while an entry over 16,000 characters is skipped and reported, as the room skips
-it. *Entry-level* junk is treated alike — a malformed lore row or an unusable variable spec is
-skipped and reported as a warning, so one bad row never costs you the whole import.
-
-### `worldbook[]` — what the author wrote
-
-```json
-{
-  "id": "xipu-town",
-  "title": "汐浦镇概览",
-  "content": "汐浦倚山面海，一条石板长街自码头通到山脚灯官祠。要处五所：望潮客栈…",
-  "keys": ["汐浦", "镇", "街", "码头", "地图"],
-  "category": "lore",
-  "secret": false,
-  "constant": true,
-  "priority": 10,
-  "enabled": true
-}
+```
+.import world lantern cards/old-quarter.lorecard.json
 ```
 
-| Field | Meaning |
-|---|---|
-| `id` | **stable, author-owned**, and worth setting. With the pack id it forms the cross-pack handle `<pack-id>#<entry-id>` — how a serialized module's second installment points at the shared world's canonical entries instead of copying them. Keep it stable across versions |
-| `title` | shown to the Keeper; defaults to `Untitled Lore` |
-| `content` | the entry text. Required — an empty one is skipped with a warning |
-| `keys` / `secondary_keys` | activation keywords. Secondary keys gate the entry: `selective_logic` picks `and_any` (default) / `and_all` / `not_any` / `not_all` |
-| `secret` | **keeper-only.** Honored only on an admin world import; a player import drops it outright, so marking an entry secret can never widen anyone's visibility |
-| `constant` | always-on. Honored for the admin's `world` import (module rules and timelines ARE constant entries) and forced off for any player upload. The real bound on always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a keeper turn — not the flag: an entry larger than the budget never injects at all |
-| `condition` | an expression; rides in as an `@@if` decorator. Longer than 500 characters and it will never fire, and you get a warning saying so |
-| `priority`, `enabled`, `probability` (0–100, rolled by real code), `case_sensitive`, `match_whole_words`, `scan_depth`, `position` (`before`/`after`), `sticky`, `cooldown`, `delay` | SillyTavern World Info trigger semantics, imported and honored |
+*Imported the world The Old Quarter: 2 lore entries (1 secret), 0 variable declarations,
+1 openings.* The secret entry is the Keeper's; players never see it (`.lore list` shows
+them one entry). A player can take a `character` card from an enabled pack as their own
+character: `.import character <pack> <card path>`. What each import brings is in
+[cards.md](cards.md).
 
-**Write your secrets as `secret: true` entries, not as prose the Keeper is asked to keep quiet
-about.** That flag is the thing the projection layer enforces.
+### 4.2 A rule-pack patch
 
-### `variables[]` — trackers the engine owns
-
-```json
-{"id": "祭典日",   "kind": "number", "labels": {"en": "Festival Day", "zh": "祭典日"},
- "default": 1, "minimum": 1, "maximum": 3, "visibility": "player"},
-{"id": "仪式警觉", "kind": "number", "labels": {"en": "Rite Alert", "zh": "仪式警觉"},
- "default": 0, "minimum": 0, "maximum": 5, "visibility": "keeper"},
-{"id": "难度",     "kind": "enum",   "labels": {"en": "Difficulty", "zh": "难度"},
- "options": ["轻松", "标准", "残酷"], "setup": true}
-```
-
-`kind` is `number` / `bool` / `text` / `enum`. `visibility: player` puts it on the party panel;
-`visibility: keeper` means it **never reaches a player transport at all** — filtered inside the
-engine, not hidden by the client. Bounds are enforced on every write, including writes the model
-asks for. Ids can be CJK.
-
-`setup: true` marks a **"set before play"** variable: one the table must pick once before the
-module runs, because your default is not their choice. It changes nothing about the variable
-itself — it only makes the choice visible until somebody makes it: named in the world-import
-receipt, listed by `.var setup`, leading `.var list`, and carried to the Keeper as one line of
-state every turn until it is made. Writing the variable — `.var set`, or the Keeper's own
-`set_variable` — closes it; the default never does. Pair it with `enum` + `options` and the table
-sees the choices you meant.
-
-This is the difference between a tracker and a note: a tracker is state the engine validates,
-keeps in range, stores and filters. Declare the things your ending depends on.
-
-### `pregens[]` — a cast players can claim
-
-```json
-{"name": "顾晚棠", "concept": "沪上小报记者，为'渔镇民俗'专栏而来",
- "notes": "侦查/图书馆见长,嘴快,潮汐学5"}
-```
-
-Optionally `skills: {"侦查": 70}` to override the system defaults. Sheets are built downstream from
-the target system's defaults plus those overrides — deterministically, no model involved. Players
-run `.pc claim 顾晚棠`; claims are exclusive and a release restores the pristine sheet.
-
-### `hooks[]` — behaviour, not text
-
-```js
-on('variables_changed', (e) => { emitPanel('xipu-songdeng/dengzhen', {writes: e.writes}); });
-```
-
-Sandboxed JavaScript on the turn lifecycle. The full API is in [hooks.md](hooks.md). One trap is
-worth repeating here because a live playtest lost a whole session's meter to it:
-
-```js
-// WRONG — the interpreter is rebuilt every turn, so this reads 1 forever, in silence.
-on('turn_start', () => { globalThis.__turns = (globalThis.__turns || 0) + 1; … })
-
-// RIGHT — durable state belongs to the engine; the hook asks for it.
-on('turn_start', () => {
-  incvar('潮感', 1);
-  emitUI([{kind: 'meter', label: '潮感', value: Number(getvar('潮感')) || 0, min: 0, max: 40}]);
-});
-```
-
-The engine keeps two kinds of durable state, and you choose by who reads it. A tracker the
-table or the Keeper should see is a **variable** (above — declare it in `variables[]`). Machinery
-only your hooks read — a ledger, a queue, a state machine's internals — goes in the hooks'
-private store instead, so it never costs a prompt line, a panel or a variable slot:
-
-```js
-on('dice_rolled', (e) => {
-  const tally = getstate('tide_rolls') ?? { count: 0 };   // a fresh copy, or undefined
-  tally.count += e.rolls.length;
-  setstate('tide_rolls', tally);                          // persisted, seen by hooks only
-});
-```
-
-`getstate`/`setstate` take any JSON value under a short key (`setstate(key, null)` deletes it);
-the caps and the exact semantics are in [hooks.md](hooks.md#private-state--getstate--setstate).
-
-**When the Keeper needs the hook's answer this turn, write a module action.** Three tools look
-alike and are not:
-
-- **`dice_rolled` (and the other events)** — reacts *after* the narration is final. Right for
-  bookkeeping the Keeper does not narrate from: a tally, a panel refresh, an omen for next turn.
-  Wrong for a number the Keeper is about to say out loud — it will have said its own guess.
-- **A module action (`defineAction`)** — the Keeper *calls* it mid-turn as `module_action`,
-  the engine rolls the declared dice, your handler books the result against room state and
-  returns the line the Keeper narrates from. Right for module machinery: a march ledger, a
-  bargaining table, a ritual's progress.
-- **A player action** (`defineAction` with `player: true`) — the same mechanic, but a
-  *player* runs it with `.act` and the table sees the result at once, no Keeper round:
-  foraging, crafting, moving a token, any MUD-paced micro-action of a simulation. Its result
-  is player-visible, and the Keeper reads it at the start of its next turn.
-- **A rulepack script flow** (`subsystems:` with `script:`) — a *rule-system* mechanic: no
-  arguments, reads the active character's sheet, returns a closed effect vocabulary applied to
-  that sheet. Right for a system's own check (a sanity-style loss, an improvement roll); it
-  cannot read or write the module's state.
-
-```js
-defineAction('book_hour', {description: 'Book one march hour; returns the booked line',
-                           params: '{pace: "fast"|"slow"}', rolls: {march: '8d10'}}, (args, e) => {
-  const crossed = (getstate('crossed') ?? 0) + e.rolls.march.total;
-  setstate('crossed', crossed);
-  return `Booked: ${crossed} across.`;
-});
-```
-
-The full contract is in [hooks.md](hooks.md#module-actions--defineaction).
-
-### Why your module is a "world card"
-
-Look again at the build output: `Contains 1 WORLD card(s)`. You never declared that. The build
-*detected* it, because the card ships hooks, typed variables, secret lore or EJS — anything that
-reprograms a shared table.
-
-The consequence is the **card split (拆卡)**, and it is the one design rule that will surprise you
-if you come from SillyTavern:
-
-- **`.import <file> pc|companion`** — anyone may do this. It takes the character half only. World
-  machinery is *removed by the importer itself*, and the reply lists what went:
-
-  ```console
-  Imported "潮脉盘" as your player character (coc7-xipu). Key stats: STR 50, CON 45, …
-  World machinery was left out of this character import: 0 hook script(s), 1 variable declaration(s),
-  0 template block(s), 0 keeper-only entr(y/ies). Module content is imported by the room admin: `.import <card file> world`.
-  ```
-
-- **`.import <file> world`** — admin only, and deliberately *not* a model tool. This is how a module
-  actually lands:
-
-  ```console
-  Imported "汐浦送灯" as world content: 16 lore entries (keeper trust), 0 variable declaration(s) seeded,
-  1 hook script(s) installed.
-  Typed variables: 3 tracker(s) defined from the native bundle.
-  Cast registered (3): 顾晚棠, 白榆生, 陈九鲤 — players claim with `.pc claim <name>`.
-  ```
-
-Write for that boundary. Anything that changes how the whole table works belongs on the world side,
-and the room admin is the one who admits it.
-
----
-
-## 2. House rules: patch a system, don't fork it
-
-Your module needs one extra skill and a nastier fumble band after dark. That is not a new rule
-system; it is a patch. `extends:` deep-merges your file over the parent — child wins, mappings merge
-recursively, an explicit `null` deletes an inherited key, and lists replace wholesale.
-
-`rulepacks/coc7-xipu.yaml`, in full:
+A pack that needs house rules patches a built-in rule system instead of rewriting it.
+`rules/lantern-rules.yaml`:
 
 ```yaml
 extends: coc7
-names: [coc7-xipu, 汐浦规则]      # what resolves to this system
-set_keys: [xipu]                  # what `.xipu` etc. select
-defaults:
-  潮汐学: 5                        # one new skill, starting at 5
-alias:
-  潮汐学: [tidology, tide lore, 观潮, 潮学]
-display:
-  en:
-    潮汐学: Tidology              # presentation only — never affects resolution
-resolution:
-  variants:
-    xipu_night:                   # the festival-night house ladder
-      ranks:
-        - {id: crit,    when: "roll == 1", success: true, critical: true, tier: 5}
-        - {id: fumble,  when: "roll == 100", fumble: true, tier: 0}
-        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
-        - {id: hard,    when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
-        - {id: regular, when: "roll <= target", success: true, tier: 2}
-        - {id: fumble,  when: "roll >= 93 && target < 50", fumble: true, tier: 0}
-        - {id: fumble,  when: "roll >= 98", fumble: true, tier: 0}
-        - {id: fail,    tier: 1}
-subsystems:
-  random_madness:
-    tables:
-      xipu:
-        display: {en: Xipu festival madness, zh: 汐浦狂乱}
-        aliases: [汐浦, xipu]
-        entries:
-          - 潮声入耳：调查员耳中潮声不退，旁人说话都像隔着一层水。
-          - 灯影追随：调查员坚信有一盏无人提的灯在身后跟着自己。
-          # …
-commands:
-  xipu: {action: make_char}                        # `.xipu` creates a character in THIS system
-  chaokuang: {tool: random_madness, args: {table: xipu}}   # `.chaokuang` draws from the table above
+names: [Lantern Rules]
+defaults: { Lamplore: 10 }
 ```
 
-Three things this buys you, all verified from a terminal:
+The file's name is the rule system's id (`lantern-rules`). `extends:` deep-merges the
+patch over the base (`coc7`, `dnd5e` and `wod` are built in, or another rule pack of the
+same pack): mappings merge, lists and scalars replace, `null` deletes. A rule system is
+not enabled per pack: once the pack is installed, a room chooses it with
+`.rule system lantern-rules`. A rule pack that uses the 2.x rules-script lane
+(`resolution.script`, a `script` subsystem) is refused: that lane is not in 3.0. The
+format is [rulepacks.md](lwf/formats/rulepacks.md), §14 for `extends:`.
 
-```console
-$ .xipu
-Created coc7-xipu character: Adventurer
+### 4.3 A skill
 
-$ .rule
-Current house-rule ladder: 0
-Available: dg, rule1, rule2, rule3, rule4, rule5, xipu_night
-
-$ .rule xipu_night
-House-rule ladder set to xipu_night
-
-$ .ra 潮汐学
-Check Tidology: target 5 (effective 5), roll 13 -> Failure
-```
-
-Note the last line: the skill is Chinese in the data, English on the screen, because `display` is
-presentation and the canonical key is identity. A pack never has to choose a language.
-
-> **A namespace nuance worth knowing.** Inside a `difficulties.*.target` expression, `target` is the
-> RAW value; inside a rank's `when:` expression, `target` is the difficulty-adjusted one — which is
-> why the ladders above compare against both `target` and `raw_target`.
-
-**A patch needs its own id.** Discovery never lets a user file shadow a built-in, so you cannot
-"redefine coc7"; you define `coc7-xipu` and your module plays that.
-
----
-
-## 3. A whole system, as data
-
-Sometimes the mechanic is genuinely new. 潮占 — the lantern-diviner's tide oracle — is a
-success-counting d10 pool with nothing d100 about it, and it is one file:
-
-```yaml
-names: [chaozhan, 潮占]
-set_keys: [chaozhan]
-defaults: {}
-resolution:
-  version: 1
-  roll: "{deng}d10>=7"          # a pool: roll `deng` d10s, count 7+
-  target: none
-  compare: ">="
-  params:
-    deng: {min: 1, max: 9, default: 3}
-  ranks:
-    - {id: nichao,   when: "successes == 0 && ones >= 2", fumble: true, tier: 0}
-    - {id: gongming, when: "successes >= 3 && ones == 0", success: true, critical: true, tier: 3}
-    - {id: yingchao, when: "successes >= 1", success: true, tier: 2}
-    - {id: mochao,   tier: 1}
-  margin: successes
-  variants:
-    miji:                        # the third-night inner rite, graded harder
-      ranks:
-        - {id: nichao,   when: "ones >= 1 && ones >= successes", fumble: true, tier: 0}
-        - {id: gongming, when: "successes >= 4 && ones == 0", success: true, critical: true, tier: 3}
-        - {id: yingchao, when: "successes >= 2", success: true, tier: 2}
-        - {id: mochao,   tier: 1}
-labels:
-  en: {nichao: [Adverse Tide], gongming: [Resonance],
-       yingchao: {display: Favorable Tide, markers: []},
-       mochao:   {display: Silent Tide,    markers: []}}
-  zh: {nichao: [逆潮], gongming: [共鸣],
-       yingchao: {display: 应潮, markers: []},
-       mochao:   {display: 默潮, markers: []}}
-expertise:
-  en: "# Tide Divination (潮占)\nThe lantern-diviner reads the festival tide…"
-  zh: "# 潮占\n灯官问潮：点起一至九盏灯掷占，数应答之水。"
-```
-
-**The DSL in one paragraph.** `roll` is a dice expression; the engine rolls it, seeded and logged.
-`ranks` is an ordered ladder of pure conditions — first match wins, and the last entry with no
-`when:` is the fallback. Available names are a closed set: `roll` (the total), `dice` (the natural
-dice, zero-based: `dice[0]` / `dice.0`, `dice[1]`, …), `target` (difficulty-adjusted), `raw_target` (before
-difficulty), `modifier`, and `successes` / `ones` for pools. The flags `success` / `critical` / `fumble` are
-declared *by you*: the engine and the AI only ever read those flags and the `tier` ordinal, never
-your rank id, which is why a system can invent its own names for things without breaking anything
-downstream. `expertise` is what the Keeper is told about how to run it.
-
-**Pool params** (`deng` here) are supplied by the Keeper's check tool, which is how ritual scenes
-call for a five-lantern casting. The player-facing dot-command reads its argument as a skill
-name, so a pool system's parameters are the Keeper's to set, not a player's.
-
-**Typos fail at build, not at the table.** Referenced names are extracted statically, so a
-short-circuiting `&&` cannot hide a misspelling until someone's first check three sessions in:
-
-```console
-$ uv run python -m app --pack harbour-bell/
-Pack build failed: rulepack bell: rulepack 'bell': resolution.ranks[0].when references unknown name(s) ['rol']
-```
-
-**Deleting the file deletes the system** — that is the acceptance test for "rules are data", and it
-holds for the bundled packs too:
-
-```
-with coc7 : ['coc7', 'dnd5e', 'wod']
-deleted   : ['dnd5e', 'wod']
-load coc7 : ValueError unknown rulepack: coc7
-```
-
-If the DSL genuinely cannot express your system, `resolution: {script: resolver.js}` drops to a
-QuickJS sandbox: the engine pre-rolls the declared dice and hands values in, your script returns a
-verdict, the engine checks it and holds it in range. Randomness and state never leave the engine, and the
-trust card discloses that your pack ships a script.
-
----
-
-## 4. Panels: the table's instruments
-
-`ui/panels.yaml`, declared as `contents.panels`. Up to 16 panels per pack. Here is the whole
-festival module's panel file, and it covers every mechanism you need:
-
-```yaml
-panels:
-  - id: jieqing-richeng
-    title: {en: Festival Schedule, zh: 节庆日程}
-    slot: sidebar              # sidebar | tray | modal
-    audience: all              # all | player | keeper — resolved SERVER-side
-    blocks:
-      - {kind: stat,  label: {en: Festival Day, zh: 祭典日}, value: {$var: 祭典日}}
-      - {kind: meter, label: {en: Tokens, zh: 信物}, value: {$var: 信物}, min: 0, max: 3}
-      - {kind: divider}
-      - {kind: text, text: {en: "Day 1 greet · Day 2 air · Day 3 send",
-                            zh: "初一迎灯 · 初二曝灯 · 初三送灯"}}
-      - {kind: text, style: warning, visible_when: "祭典日 >= 3",
-         text: {en: "Tonight the lanterns go out on the tide. What you have counted is what you have.",
-                zh: "今夜送灯。数到的就是数到的。"}}
-
-  - id: shouzhong-wu
-    title: {en: In Hand, zh: 手边物}
-    slot: tray
-    audience: all
-    blocks:
-      - {kind: image, src: ui/dengzhen/canlye.png,
-         caption: {en: "Lantern manual, torn page", zh: 灯谱残页},
-         alt: {en: "A brush-drawn array of nine lanterns, one of them unlit"}}
-      - {kind: text, style: quote, text: {en: "Count them yourself.", zh: 自己数一数。}}
-
-  - id: dengzhen
-    title: {en: Lantern Array, zh: 灯阵图}
-    slot: modal
-    audience: all
-    entry: ui/dengzhen/index.html                                  # tier 2
-    assets: [ui/dengzhen/index.html, ui/dengzhen/app.js, ui/dengzhen/canlye.png]
-    fallback:                                                       # mandatory
-      - {kind: text, text: {en: "The lantern array chart is best viewed in a rich client;
-                                the keeper will describe it.", zh: "灯阵图请在富客户端查看；终端下由守秘人描述。"}}
-      - {kind: badge, label: {en: "Nine lanterns", zh: "九灯之阵"}, tone: info}
-```
-
-**Block kinds:** `meter`, `stat`, `badge`, `text`, `divider`, `choices`, `image`, plus the
-performance templates `letter`, `clipping`, `map_pin`, `title_card`. All declarative. A rich client
-styles a `letter` as stationery; a terminal client prints the same fields as lines. You never write
-markup, and you never have to write two versions.
-
-**Live values:** any scalar field may be `{$var: <id>}` against the viewer's own `state.variables`.
-When in doubt it shows nothing: if the variable is absent or hidden *for that viewer*, the **whole
-block** is omitted when the field is required; on an optional field (a caption, say) only that field
-is dropped and the block stays. A panel can never widen visibility.
-
-**A handout is one `image` block**, not a hand-written page. `src` is a pack-relative path; the build
-folds it into the content-addressed asset pipeline and the manifest carries the hash. You never write
-hashes, and a panel can only point at a picture its own pack ships.
-
-**`visible_when` — value gates.** `{$var}` can only express "hide when absent"; `visible_when`
-expresses "hide until day 3". It is evaluated **client-side**, because values move at runtime and no
-server-side per-viewer filter could keep up. That makes every client an implementation of the same
-grammar, so the grammar is tiny on purpose:
-
-- comparisons `=== !== == != >= <= > <`; logic `&& || !` (or the words `and` / `or` / `not`);
-- literals: numbers, quoted strings, `true` / `false` / `null` / `undefined`;
-- bare dotted paths (CJK included), each looked up as a variable **id**; absent reads as `null`.
-- **Refused at build time:** arithmetic, any function call including `getvar()`, bracket indexing.
-  Each is somewhere two clients could quietly disagree, and a silent disagreement about visibility is
-  a spoiler. Need `day >= -1`? Write `day < 0` the other way round.
-
-Two rules to author by:
-
-1. **A player panel's `visible_when` may only name player-visible variables.** The condition string
-   ships with your pack, so every viewer's client holds it — naming a keeper-only tracker leaks its
-   *name* even though its value never arrives. (It genuinely never does: hidden variables are dropped
-   before evaluation, so the block simply never shows.)
-2. **Undecidable means hidden.** A condition that errors, or that a client cannot evaluate, hides its
-   block. Write conditions that read correctly when the variable is missing.
-
-**Tier 2** is real HTML/JS/CSS in a locked-down iframe, for an interactive map or a bespoke sheet. It
-must declare every asset it ships and an explicit tier-1 `fallback` (or `fallback: null`, which
-text-first clients render as one "available in the rich client" line). A panel acts as the player
-viewing it: inbound it sees only that viewer's filtered data; outbound, a `roll` intent runs through
-the real dice engine as that player.
-
-A room admin admits panels to a room — install is not enable:
-
-```console
-$ .panels
-Installed panel packs:
-[off] xipu-songdeng — 4 panel(s)
-
-$ .panels enable xipu-songdeng
-Enabled UI panels from pack: xipu-songdeng
-```
-
-Anyone at the table can then read a panel as **text**, which is what makes a `fallback`
-worth writing — and how you check yours says something useful:
-
-```console
-$ .panel
-📋 Panels you can open (2):
-· xipu-songdeng/jieqing-richeng — Festival Schedule
-· xipu-songdeng/dengzhen — Lantern Array
-`.panel <id>` shows one as text.
-
-$ .panel dengzhen
-📋 Lantern Array (xipu-songdeng/dengzhen)
-The lantern array chart is best viewed in a rich client; the keeper will describe it.
-[Nine lanterns]
-```
-
-It renders against **that viewer's** own variables and audience, so a keeper panel never
-appears in a player's listing, and a block bound to a variable they cannot see is simply
-absent. `visible_when` is evaluated by the same `core.condexpr` grammar the build checked.
-
----
-
-## 5. The presentation kit: giving your module a Stage Director
-
-Panels are the instruments. The **presentation kit** is the creative brief for the actor that plays
-them. The Stage Director wakes on story *beats* — a scene changing, an act turning over, a handout
-appearing, a critical spike — and decides what the table sees and hears. It never narrates, never
-rolls, and never reads keeper knowledge: its whole input is the projected player-visible stream plus
-this file. It cannot leak what it never receives.
-
-`ui/presentation.yaml`, declared as `contents.presentation`, one per pack:
-
-```yaml
-version: 2
-generation: allow            # or `pack_only` — your veto, see below
-style:
-  keywords:
-    zh: "水墨淡彩, 靛青与赭石, 一九二五年浙东渔镇, 湿冷海雾, 纸本质感"
-    en: "ink wash with muted color, indigo and ochre, 1925 coastal Zhejiang fishing town, damp sea fog, paper grain"
-  banned: [text overlays, modern clothing, photographic realism, visible light sources beyond lanterns]
-subjects:
-  - id: gu-wantang
-    kind: npc                                     # npc | location | item
-    name: {zh: 顾晚棠, en: Gu Wantang}
-    ref: assets/gu-wantang.png                    # the 定妆 reference image
-    prompt: "a woman in her thirties, dark plain jacket over a pale collar, hair damp, standing very still"
-  # No ref: nameable in a caption, never drawn.
-  - {id: shipu,   kind: location, name: {zh: 石埠, en: The stone quay}}
-  - {id: zhu-deng, kind: item,    name: {zh: 主灯, en: The head lantern}}
-audio:
-  - {id: chao-yong, layer: bgm,      asset: assets/chao-yong.mp3, title: 潮涌}
-  - {id: ye-wu,     layer: ambience, asset: assets/ye-wu.mp3,     title: 夜雾港湾}
-  - {id: jing-xian, layer: sfx,      asset: assets/jing-xian.mp3, title: 惊弦}
-```
-
-Three rules carry the image discipline, and the first two are structural — not requests a model can
-ignore:
-
-- **Ref-mandatory (定妆).** A subject with no `ref` is never generated. Consistency, not plumbing, is
-  the hard part of AI art in a module: your reference image and style keywords ride *every* request,
-  and a subject you did not license simply cannot be asked for.
-- **宁缺毋滥.** `generation: pack_only` is your veto — the Director stages with your own art and
-  nothing else. No operator setting overrides it, and in a room running two modules, one `pack_only`
-  silences generation for the room.
-- **慢菜先备.** The Director warms subjects it expects to want soon, so a beat serves art that was
-  cooked during the quiet turns before it. You do not configure this; naming subjects is what makes
-  it possible.
-
-The kit rides the same asset pipeline as everything else, and the trust card discloses both the
-subject count and whether your module may spend the operator's image budget at all. Rooms opt in with
-the *same* `.panels enable <packId>` that admits your panels — presentation is the module dressing
-the table, not a second switch. A room whose modules ship no kit never wakes a Director, so this
-costs nothing until an author asks for it.
-
----
-
-## 6. A skill: how to *run* the module
-
-Story goes in the card. Procedure goes in a `SKILL.md` — a Claude-Code-shaped skill, YAML
-frontmatter plus Markdown, folded into the Keeper's prompt while the room has it enabled.
+A skill is text for the Keeper: Markdown it reads while the skill is enabled in a room,
+plus optionally a list of tools it unlocks. `skills/lamplighter/SKILL.md`:
 
 ```markdown
 ---
-name: 迎潮节主持
-description: Procedure guide for running 《汐浦送灯》 — act pacing, rule-system switching,
-  festival-night house rules, madness table, ending-gate enforcement, and session-zero setup.
+name: Lamplighter
+name-zh: 点灯人
+description: Run the Old Quarter as a place where darkness is a threat.
+description-zh: 把旧城区当成一个黑暗本身就是威胁的地方来主持。
+allowed-tools: [generate_image]
 ---
-
-# 迎潮节主持（模组运行程序）
-
-故事内容以导入的世界卡为准。本技能只管程序。
-
-## 规则切换纪律
-- 日常检定：coc7。**入夜后**切 `.rule xipu_night`，天亮切回 `.rule 0`——切换时给一句环境暗示，不解释规则。
-- 理智：真正的恐怖暴露才掷。疯狂发作用汐浦狂乱表（`.chaokuang`）。
-
-## 结局门（硬性，缺门不发）
-C 断锚 = 信物满 3。玩家硬闯缺门结局时，在 fiction 内让门本身拦住。
+Darkness in the Old Quarter is never safe. When the lantern is out, describe sounds,
+not sights, and call for a Listen check before anything is seen.
 ```
 
-Optional frontmatter: `allowed-tools` (gates the room's toolset to a list), `name-zh` /
-`description-zh` (localized display), `metadata.systems`, `metadata.content-rating`. A sibling
-`hooks.js` is active while the skill is enabled. The room admin enables it per room:
+The directory's name is the skill's id. The tools a skill can unlock are the server's
+gated tools: `generate_image`, and `adjust_relationship`, `set_relationship`,
+`get_relationships`; unknown names are ignored. `metadata.content-rating: mature`
+declares mature content. A room's admin enables a skill with `.skill enable lamplighter`
+(`.skill list` shows what the room can enable); installing a pack from chat enables its
+skills in that room. Write a skill as how to *run* the pack — pacing, what to withhold,
+when to ask for a roll — not as the story; the story is in the cards. A skill is text
+only: a `hooks.js` beside `SKILL.md` is not run (the build reports it as ignored). Code
+belongs in a module (§4.6). The format is [skills-hooks.md](lwf/formats/skills-hooks.md)
+§1.
 
-```console
-$ .skill enable yingchao-zhuchi
-Enabled Keeper skill: yingchao-zhuchi
-```
+### 4.4 Panels
 
-**Write procedure, not prose.** The best line in the example above is *"切换时给一句环境暗示，不解释
-规则"* — it tells the Keeper what to do at a specific moment. Atmosphere belongs in the lore; this
-file is a runbook.
-
----
-
-## 7. Build, install, publish
-
-### Adopting a SillyTavern card
-
-A module of your own declares `enabled`, `condition` and `setup` directly in its
-`worldbook[]`/`variables[]`, so it needs nothing here. This subsection is for the other
-case: you are packaging **somebody else's heavy card** — one whose opening choices live
-in a frontend script that does not exist here, so the card arrives with a family of
-`enabled: false`, keyword-less entries that nothing can ever fire.
-
-Ship the switches as data, in an overlay file beside the card:
+A panel is interface beside the story — a gauge, a tracker, a map — in a client's
+sidebar, tray or modal. It shows only what its viewer's **views** hold: built-in views
+(`me`, `party`, `scene`, `variables`, `characters`, …) and module views such as
+`lantern/state`. `ui/panels.yaml`:
 
 ```yaml
-# cards/xunzhao.overlay.yaml
-format: loreweaver.lore-overlay/1
-entries:
-  难度·轻松:   {condition: '配置.难度 == "轻松"'}
-  难度·标准:   {condition: '配置.难度 == "标准"'}
-  难度·残酷:   {condition: '配置.难度 == "残酷"'}
-  路线·判官线: {condition: '配置.路线 == "判官线"'}
-  回复模板:    {enabled: false}
-setup:
-  - {path: 配置.难度, options: [轻松, 标准, 残酷], labels: {en: Difficulty, zh: 难度}}
-  - {path: 配置.路线, options: [主线, 判官线],      labels: {en: Route, zh: 路线}}
-expose: [配置]
+panels:
+  - id: oil
+    title: { en: The lantern, zh: 提灯 }
+    slot: sidebar
+    views: { lamp: lantern/state }
+    blocks:
+      - { kind: meter, label: { en: Oil, zh: 灯油 }, value: { $view: lamp.oil }, min: 0, max: { $view: lamp.max } }
+      - { kind: image, src: art/lantern.png, caption: { en: The lantern, zh: 提灯 } }
+      - kind: choices
+        options:
+          - { id: light, label: { en: Light it, zh: 点亮 }, command: lantern/light }
+        visible_when: "lamp.oil > 0"
 ```
+
+- `views` maps a short handle to a view name; `{$view: lamp.oil}` reads a path inside it.
+  A path that does not resolve drops its block (or, in an optional field, the field).
+- A `choices` option runs a command (`command` and optional `args`) as the member who
+  clicked it, with that member's rights.
+- `visible_when` hides a block; it is presentation, not secrecy — the block still reaches
+  every viewer the panel is listed to. What a viewer must not see must not be in their
+  views: a module's `for(who, room)` decides that per viewer, and `audience: admin` keeps
+  a whole panel to admins.
+- `repeat` draws one block per element of a list:
+  `{repeat: {each: me.character.resources, as: r, block: …}}`.
+- A **page** is one self-contained HTML file (`entry: ui/chart.html`) for rich clients.
+  It must declare a template `fallback` (or `fallback: null`), which every other client
+  draws instead. No reference client runs pages yet; the terminal client shows the
+  fallback.
+
+Every panel of an enabled pack is on; the room's admin switches one off with
+`.panels disable lantern/oil` (`.panels` lists them). The module that feeds this panel is
+in §4.6. The format is [panels.md](lwf/formats/panels.md).
+
+### 4.5 The presentation kit: pictures and sounds
+
+The kit tells the Stage Director — the lane that stages scenes with pictures and
+handouts — what the pack's table should look and sound like. `presentation.yaml`:
 
 ```yaml
-# pack.yaml
-contents:
-  cards:
-    - path: cards/xunzhao.png
-      overlay: cards/xunzhao.overlay.yaml
+version: 2
+style:
+  keywords: { en: "gaslight, fog, ink wash", zh: "煤气灯、雾、水墨" }
+subjects:
+  - { id: lantern, kind: item, name: { en: The lantern, zh: 提灯 }, ref: art/lantern.png }
+audio:
+  - { id: rain, layer: ambience, asset: sound/rain.ogg, title: Rain on cobbles }
 ```
 
-- `entries` is keyed by the card's own entry **titles** (ids regenerate on every import,
-  titles do not). A `condition` implies `enabled: true` — a binding on an entry that
-  stayed off would be an inert trap. Expressions are the closed `core.condexpr` grammar
-  (comparisons, boolean logic, dotted variable paths, ≤ 500 characters); there is no JS
-  escape hatch here, by design.
-- `setup` declares the choices the table owes the module, against the card's own
-  variable-tree paths. `expose` hands those prefixes to `.var expose`, so the players'
-  panel shows the choice they made — name them **explicitly**: `expose: ['*']` is refused
-  at build, because "publish the whole tree" is a judgement about one table's spoilers and
-  only the room admin sitting at it (`.var expose *`) may make it. Both numbers — how many
-  overlays a pack ships and how many prefixes they publish — are on the trust card the
-  operator sees before installing.
-- The build validates all of it with the real parser. A structural problem — unknown
-  `format`, an expression the grammar refuses or over the length cap, more than 20
-  options or 200 entries — **fails the build**. A title the card no longer carries is a
-  **warning**, printed beside the trust card, because cards get revised.
-- At install the overlay lands beside its card; the room admin's `.import <packId>/cards/…
-  world` applies it, and the receipt says how many overrides and setup choices landed.
-  The same card imported from an attachment gets nothing — the annotations belong to the
-  pack that adopted the card, not to the file. `.lore overlay <file>` applies one by hand.
-- It is **annotation, never machinery**: counted on the trust card as `overlays`, unable
-  to change a card's detected `kind`, and never read by a player's `pc`/`companion`
-  import. The engine still infers nothing from titles — see
-  `docs/notes/rejected/sole-active-card-mechanism.md`.
+- `subjects` are the people, places and things (`npc`, `location`, `item`) the Director
+  may show; `ref` is the pack's own picture of it. `generation: pack_only` forbids
+  generating pictures at all; `templates` narrows the handout kinds (`image`,
+  `title_card`, `letter`, `clipping`, `text`).
+- `audio` cues join the room's audio library as `<pack>/<cue>`, read-only. The room's
+  admin plays them: `.ambience play rain` (and `.bgm`, `.sfx`; `.audio list` lists the
+  library). A cue's `title` is shown to admins only.
+- Quote YAML values that contain commas inside `{ … }`: `{ en: gaslight, fog }` is read as
+  two keys, and the build refuses the kit (`unknown_key`).
 
-### Build
+Pictures are PNG, JPEG, WebP, GIF or SVG (at most 8 MiB); sounds MP3, Ogg, WAV, FLAC,
+M4A or AAC (at most 128 MiB). A file's bytes must match its extension. Enabled in a room,
+the kit's pictures and sounds become that room's unlisted media: its members can fetch
+them, nobody else. The kit's fields are [pack.md](lwf/formats/pack.md) §4.2.
 
-```console
-$ uv run python -m app --pack xipu-songdeng/
-Packed xipu-songdeng@1.0.0 -> …/xipu-songdeng-1.0.0.lwpack
-   sha256: 8c34dd524911a6f1def97fff57a51f1e9d455e695f32668053e5c5302fd51e0e
-📦 Xipu: The Lantern Sending — xipu-songdeng@1.0.0
-   A 1925 coastal-town mystery for the Tide-Greeting Festival — three days, nine lanterns, one chosen guest.
-   by loreweaver-playtest · license: MIT
-   contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
-Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
-   presentation kit: 5 picturable subject(s) — the Stage Director MAY generate images (each call spends your image-provider budget)
+### 4.6 A module
+
+A module is the pack's code: the rules a pack does not trust the Keeper to keep by
+itself — a tracker, a clock, a command, a private view. It is written in TypeScript or
+JavaScript against `loreweaver/module` and runs in the room's worker thread. The lantern's
+module, grown to feed the panel above:
+
+```ts
+import { defineModule } from "loreweaver/module";
+
+let oil = 3;
+
+export default defineModule({
+  id: "lantern",
+  create() { oil = 3; },
+  load(snapshot) { oil = (snapshot as { oil: number }).oil; },
+  save() { return { oil }; },
+
+  on: {
+    turnStart(_event, fx) {
+      fx.inject(oil > 0 ? `The lantern burns; ${oil} hours of oil left.` : "The lantern is out.");
+    },
+  },
+
+  commands: {
+    light: {
+      title: "Light the lantern",
+      description: "Burn an hour of oil.",
+      run(_args, who, fx) {
+        if (oil === 0) return { text: "No oil left." };
+        oil -= 1;
+        fx.fact({ text: `${who.member?.name ?? "Someone"} lights the lantern.` });
+        return { text: `${oil} hours of oil left.` };
+      },
+    },
+  },
+
+  views: {
+    state: {
+      title: "Lantern",
+      schema: { type: "object", properties: { oil: { type: "integer" } } },
+      for: () => ({ oil, max: 3 }),
+    },
+  },
+});
 ```
 
-`--out <file>` picks the filename; `--json` adds a machine-readable line for CI:
+What a module can do, in short:
 
-```json
-{"ok": true, "id": "xipu-songdeng", "version": "1.0.0", "sha256": "8c34dd52…",
- "trust": {"skills": 1, "rulepacks": 2, "cards": 2, "lorebooks": 1, "assets": 9,
-           "asset_bytes": 282853, "has_hooks": true, "has_ejs": false,
-           "has_rules_script": false, "world_cards": 2, "panels": 4,
-           "presentation": 5, "imagegen": true, "overlays": 1},
- "warnings": []}
+- **Events:** `turnStart` (before the Keeper runs; `fx.inject` adds to this turn's
+  prompt), `toolUse` (the Keeper is about to call tools; `fx.deny` refuses one) and
+  `replyPhase` (after the reply).
+- **Commands**, named `<module>/<name>`, with a role: `player` (default), `admin`, or
+  `keeper` — Keeper machinery players never see, run by the Keeper's `run_command` tool
+  and by the room's admin to repair what the Keeper got wrong.
+- **Views**, computed per viewer: how private information reaches one member.
+- **Effects** are requests the engine validates and applies: facts for the table or the
+  Keeper, variable writes, dice rolls, UI blocks. A module never calls the engine.
+- **Characters and the clock:** `characters(room)` offers seats; `clock(room)` claims the
+  room's clock.
+
+The module's `id` must equal the manifest entry's `id`. The builder bundles each entry
+and any npm packages it imports into one file; `loreweaver/module` stays an import, which
+the server answers with its own SDK. The whole contract, the effects table and the limits
+are in [sdk/README.md](../sdk/README.md) — read it before writing a module.
+
+**A module is real code.** It runs in the server's process with no sandbox: it can use
+the filesystem, the network and anything it bundles. The server isolates faults — a
+module that throws or hangs costs its room a call, not the server — but not trust. That
+is why the trust card says *It runs code on this server* first (§5).
+
+## 5. Installing, trust and enabling
+
+**The trust card.** Before anything is installed, the server computes a summary of the
+validated pack and shows it to whoever installs: the name, id, version, authors and
+licence; whether it runs code, and each module's file, size and sha256; the rule systems
+and what each extends; the skills and the tools each unlocks, and whether one declares
+mature content; the cards with their kind and the world machinery each carries; the
+panels with their audience and the views they read; the kit; the asset count and size;
+and what was ignored. Being computed from the content, it cannot understate what the pack
+ships. The full lantern from chat:
+
+```
+Installed The Lantern (lantern 0.2.0) on this server, in place of 0.1.0: rooms that have it enabled now play the new version.
+It is enabled in this room.
+It runs code on this server, with no sandbox: modules lantern.
+rule systems: lantern-rules (extends coc7)
+skills: lamplighter (unlocks generate_image)
+cards: The Old Quarter (cards/old-quarter.lorecard.json, world)
+panels: oil
+a presentation kit
+2 assets
+Its skills are enabled in this room: lamplighter.
+Its world card: .import world lantern cards/old-quarter.lorecard.json
 ```
 
-Two properties worth relying on: the build validates everything through the **real engine parsers**
-(a bad skill, rulepack or card means no pack, not a broken install later), and it is
-**byte-deterministic** — sorted entries, fixed timestamps, stable manifest dump — so the same source
-tree always produces the same sha256. Publish that digest and people can check it.
+**Who installs.** The operator, from the shell; or a room's admin, from chat. Both run one
+installer with the same checks. Since a module is real code, a room admin who installs a
+pack decides what code the server runs; on a self-hosted table the admin is usually the
+operator too. An operator who does not want that should give admin keys only to people
+they trust with the server.
 
-### Install
+**Install is not enable.** Installing from the shell changes no room; installing from
+chat enables the pack in that admin's room only. In a room, enabling a pack (`.pack enable
+<id>`, undone by `.pack disable <id>`; at most 16 per room):
 
-```console
-$ uv run python -m app --install ./xipu-songdeng-1.0.0.lwpack --yes
-📦 Xipu: The Lantern Sending — xipu-songdeng@1.0.0
-   …
-   contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
-Installed xipu-songdeng@1.0.0.
-   skills: yingchao-zhuchi — an admin enables one in-room with .skill enable <id>
-   rulepacks: chaozhan, coc7-xipu — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.
-   cards/lorebooks/assets: 2/1/9 file(s) under <data_dir>/packs/xipu-songdeng@1.0.0 — import in-room with .import <file> / .module
-World cards (admin-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
-```
+- loads its modules in the room's worker, in the order the packs were enabled (two
+  enabled packs cannot both have a module with the same id: `module_id_taken`);
+- adds its kit to the room's kit and its audio cues to the room's library;
+- adds its panels to the room's `panels` view;
+- makes its skills available to `.skill enable` (disabling the pack disables them);
+- makes its cards importable with `.import`.
 
-Without `--yes` the trust card is printed and confirmation is asked for; a non-interactive run
-requires the flag. Install verifies **before** writing anything: every content file re-parses through
-the real parsers, every asset's bytes must match its manifest sha256, the archive may contain nothing
-undeclared, entry names are checked against path traversal, symlinks are rejected, and counts and
-sizes are hard-capped. The trust block is re-derived from the archive with the same detectors and a
-mismatch is refused.
+Rule systems are server-wide: a room chooses one with `.rule system <id>`. A pack's rule
+system or skill whose id is already taken — by a built-in or by a pack installed earlier —
+is not loaded, and the install says so; the earlier one is never replaced.
 
-**Install is not enable.** Skills and rulepacks become discoverable; a room still opts in
-(`.skill enable`, `.panels enable`, `.import … world`). A rulepack does not become the
-room's system on install — create a character on that system (the pack must declare a
-`make_char` word) or name the system on import. That layering is the whole trust model:
-nothing a pack ships starts running because it arrived on disk.
+**Publishing.** Git releases are the registry: attach the `.lwpack` to a GitHub release,
+and anyone installs it with `gh:owner/repo` (the latest release) or `gh:owner/repo@v1.0.0`.
+Any `https://` URL works too. Publish the archive's sha256 beside it: the build is
+deterministic, so anyone can rebuild your source and compare.
 
-### Publish
+## 6. Limits and refusals
 
-Git releases *are* the registry. There is no central store, no submission, no gatekeeper — and
-nothing about your distribution that anyone else can revoke.
-
-1. Tag a release in your own repository.
-2. Attach the `.lwpack` as a release asset. (Publishing its sha256 in the release notes lets people
-   verify the byte-deterministic build themselves.)
-3. Players install it by reference:
-
-```bash
-uv run python -m app --install gh:owner/repo          # newest release
-uv run python -m app --install gh:owner/repo@v1.2.0   # a pinned one
-uv run python -m app --install https://example.com/my-module.lwpack
-```
-
-The reference is resolved through the anonymous GitHub API to that release's `*.lwpack` asset — and
-says so plainly when there isn't one:
-
-```console
-$ uv run python -m app --install "gh:1A7432/loreweaver@v1.0.0" --yes
-Could not resolve the pack ref: release for 'gh:1A7432/loreweaver@v1.0.0' has no .lwpack asset
-```
-
-**Dependencies are flat and vendored.** A pack ships everything it needs; there is no inter-pack
-resolution. `engine:` declares *minimum* versions only (`protocol`, `server`), and an unmet minimum
-refuses the install with a clear message rather than half-working.
-
-**Serializing a module?** Give every worldbook entry a stable `id` from installment one. Later
-installments reference `<pack-id>#<entry-id>` instead of copying the shared world, and the engine
-tracks provenance (`meta.source`) per document so an update can tell an owner-edited document from
-one that should follow the pack.
-
----
-
-## 8. Testing your module before anyone else plays it
-
-**The dev room — edit the source, the room follows.** The fastest loop skips packing
-entirely: point the server at your source directory and mount it into a sandbox room.
-
-```bash
-TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-keys
-# then, as the room admin:
-#   .dev mount ~/my-packs/my-module     — imports the module and starts watching
-#   (edit any file and save — lore, skills, rulepacks and panels reload live;
-#    edited entries replace their old text, deleted ones leave, and your room's
-#    variable values survive every reload)
-#   .dev reload / .dev status / .dev unmount
-```
-
-Mounts are confined under `TRPG_DEV__SOURCE_ROOT`, and with it unset the surface is
-off — set it only on your own dev box. A dev mount serves panels and the presentation
-kit straight from source (skipping the build-time caps), so `--pack` remains the
-gate a release must pass.
-
-**The pack check — what a valid pack still gets wrong.** `--pack` proves your module is
-a *valid* pack. It cannot tell you that a panel block will never be drawn, because that
-is a perfectly valid pack. The check does:
-
-```console
-$ uv run python -m app --lint my-module/
-Pack check: 3 note(s) — advisory, the pack still builds:
-   note: ui/panels.yaml: panels[gauges].blocks[1].value: binds 'suspicion', a keeper-visibility variable: it is never sent to any screen (the admin's included), so the binding never resolves — the block is left out, or just this field where the field is optional [panel-var-keeper-only]
-   note: cards/harbour.lorecard.json: entries[The cellar]: has no keyword and is not always-on: keyword matching can never select it, which leaves semantic recall as its only way into a prompt [lore-no-keys]
-   note: ui/panels.yaml: panels[status].blocks[0].label: written in en only — a zh viewer is shown the other language [locale-gap]
-```
-
-It reads the source tree with the engine's own parsers — no model, no network, nothing
-imported — and it is advisory: a note never fails a build, and `--lint` exits 0 whatever
-it finds (1 only when there is no readable `pack.yaml`). The same notes are printed by
-`--pack` after a successful build, and a dev room sends them after every reload — to the
-admin who mounted it and nobody else, because a note names what it is about (a secret
-entry's title, a keeper-side variable) — so you meet them while the file is still open. `--json` gives tools the list as
-`{code, where, message}` objects. What it looks for:
+A problem refuses the build (and an install) with a stable code and the path it concerns,
+before anything is written. The ones authors meet most:
 
 | Code | What it means |
 |---|---|
-| `panel-var-keeper-only` | A panel reads a `visibility: keeper` variable. Those are sent to **no** screen — `audience: keeper` decides who gets the panel, not which variables reach it — so the block is never drawn. |
-| `panel-var-unexposed` | A panel reads an imported-card variable (`mvu.<path>`) that no overlay in the pack exposes. Players receive nothing until the admin runs `.var expose`. |
-| `panel-var-unknown` | A panel reads a variable nothing in the pack declares (usually a typo, or an imported leaf written without its `mvu.` prefix). |
-| `panel-repeat-empty` | A `repeat` prefix that no player-visible variable starts with. |
-| `var-unused` | A variable is declared and nothing else mentions it — no panel, condition, hook, skill or lore text. |
-| `lore-no-keys` | A live entry with no keyword that is not always-on, and that no template pulls in by title (`getwi`): only semantic recall can bring it in. |
-| `lore-never-fires` | `probability: 0`: the entry is selected and then always dropped. |
-| `lore-condition-unknown-var` | An entry's condition reads a variable nothing declares, so its answer can never change. |
-| `overlay-expose-unknown` | An overlay's `expose:` names a prefix the card's `[InitVar]` tree does not have. |
-| `locale-gap` | The pack is bilingual (its `name` has both `en` and `zh`) and a label is written in one language only. A single-language pack gets none of these, and a bare string (`HP`) is never a gap. |
-| `card-note` | A row the native card parser skipped or trimmed (it would otherwise only tell you at import time). |
-| `unreadable` | A file that does not parse; the build will refuse it with the full reason. |
+| `manifest_version_unsupported` | The manifest is not `manifest_version: 3` (a 2.x pack). |
+| `unsupported_kind` | `contents` has `lorebooks`, `presets` or `prep`, which 3.0 does not have. |
+| `unknown_kind`, `unknown_key` | A key the format does not define (every nested object is closed). |
+| `missing_file` | The manifest names a file that is not there. |
+| `card_kind_mismatch` | A card's `kind` disagrees with what the card is; `detail` is the kind detected. |
+| `presentation_invalid`, `panels_invalid` | The kit or a panels file is invalid; `detail` names the problem and its path. |
+| `kit_asset_missing`, `panel_asset_missing` | A picture or sound the kit or a panel names is not in the pack. |
+| `asset_type`, `asset_bad_signature`, `asset_too_large` | A file of an unknown extension, whose bytes do not match it, or too big. |
+| `undeclared_script` | A code file in an archive that is not a declared module entry (a hand-made archive; the builder never packs one). |
+| `already_installed` | That version is installed; raise the version. |
+| `engine_too_old` | The server is older than the pack's `engine` minimum. |
 
-It reports only what the engine's own rules make certain. A variable your skill tells the
-Keeper to create at the table, or one a hook or a lore template writes, is never called
-undeclared; an `[InitVar]` block it cannot read statically, or a hook that builds
-variable names at runtime, switches the tree-shape checks off instead of guessing. Silence is not a certificate — it is the absence of these particular mistakes.
+Some caps: 16 modules and 16 panels per pack; 64 entries per content kind; one
+presentation kit; 512 assets; `pack.yaml` at most 256 KiB, a rule pack 512 KiB, a kit
+128 KiB, a page 2 MiB, a card 32 MiB, a bundled module 16 MiB; the archive at most
+512 MiB. A value over its cap is refused, never cut. The full tables are
+[pack.md](lwf/formats/pack.md) §2–§6 and [panels.md](lwf/formats/panels.md) §8.
 
-**When a live run goes wrong, trace the tools.** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`
-(relative paths land under `data_dir`) appends one JSON line per AI-KP tool call —
-`{ts, ms, room, tool, phase, args, result}`, refusals and hook vetoes included. It answers the questions a
-transcript cannot: which argument the Keeper actually passed, which tool failed every
-time it was tried, how long a turn spent where. Off unless you set it, and worth one
-warning: the file records tool arguments and results verbatim, so it contains your
-module's secrets — a debugging artifact, not something to attach to a bug report.
+## 7. Coming from 2.x
 
-**The scripted pipeline** — real dice, and offline when you make it so:
+A 2.x pack does not install on 3.0. What changed for an author:
 
-```bash
-uv run python -m app --lint my-module/                 # anything a valid pack still gets wrong?
-uv run python -m app --pack my-module/                 # does it even build?
-TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes
-TRPG_ENV_FILE=/dev/null TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
-```
-
-`--script` feeds one command per line to the CLI, which runs the whole real pipeline with seeded
-dice. **It is offline only when no provider credential reaches the process.** The CLI uses
-whatever model it is configured with, and it reads that configuration from three places: the
-shell environment (`TRPG_LLM__*`), an env file — `TRPG_ENV_FILE`, defaulting to `./.env` **in the
-directory you run it from**, so inside a checkout with a configured provider a `--script` run calls
-the real model and spends real calls — and credentials a login saved in the data directory. With
-none of them, it falls back to the built-in offline demo Keeper and prints `running offline demo
-mode`; no key, no network. The line above forces that: `TRPG_ENV_FILE=/dev/null` (any empty file;
-an empty variable does NOT work, it falls back to `./.env`), a fresh `TRPG_DATA_DIR`, and no
-`TRPG_LLM__*` in your shell. Drop `TRPG_ENV_FILE` when you do want a real Keeper on the run. A run
-file that checks the wiring end to end:
-
-```
-.xipu
-.rule
-.rule xipu_night
-.st
-.ra 潮汐学
-```
-
-```console
-Created coc7-xipu character: Adventurer
-Current house-rule ladder: 0
-Available: dg, rule1, rule2, rule3, rule4, rule5, xipu_night
-House-rule ladder set to xipu_night
-Adventurer: 力量 45, 敏捷 60, 体质 60, 体型 65, 外貌 45, 智力 55, 意志 45, 教育 85, 幸运 50, DB 0, …
-Check Tidology: target 5 (effective 5), roll 13 -> Failure
-```
-
-(`--script` / `--exec` batches are exempt from the message rate limiter — a file you handed the
-process is not a flood. Interactive CLI input still rate-limits like a table.)
-
-Then check the room-level wiring — panels register, skills enable, the world card lands, the cast
-appears:
-
-```
-.panels enable <your-pack-id>
-.skill enable <your-skill-id>
-.import <data_dir>/packs/<id>@<version>/cards/<your-card>.lorecard.json world
-.pc list
-```
-
-And when it is time for a real model, **play it twice and write down what went wrong.** The first
-run of this module found that a strong narrative model never touched the state layer at all — which
-is why the Scribe exists; the second found the opposite failure, plus a handful of channel leaks.
-Both were more useful for being written down while they still stung.
-
----
+- `manifest_version: 3`; delete the `files` and `trust` blocks a 2.x build generated (the
+  server computes the trust card); write `kind:` on every card entry.
+- **`hooks.js` is gone.** Turn-lifecycle code, a card's hook scripts, `defineAction`
+  actions and `emitUI` / `emitPanel` all become a module (§4.6). A card's hook scripts are counted and
+  reported at import, never run.
+- **Lorebooks** as a separate content kind are gone: put the entries in a card. **Prompt
+  presets**, **prep scripts** and the prep phase have no 3.0 equivalent. A pack's
+  `overlay:` file for a card is gone too: the room's admin sets the same switches with
+  `.lore` and `.var` ([cards.md](cards.md)).
+- **Panels** are panels 3.0: bindings read views, a choice runs a command, a page is one
+  self-contained HTML file ([panels.md](lwf/formats/panels.md) §9 maps each 1.0 field).
+- **Rule packs** with a rules script do not load.
+- There is no forge (generating a skill, rule pack or module from a description), no
+  live-reload dev room and no separate lint: build, install, look (§2).
+- A native card's `pregens` and AI companions are not in 3.0: a player imports a
+  `character` card, `genchar` makes a character from a description, and a module's
+  `characters()` can offer seats.
 
 ## Where to look next
 
-| Topic | Document |
-|---|---|
-| The full extension spec — every field, limit and trust rule | [plugins.md](plugins.md) |
-| Importing from SillyTavern: what runs, what differs | [cards.md](cards.md) |
-| The hooks API, events, effect buffer, failure semantics | [hooks.md](hooks.md) |
-| What panels and blocks look like on the protocol | [protocol.md](protocol.md) |
-| Operating a table with your module on it | [operating.md](operating.md) |
+- [sdk/README.md](../sdk/README.md) — writing and testing a module (in English).
+- [cards.md](cards.md) — cards, the world/character split, lore, variables, templates.
+- [plugins.md](plugins.md) — what can be extended, and the trust model.
+- [LWF](lwf/SPEC.md) — the formats; [protocol.md](protocol.md) §6.8 — every command
+  named here, with its Chinese forms.

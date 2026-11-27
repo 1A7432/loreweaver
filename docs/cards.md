@@ -1,237 +1,228 @@
 *English · [中文](cards.zh.md)*
 
-# Bring your SillyTavern cards
+# Cards: bringing SillyTavern cards and lorecards into a room
 
-You have a folder of character cards and lorebooks. This page tells you what happens
-when you drop them into Loreweaver: what imports, what actually runs, and where a
-card behaves differently because it now lives inside a game with real dice. It is
-written for card authors and card users; the full specification behind it
-is [plugins.md](plugins.md).
+You have character cards and lorebooks made for SillyTavern, or you are writing a world
+for Loreweaver. This page says what happens when a card comes into a room: what imports,
+what actually runs, and where a card behaves differently because it now lives in a game
+with real dice. The format behind it is [LWF cards](lwf/formats/cards.md); putting cards
+in a pack is [authoring.md](authoring.md) §4.1.
 
-The one-sentence summary: **cards and lorebooks import as-is — no conversion step —
-and the variable / template / trigger machinery your card relies on runs**, inside
-an engine that rolls real dice and validates every number.
+One idea first: Loreweaver **splits every card** (拆卡). A SillyTavern "heavy card" fuses
+a character with a whole world — variable schemas, templates, secret lore — because a
+single-player frontend had nowhere else to put them. Here they are two halves:
 
-One concept to hold onto first: Loreweaver **splits every card** (拆卡). An ST "heavy
-card" fuses a character with a whole world — hook scripts, variable schemas,
-executable templates — because single-player ST had nowhere else to put them. Here
-those are two artifacts: the **character half** (persona, memory, abilities, a sheet)
-that any player may import, and the **world half** (the machinery) that only the
-room's admin imports, because it reprograms play for the whole table. Your card
-isn't rejected either way — it's decomposed.
+- the **character half** — a name and a persona — which any player may import as their
+  own character;
+- the **world half** — lore, variable declarations, templates, the card's standing
+  directives and openings — which only the room's admin imports, because it reprograms
+  play for the whole table.
+
+A card is never refused for being heavy: it is taken apart, and each import says by
+count what it left behind.
 
 ## What imports
 
-- **Character cards** — SillyTavern **V2/V3** (`chara_card_v2` / `chara_card_v3`),
-  as JSON or as a PNG with the embedded `chara` chunk. Fields consumed: `name`,
-  `description`, `personality`, `scenario`, `first_mes`, `mes_example`,
-  `system_prompt`, `post_history_instructions`, `alternate_greetings`, `tags`,
-  `character_book`, `extensions`. Unknown fields
-  are ignored, never rejected — a card from a newer ST build still imports.
-- **Lorebooks** — the card's embedded `character_book`, or a standalone lorebook
-  JSON. Both the V2 `character_book` field names and ST-native world-info names map.
-- **MVU variables** — `[InitVar]` / `[InitialVariables]` / `@@initial_variables`
-  entries are consumed at **world import** into a per-room variable tree
-  (JSON5-tolerant, nested CJK paths, `[value, "description"]` leaves). They are
-  treated as data, not lore — they don't occupy prompt budget, and **re-importing a
-  card never resets a room's variable progress**.
-- **Hooks** — a card may carry `extensions.loreweaver_hooks`: sandboxed JavaScript
-  on the turn lifecycle, installed at **world import**. That's Loreweaver's own
-  extension point (the Tavern Helper idea, engine-validated); see [hooks.md](hooks.md).
+- **SillyTavern cards**, spec v1, v2 (`chara_card_v2`) and v3 (`chara_card_v3`), as JSON
+  or as a PNG with a `chara` or `ccv3` text chunk; at most 16 MiB. Fields read: `name`,
+  `description`, `personality`, `scenario`, `first_mes`, `mes_example`, `creator_notes`,
+  `system_prompt`, `post_history_instructions`, `alternate_greetings`, `tags` and the
+  `character_book`. Unknown fields are ignored, so a card from a newer SillyTavern still
+  imports.
+- **Lorebooks** travel as a card's `character_book`. Both the V2 field names and
+  SillyTavern's native world-info names are read. A standalone lorebook file is not a
+  card and imports nothing: put its entries in a card.
+- **Native cards** (`*.lorecard.json`, `"format": "loreweaver.card"`), Loreweaver's own
+  format. It has what a SillyTavern card has no safe place for: keeper-only (`secret`)
+  entries, typed variables, per-entry conditions and stable entry ids. A sample is in
+  [authoring.md](authoring.md#41-cards-and-lore); the fields are
+  [LWF cards](lwf/formats/cards.md) §2.
 
 ## How to import
 
-- **In the terminal client:** character creation offers four paths — roll, manual,
-  AI draft, or **import a card**. Whichever path, the resulting sheet is validated
-  against the rule system; a card whose numbers don't fit the rulepack gets fixed
-  numbers, not a free pass.
-- **By command:** `.import <card file> [coc7|dnd5e] [pc|companion|world]`.
-  - `pc` (any player, via a room attachment) and `companion` (admin-only) take the
-    **character half**. If the card also carries world machinery, the import strips
-    it and tells you exactly what was stripped — the card still works as a
-    character, and the message points the room admin at the world half.
-  - `world` (**admin-only**) imports the whole module in one step: the machinery
-    half — full lorebook with Keeper trust, `[InitVar]` seeded, hooks installed —
-    AND the character half, which lands on the room's **pre-generated roster** as a
-    claimable, rule-validated PC. The card's PROSE (description, scenario, the
-    authored opening and its alternates) is copied into a Keeper-only **module
-    brief** the Keeper reads back with the `module_brief` tool — so the module's own
-    opening can be quoted at the table instead of vanishing at import. Players pick their character with `.pc list` /
-    `.pc claim <name>` (claims are exclusive; `.pc release` frees the slot and the
-    next claimant starts from the pristine sheet). For an AI-played version of the
-    same character, `.import <file> companion` still works.
-  - Importing from a server-side path (rather than a room attachment) is admin-only
-    in every mode. Standalone lorebooks: `.lore import <file>` (admin-only).
-- **As part of a pack:** cards and lorebooks travel inside `.lwpack` content packs —
-  `python -m app --install gh:owner/repo` — alongside skills, rulepacks and assets
-  (see [plugins.md](plugins.md)).
+A card is imported **as a world** (the room's admin) or **as a character** (any player).
 
-## What actually runs
+- **From a client.** The terminal client and Loreweaver Studio upload the card file and
+  run the import. Uploading needs the room's upload switch on (`.uploads on`, the admin's).
+  Only the member who uploaded a file can import it.
+- **From an enabled pack** (`kind` in the pack's manifest says which half the card is):
 
-Imported cards don't just contribute prose — the machinery runs, with deterministic
-code doing the bookkeeping. (Everything below describes the **world half**, live after
-a room admin's `.import <file> world`; a character import carries none of it.)
+  ```
+  .import world <pack> <card path>
+  .import character <pack> <card path> [name]
+  ```
 
-- **Worldbook trigger semantics.** Primary `keys`; `secondary_keys` with all four
-  selective logics (AND ANY / AND ALL / NOT ANY / NOT ALL); `probability` — rolled
-  by real code, not narrated; case-sensitive and whole-word matching; `scan_depth`
-  windows; `position` ordering buckets; timed effects — `sticky`, `cooldown`,
-  `delay` — against a per-room turn counter; inclusion groups (weighted, one member
-  per group per turn); budgeted insertion.
-- **The MVU protocol, end-to-end.** Your card's scaffolding entries import as normal
-  lore, the model emits `<UpdateVariable>` blocks, and the engine parses them with
-  real code — all five ops (`set` / `insert` / `delete` / `add` / `move`) — applies
-  them to the variable tree, and strips the blocks from what players see. The
-  schema-checked tool calls (`set_stat` / `adjust_stat` / `get_stat`) are the
-  preferred channel onto the same tree.
-- **Full EJS — real JavaScript.** With the `ejs` extra installed (on by default),
-  worldbook and card content renders through the official EJS library + lodash in an
-  embedded QuickJS sandbox: loops, functions, `await`, lodash chains, arbitrary-JS
-  `@@if` conditions, `setvar`/`incvar` (buffered, applied by engine code after
-  rendering), `getwi`/`activewi`, `injectPrompt`, `execvar`. Same trust model as
-  SillyTavern itself: your box, your cards.
-- **Macros.** `{{user}}` (the active PC, resolved at render time), `{{char}}`,
-  `{{time}}` / `{{date}}`, `{{roll:XdY}}`, `{{random}}`, `{{pick}}`, `{{newline}}`,
-  `{{// comments}}`, `{{getvar::}}` / `{{var:}}`. Note for authors:
-  `{{random}}`/`{{pick}}` (and lore `probability` rolls) draw from real code
-  randomness seeded per **(room, turn)** — different turns vary freely, but re-running
-  the SAME turn (a retry, an undo replay) reproduces the same picks, so what the
-  model saw is always reconstructable. The two draws use separate streams: adding a
-  `{{random}}` macro never shifts which probabilistic lore entries fire.
-- **The tracker panel is admin-curated.** Your card's tree is module state, and heavy
-  cards routinely keep hidden plot flags in it — so leaves reach NO player panel until
-  the room admin exposes them: `.var expose <prefix|*>` puts a path (and its subtree) on
-  the party's panel, `.var hide` takes it off, `.var list` shows the whole tree with
-  visibility markers. The admin's own panel always shows everything (hidden leaves
-  flagged). Tell your users which prefixes to expose — or ship that line in your
-  pack's card `notes`.
+  In Chinese, `.导入 世界 …` and `.导入 角色 …`. When a pack is installed from chat, its
+  answer prints the import line for each world card it ships.
+- **From the shell**, as the operator: `loreweaver import-world <room> <card-file>` brings
+  a card in as a room's world.
 
-## What's different here (read this before debugging)
+The protocol side (upload, then `command.run import`) is [protocol.md](protocol.md) §11.6.
 
-Loreweaver is a game engine, not a chat frontend. The differences all follow from
-that:
+## What a world import brings
 
-- **The dice are real.** `{{roll:XdY}}` is rolled by the dice engine; checks resolve
-  through rules code. A card cannot pre-write an outcome ("the attack hits") into
-  being — the engine rolls first, the model narrates the result.
-- **Character numbers validate.** An imported card becomes a real sheet in the
-  active rule system (CoC 7e or D&D 5e SRD), checked against the rulepack and held to its limits.
-- **`{{char}}` is bound at import** — a card's character identity doesn't drift.
-  `{{user}}` stays dynamic (whoever the active PC is at render time).
-- **`{{time}}` / `{{date}}` are the game clock**, not the wall clock. Your
-  "midnight" fires when it's midnight *in the story*.
-- **`faker` is stubbed** (returns empty strings, logs a warning) — nondeterministic
-  flavor text conflicts with reproducible sessions and is rarely load-bearing.
-- **`@INJECT` message-index positioning is inert.** Loreweaver assembles one system
-  prompt through its own prompt builder; there is no client-side message array to
-  index into.
-- **Status-bar / render entries import disabled.** `[RENDER:*]`, `@@render_*`,
-  `@@iframe` are frontend features with no server-side meaning; those entries are
-  kept but disabled so they never pollute a prompt. The replacements are the
-  built-in tracker panel and [hooks](hooks.md) `emitUI` — which draws meters,
-  badges and choice buttons in the actual client.
-- **Without the `ejs` extra** (or with `TRPG_ENABLE_FULL_EJS=false`, or when a
-  template throws), rendering falls back to a safe EJS subset: `<% if / else %>`
-  chains, `<%= %>` outputs, `getvar()` / `variables.path` reads, `{{getvar::}}`
-  macros, `@@if` conditions. The subset is **read-only** (template `setvar` is a
-  no-op there), and fail-safe either way: raw template syntax never reaches the
-  model.
-- **Sandbox facts** (full mode): one fresh interpreter per turn — no cross-turn or
-  cross-room state; hard memory cap and a per-eval time cap (an infinite loop times
-  out instead of hanging the server); zero host I/O; buffered template writes capped
-  per turn.
+Only the room's admin can import a world, and the Keeper cannot do it as a tool. A world
+import reads the whole original card:
 
-## Making a card's switches work here
+- **Lore.** The full lorebook becomes the room's lore entries, with the admin's trust:
+  `secret` entries stay keeper-only and `constant` entries are always on.
+- **Variables.** `[InitVar]` entries (a title containing `[InitVar]`) seed the room's
+  variable tree: JSON5-tolerant objects or YAML mappings, nested and CJK paths allowed,
+  `[value, "description"]` leaves. They are data, not lore. A native card's typed
+  `variables` become the room's typed variables.
+- **For the Keeper.** The card's prose (description, personality, scenario, example
+  messages, creator notes), its directives (`system_prompt`, `post_history_instructions`,
+  with template code removed and `{{char}}` bound to the card's name) and its openings
+  (`first_mes`, `alternate_greetings`) are kept for the Keeper. Players see the world's
+  name, nothing more.
+- **Re-importing** the same card replaces that card's lore and keeps the room's variable
+  values: a top-level key the room already has keeps its value, so a re-import never
+  resets progress. A *different* world card stacks beside the first (lorebook add-on
+  cards work that way); to start clean, reset the room: `.reset all`, then `.reset confirm`.
 
-Some heavy cards ship an opening-configuration wizard: a family of lorebook entries
-that arrive `enabled: false` with no keywords — difficulty tiers, route variants, taste
-axes — plus a frontend script that flips the chosen one on when you click a button in
-SillyTavern's UI. Loreweaver imports those entries faithfully and runs no frontend
-script, so nothing flips: the card collapses to whatever its author happened to leave
-enabled. The world import says so by number — *N entries imported disabled with no
-keywords* — because nothing in the engine's activation model can ever fire one.
+The answer counts what came in and what did not: *Imported the world River Town: 2 lore
+entries (0 secret), 1 variable declarations, 1 openings.* Not imported in 3.0: hook
+scripts (3.0 has no hooks; they are counted, never run) and a native card's `pregens`.
 
-Here is how you turn them on: by hand, once, or as a function of a variable. All of it
-is admin-only, and none of it rewrites the card.
+## What a character import brings
 
-- **See what is off.** `.lore list disabled` lists them; the full `.lore list` marks
-  every entry `[off]`, `[always-on]`, `[when: <condition>]`, and `*` where this room has
-  changed the file's own answer.
-- **Flip one by hand.** `.lore enable <title>` / `.lore disable <title>`. The stored
-  entry is never touched — the switch lives in a separate Keeper-only **overlay**
-  document — so re-importing a revised card replaces the lore and **keeps your
-  switches**, the same promise variable progress already has.
-- **Or bind it to a variable.** `.lore bind 难度·残酷 配置.难度 == "残酷"` makes that entry
-  inject exactly while the condition holds, and fail closed otherwise. Three siblings
-  bound to three values of one variable behave like the ST panel's radio buttons — with
-  no panel and no script. The card's own prose usually reads the choice out of the
-  variable tree anyway, so the tree stays the single truth and entry activation is
-  derived from it. `.lore unbind <title>` clears the condition; `.lore restore <title>`
-  (or `*`) drops the override entirely and hands the entry back to the file.
-- **Change the variables directly.** `.var set <path> <value>` and `.var add <path>
-  <delta>` now reach the imported card's own tree, not just Loreweaver's typed trackers:
-  `.var set 配置.难度 残酷`, and the bound entries follow on the next turn. You change
-  values; creating new paths — and restructuring them — stays the Keeper's tool, so a typo
-  gets you the nearest existing paths instead of a new leaf nobody reads, and naming a
-  BRANCH (`.var set 配置 残酷`) is refused with its children listed rather than silently
-  replacing the whole subtree with a string.
-- **Know whether it actually fits.** Every switch that turns something ON comes back
-  with a budget receipt: it fits this turn, it is crowded out (and by what), or it is
-  larger than a whole Keeper turn's lore budget and can never inject at all. "I chose
-  and nothing happened" is exactly the failure this exists to prevent. `.lore show
-  <title>` prints the same receipt beside the file's state and this room's, and warns
-  when a binding waits on a variable path the room does not have.
-- **A controller template also works, with no overlay at all.** An enabled entry can
-  read a disabled one: `<%- getwi("难度·" + getvar("配置.难度")) %>`. The engine fills the
-  template library from **every** entry in the room, disabled ones included. Needs the
-  `ejs` extra; without it the read returns nothing (and never leaks template text).
-- **"Set before play" choices.** A module can mark a variable as one the table must pick
-  once before play starts. `.var setup` lists what is still open, `.var list` leads with
-  it, and the Keeper sees the same list as plain state while the room is still in prep.
+Any player can import a card as their character. It writes **a character and a seat,
+nothing else**, whatever the card holds: the card's name, its persona (description and
+personality) as the character's background, and a sheet rolled for the room's rule
+system. When the server has a model, the sheet leans toward a concept the model reads
+from the persona, as `genchar` does; the model writes no numbers, and the rule system
+places them. Without a model, or over the hourly cap shared with `genchar` (5 per
+member), the sheet is rolled plainly and the answer says why.
 
-Loreweaver will never guess which variant you meant. It does not read titles for
-structure, group entries into families, or offer a pick — that was tried on 2026-08-05,
-it mis-grouped its own sample card, and it was deleted the next day. A switch exists
-because you typed it, or because a pack you installed shipped it.
+Nothing of the world half comes along — no lore entries (not even plain ones), no
+variables, no templates, no directives, no openings — and the answer lists it by count:
 
-**Shipping a card for other people?** Put the annotations in the pack: an `overlay:`
-file declared beside the card in `pack.yaml` carries exactly these switches and
-conditions as data, so the table gets a card that is alive on import instead of one
-waiting for someone to read its scripts. See [plugins.md](plugins.md) and
-[authoring.md](authoring.md).
+```
+You now play River Town (CoC).
+This is a world card: only its character came along; its world waits for the room admin's world import.
+Left behind: variable declarations ×1, templates ×1, lore entries ×2, openings ×1.
+```
 
-## The import trust boundary
+## What runs
 
-An imported file doesn't get to pick its own privileges:
+After a world import, the card's machinery runs, with code doing the bookkeeping.
 
-- **The card split is structural.** A player's character import cannot install hooks,
-  seed the variable tree, or land executable templates — the machinery is stripped by
-  deterministic code before anything touches room state, not filtered by a prompt.
-  Only the admin's `world` import carries it in.
-- **Scope is pinned** to the importing room — a card can't write global lore.
-- **`constant` is honored for the admin's `world` import** — module rules and
-  timelines are constant entries, and stripping the flag left every imported module
-  rule keyword-gated — and **forced off for any player upload**, where an always-on
-  entry would let an untrusted card permanently occupy the prompt. The real bound on
-  always-on text is the per-turn injection budget — 12 entries / 12,000 characters on a
-  Keeper turn — not the flag; an entry larger than that budget never injects at all,
-  which `.lore enable` and `.lore show` tell you at the moment you switch it on.
-- **`secret` is honored only when a room admin does the import** — an untrusted card
-  cannot mint keeper-only lore.
-- **Entry ids are regenerated**, so a card can't address (and overwrite) another
-  card's entries.
-- **Re-importing replaces** that card's hooks and entries rather than stacking
-  duplicates — and, as above, never resets variable progress, nor the room's
-  [overlay](#making-a-cards-switches-work-here): the switches and bindings you set
-  survive a revised card, and a title the new version no longer carries is reported as
-  stale rather than silently dropped. (Replacement matches
-  entries by import provenance, recorded since 2026-08-15: a room whose lore was
-  imported before then stacks once more on its first re-import, then replaces
-  forever after. Admin imports only — a player's card import is always additive,
-  so a crafted card cannot displace the module's lore.)
+- **Lore activation**, after SillyTavern's world-info rules: primary keys; secondary keys
+  with all four logics (AND ANY, AND ALL, NOT ANY, NOT ALL); `probability`, rolled by
+  code; case-sensitive and whole-word matching; `scan_depth`; `constant` entries;
+  `position` (`before` and `after` order the one lore section; other positions sort with
+  the rest); timed effects (`sticky`, `cooldown`, `delay`) counted in turns; inclusion
+  groups (one member per group, picked by weight). When the server has an embedding model,
+  an entry that recall finds relevant triggers as if a key had matched. A Keeper turn
+  takes at most 12 entries and 12,000 characters of lore. Regex keys (`/…/`) match as the
+  literal text.
+- **Decorators.** `@@if <condition>` makes a condition; `@@activate` works like
+  `constant`; `@@dont_activate` and render-only entries (`[RENDER:` titles, `@@render_*`,
+  `@@iframe`, `@@message_formatting`) import disabled, and so does an entry that is nothing
+  but status-bar residue. A `[GENERATE:…]` title prefix is removed.
+- **Templates (EJS).** Lore entries may be EJS templates. They run as real JavaScript —
+  the EJS library and lodash — in the room's worker thread, in a fresh context for each
+  prompt assembly, at most 1 second per template and 3 seconds per assembly. The API is
+  the ST-Prompt-Template one: `getvar`, `setvar`, `incvar`, `decvar`, `getwi` /
+  `getWorldInfo` (an entry's content by title, disabled entries included), `activewi`,
+  `injectPrompt`, `getchar`, `getchat`, `define`, `execvar`, `SafeGetValue`, `print`,
+  `variables`, `stat_data`, lodash as `_`. Template writes are requests, applied by engine
+  code afterwards (at most 64 per assembly). A template that fails renders as nothing,
+  never as its source: raw template syntax never reaches the model. Greetings are rendered
+  like lore before they are spoken.
+- **Conditions** (`@@if`, a native `condition`) are read with Loreweaver's condition
+  language first; a condition it cannot read is evaluated as JavaScript in the worker. An
+  error means the entry stays out.
+- **Macros.** `{{user}}` (the active player character), `{{char}}` (the card's name,
+  bound at import), `{{time}}` / `{{date}}` (the game clock), `{{roll:XdY}}` (rolled by the
+  dice engine), `{{random}}`, `{{pick}}`, `{{getvar::name}}`, `{{var:name}}`,
+  `{{newline}}`, `{{trim}}`, `{{// comment}}`.
+- **The MVU protocol.** The model may write `<UpdateVariable>` blocks with
+  `_.set` / `_.insert` / `_.delete` / `_.add`; code parses them, applies them to the
+  variable tree and removes them from what players see. The Keeper also has schema-checked
+  tools onto the same tree.
 
-With full EJS enabled, world content runs code in the sandbox described above — that
-is the point, and it is the operator's informed call: "your box, your cards" is the
-**admin's** stance about the admin's own table, which is exactly why the world half
-goes through the admin's hands. If you would rather nothing executed at all, set
-`TRPG_ENABLE_FULL_EJS=false` or skips the `ejs` extra.
+## Variables, and what players see
+
+The imported variable tree is module state, and heavy cards keep plot flags in it, so it
+starts **fully hidden**: no leaf reaches a player until the room's admin exposes it.
+
+```
+.var list                    every variable; hidden ones are marked
+.var expose town             players now see town and everything under it
+.var hide town
+```
+
+A prefix exposes itself and its subtree, aligned on segments (`town` exposes
+`town.flood`, not `town2`); `*` exposes everything. The admin's own view always shows the
+whole tree, hidden leaves flagged. A native card's typed variable is visible to players
+unless it says `"visibility": "keeper"`. Panels read variables through the `variables`
+view, so a panel never shows a hidden leaf. Tell your players which prefixes to expose,
+for example in the card's `notes` in your pack.
+
+## Making a card's switches work
+
+Some heavy cards ship an opening wizard: entries that arrive disabled with no keywords —
+difficulty tiers, route variants — and a frontend script that turns the chosen one on.
+Loreweaver imports the entries and runs no frontend script, so nothing turns them on. The
+world import says so by count: *N lore entries are disabled and have no keywords*. The
+room's admin turns them on, without touching the card:
+
+- **See what is off:** `.lore list disabled`. `.lore list` marks entries `[off]`,
+  `[secret]` and `[annotated]` (this room changed the file's answer).
+- **Switch one by hand:** `.lore enable <title>`, `.lore disable <title>`.
+- **Bind one to a variable:** `.lore bind <title> | <condition>`, for example
+  `.lore bind Hard mode | town.flood >= 4`. The entry is in while the condition holds and
+  out otherwise; three entries bound to three values of one variable behave like the
+  card's radio buttons. `.lore unbind <title>` clears the condition; `.lore restore
+  <title>` hands the entry back to the file.
+- **Change a value:** `.var set <path> <value>`, `.var add <path> <delta>`.
+- **A controller template works too:** an enabled entry can pull in a disabled one,
+  `<%- getwi("Difficulty: " + getvar("config.difficulty")) %>`.
+
+The switches are a keeper-only overlay stored beside the lore, never in it, so
+re-importing a revised card keeps them. Loreweaver never guesses a variant: it does not
+read titles for structure or group entries into families. In 3.0 a pack cannot ship these
+switches for a card (2.x had an `overlay:` file); the room's admin sets them.
+
+## What is different here
+
+- **The dice are real.** `{{roll}}` and every check are rolled by the dice engine; a card
+  cannot write an outcome into being.
+- **Numbers are validated.** An imported character becomes a sheet of the room's rule
+  system, held to its limits.
+- **`{{time}}` and `{{date}}` are the game clock**, not the wall clock.
+- **Randomness is reproducible.** `{{random}}`, `{{pick}}`, lore `probability` and a
+  template's `Math.random` are seeded from the room and the turn: a retried turn draws the
+  same values. A template's `Date` is fixed for the assembly.
+- **`faker` returns empty strings**, and `@INJECT` positions by message index do nothing:
+  Loreweaver assembles one prompt of its own.
+- **Status bars and render entries** are disabled at import. Panels
+  ([authoring.md](authoring.md#44-panels)) are how a pack draws interface in the client.
+
+## The trust boundary
+
+An imported file does not choose its own privileges.
+
+- **The split is code, not a prompt.** A character import writes a character and a seat;
+  it cannot add lore, seed variables or carry template code, however the card is phrased.
+- **`secret` and `constant` are the admin's.** Only a world import keeps a secret entry
+  or an always-on one.
+- **Entries are pinned to the importing room**, and their ids are regenerated, so a card
+  cannot address another card's entries.
+- **Secret stays secret.** Players' lore lists, panels and every other view are computed
+  per viewer by the server; a secret entry, a keeper-only variable or an unexposed leaf is
+  never in a player's. A template rendering for a player-grade reader cannot read a secret
+  entry either.
+- **Templates are code the admin chose to run.** They run in the room's worker with time
+  limits and no access to the server's objects, but a context has no memory cap of its
+  own: a world import is the admin's decision to run that card's templates, as in
+  SillyTavern ("your box, your cards"). There is no switch that turns templates off.
+
+## Not in 3.0
+
+Hook scripts in cards (`extensions.loreweaver_hooks`, a native card's `hooks`) are
+counted and reported, never run: code that reacts to a turn is a module in a pack
+([sdk/README.md](../sdk/README.md)). Also gone: importing a card as an AI companion, a
+native card's claimable `pregens`, standalone lorebook files, `.lore import`, and a
+pack's `overlay:` file.

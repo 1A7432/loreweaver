@@ -1,697 +1,431 @@
 *[English](authoring.md) · 中文*
 
-# 做一个 Loreweaver 模组
+# 做一个 Loreweaver 扩展包
 
-*从一个空目录，到一个能装的 `.lwpack`，全程拿一个真模组当例子。*
+*从一个空目录，做到一个在房间里启用、真能起作用的扩展包；再把扩展包能带的每一种内容走一遍。*
 
-这是实操教程。规范性的契约——每个字段、每条上限、每条信任规则——在 [plugins.zh.md](plugins.zh.md)；两边说法不一致时以那份为准。这里给的是做事的顺序，和真文件而不是编出来的例子。
+**扩展包**（pack）是内容进入 Loreweaver 服务器的方式：一个 `.lwpack` 文件（一个 ZIP 压缩包，根目录有一份 `pack.yaml` 清单），里面可以有模组（代码）、卡和卡里的设定、规则包补丁、给守秘人的技能、面板，以及带图片和声音的演出包。服务器会先把整个扩展包校验一遍，然后才写下第一个文件。
 
-**例子**是《汐浦送灯》：一九二五年浙东渔镇的一个调查本，被真模型完整跑过两遍。它自己的文件没有随仓库发布（把一个已解的谜发出来就等于剧透），所以下面的路径请当成“一个包长什么样”来看，而不是可以直接 clone 的东西；每一段都是逐字引全的，这一页自己站得住。
+这一页讲做事的顺序。格式本身在 [LWF](lwf/SPEC.md) 里规定：[pack.md](lwf/formats/pack.md)（清单、拒收规则、信任卡）、[panels.md](lwf/formats/panels.md)、[cards.md](lwf/formats/cards.md)、[rulepacks.md](lwf/formats/rulepacks.md)，以及 [skills-hooks.md](lwf/formats/skills-hooks.md) §1。这一页和格式文档说法不一致时，以格式文档为准。哪些东西可以扩展、信任模型是什么，见 [plugins.zh.md](plugins.zh.md)。卡有单独一份指南：[cards.zh.md](cards.zh.md)。格式文档都是英文的。
+
+**`loreweaver` 命令。** 下文的 `loreweaver` 指服务器的命令行：编译好的可执行文件，或者在本仓库的检出目录里用 `bun server/src/cli/main.ts`。涉及已安装扩展包的命令都读写服务器的数据目录（`TRPG_DATA_DIR`，默认 `./data`），所以要和服务器用同一个设置来跑。每条命令都输出一个 JSON 对象。
+
+**称呼。** *守秘人*是 AI 主持人。*房间管理员*是持有某个房间管理员钥匙的人。*运营者*是运行服务器进程的人。
 
 ---
 
-## 0. 一个模组长什么样
+## 1. 第一个扩展包
 
-一个目录，一份清单，其余全是可选的。
+一盏大家可以点亮的灯：一个模组，一条命令，两个文件。
 
 ```
-xipu-songdeng/
-  pack.yaml                     清单——唯一必须有的文件
-  cards/
-    shipu.lorecard.json         模组本体：设定、演员表、追踪器、钩子
-    chaomai-st.json             一张酒馆卡，原样导入
-  rulepacks/
-    coc7-xipu.yaml              CoC 7 版的补丁：一个新技能、一套夜间档位、一张疯狂表
-    chaozhan.yaml               一个独立的迷你系统，纯数据
-  lorebooks/
-    yuyan.json                  一份独立世界书
-  skills/
-    yingchao-zhuchi/
-      SKILL.md                  守秘人该怎么「跑」这个模组（程序，不是故事）
-      hooks.js                  沙箱里的回合生命周期行为
-  ui/
-    panels.yaml                 牌桌上的仪表
-    presentation.yaml           演出导演的创作简报
-    dengzhen/                   一个二级面板：真的 HTML/JS 页面
-  assets/
-    *.png *.mp3                 手作物、立绘、音乐
+lantern/
+├── pack.yaml
+└── src/lantern.ts
 ```
 
-最小的清单是六个字段：
+`pack.yaml`：
 
 ```yaml
-id: harbour-bell            # 小写 slug；决定 packs/<id>@<version> 安装目录名
-version: 0.1.0              # semver
-name:
-  en: The Harbour Bell
-  zh: 港钟
-description:
-  en: A one-shot for two to four investigators.
-  zh: 一个 2-4 人的单本。
-authors: [ada]
+manifest_version: 3
+id: lantern
+version: 0.1.0
+name: { en: The Lantern, zh: 提灯 }
+description: A lantern the table can light.
 license: CC-BY-4.0
+modules:
+  - { id: lantern, entry: src/lantern.ts }
+```
+
+`src/lantern.ts`：
+
+```ts
+import { defineModule } from "loreweaver/module";
+
+let lit = false;
+
+export default defineModule({
+  id: "lantern",
+  create() { lit = false; },
+  load(snapshot) { lit = (snapshot as { lit: boolean }).lit; },
+  save() { return { lit }; },
+
+  on: {
+    turnStart(_event, fx) {
+      fx.inject(lit ? "The lantern is lit." : "The lantern is dark.");
+    },
+  },
+
+  commands: {
+    light: {
+      title: "Light the lantern",
+      run(_args, who, fx) {
+        lit = true;
+        fx.fact({ text: `${who.member?.name ?? "Someone"} lights the lantern.` });
+        return { text: "The lantern is lit." };
+      },
+    },
+  },
+
+  views: {
+    state: { title: "Lantern", schema: { type: "object" }, for: () => ({ lit }) },
+  },
+});
+```
+
+这个模组每回合告诉守秘人灯亮没亮（`fx.inject`），给玩家一条命令（`lantern/light`），再发布一个视图（`lantern/state`），之后的面板会读它。它的状态靠 `save` 和 `load` 撑过服务器重启。
+
+**构建：**
+
+```sh
+loreweaver pack lantern
+```
+
+它会在当前目录写出 `lantern-0.1.0.lwpack`（用 `--out <文件>` 指定位置），并打印构建结果：`{"ok":true,"out":…,"sha256":…,"trust":{…}}`。构建器把 `src/lantern.ts` 和它导入的一切打成一个文件 `modules/lantern.js`；`src/` 本身不进压缩包。同一个源目录永远构建出同样的字节。
+
+**安装。** 两条路，检查完全一样。
+
+- *在聊天里*，以房间管理员身份：扩展包装到正在运行的服务器上，并立刻在你的房间里启用。路径是**服务器**磁盘上的路径（`https://` 链接或 `gh:owner/repo[@tag]` 也行）：
+
+  ```
+  .pack install /path/to/lantern-0.1.0.lwpack
+  ```
+
+  回复就是用文字写出的信任卡（下面是英文界面的原文）：
+
+  ```
+  Installed The Lantern (lantern 0.1.0) on this server.
+  It is enabled in this room.
+  It runs code on this server, with no sandbox: modules lantern.
+  ```
+
+  中文界面下是「已在服务器上安装 提灯（lantern 0.1.0）。」「已在本房间启用。」「它会在这台服务器上运行代码，没有沙箱：模组 lantern。」整桌只会听到一行：「已安装并启用扩展包：提灯。」
+
+- *在命令行里*，以运营者身份。不加 `--yes` 时只打印信任卡（JSON），什么都不写：
+
+  ```sh
+  loreweaver install lantern-0.1.0.lwpack          # 只看信任卡，不写任何东西
+  loreweaver install lantern-0.1.0.lwpack --yes    # 安装
+  loreweaver packs                                 # 列出已安装的扩展包
+  ```
+
+  从命令行安装不会在任何房间启用，正在运行的服务器要等下次启动才看得到它。之后由房间管理员启用：`.pack enable lantern`（中文写法 `.扩展包 启用 lantern`）。
+
+**用起来。** 任何玩家输入：
+
+```
+.lantern/light
+```
+
+这位玩家收到命令的回答（*The lantern is lit.*），整桌看到这条事实（*Ada lights the lantern.*），从下一回合起守秘人的提示词里写着灯是亮的。模组命令只有一种文字写法：完整的 id，要带参数时后面跟一个 JSON 对象：`.lantern/light {"hours": 2}`。客户端也会在 `commands` 视图里列出模组命令，所以 `.help` 能看到它。
+
+## 2. 改了之后重新安装
+
+3.0 没有热重载的开发房间，也没有单独的检查命令：改完就重新构建、重新安装。构建器跑的检查和服务器一样，所以能构建出来的扩展包就能装上（除非服务器比扩展包的 `engine` 最低版本还旧）。
+
+同一个版本不能装两次（`already_installed`）。两种办法：
+
+- **升版本号**（`0.1.1`，或者预发布版本 `0.1.0-dev.2`），构建，然后在聊天里再 `.pack install` 一次。新版本在运行中的服务器上替掉旧版本，每个启用了它的房间都会重载自己的工作线程，从此跑新版本。模组从保存的状态开始（`load`）。
+- **在命令行里：** `loreweaver uninstall lantern`，再 `loreweaver install … --yes`，然后重启服务器。卸载只能由运营者在命令行里做。
+
+## 3. 测试模组
+
+模组用 SDK 的测试宿主在 `bun test` 下测试：和房间工作线程用的是同一个运行器，不需要服务器。SDK 就是本仓库的 `sdk/` 目录，还没发布到 npm，所以扩展包的源目录要依赖一份检出：
+
+```json
+{ "private": true, "devDependencies": { "loreweaver": "file:../loreweaver/sdk" } }
+```
+
+（路径换成你那份检出里的 `sdk/`。）然后 `bun install`，在模组旁边写个测试：
+
+```ts
+import { expect, test } from "bun:test";
+import { createTestHost, who } from "loreweaver/testing";
+
+import lantern from "./lantern.ts";
+
+test("lighting the lantern tells the table", async () => {
+  const host = createTestHost(lantern);
+  const run = await host.command("light", {}, who("Ada"));
+  expect(run.facts.map((fact) => fact.text)).toEqual(["Ada lights the lantern."]);
+  expect(await host.view("state", who("Ada"))).toEqual({ lit: true });
+});
+```
+
+`package.json`、`node_modules/` 和测试文件都可以放在源目录里：构建器只读清单里点了名的文件。测试宿主的说明在 [sdk/README.md](../sdk/README.md#testing-a-module)（英文）。
+
+## 4. 每一种内容
+
+这盏灯长成一个小扩展包，每种内容都有。完成后的目录：
+
+```
+lantern/
+├── pack.yaml
+├── src/lantern.ts
+├── cards/old-quarter.lorecard.json    一张世界卡：设定、一条秘密、一个变量
+├── rules/lantern-rules.yaml           基于 CoC 7 版的规则包补丁
+├── skills/lamplighter/SKILL.md        给守秘人的技能
+├── ui/panels.yaml                     一个面板
+├── presentation.yaml                  演出包
+├── art/lantern.png
+└── sound/rain.ogg
+```
+
+清单：
+
+```yaml
+manifest_version: 3
+id: lantern
+version: 0.2.0
+name: { en: The Lantern, zh: 提灯 }
+description: { en: A dark quarter and the lantern that lights it., zh: 一片黑街，和照亮它的一盏灯。 }
+authors: [You]
+license: CC-BY-4.0
+engine: { protocol: "3.0" }
+modules:
+  - { id: lantern, entry: src/lantern.ts }
 contents:
-  cards: [cards/harbour-bell.lorecard.json]
+  cards:
+    - { path: cards/old-quarter.lorecard.json, kind: world, notes: { en: Import as the world., zh: 作为世界导入。 } }
+  rulepacks: [rules/lantern-rules.yaml]
+  skills: [skills/lamplighter]
+  panels: [ui/panels.yaml]
+  presentation: [presentation.yaml]
 ```
 
-```console
-$ uv run python -m app --pack harbour-bell/
-Packed harbour-bell@0.1.0 -> …/harbour-bell/harbour-bell-0.1.0.lwpack
-   sha256: caeb3bc8e949a887b1c9b64dcf8565413c8120ab7ef1a07658f585c93410cd98
-📦 The Harbour Bell — harbour-bell@0.1.0
-   A one-shot for two to four investigators.
-   by ada · license: CC-BY-4.0
-   contains: 0 skill(s), 0 rulepack(s), 1 card(s), 0 lorebook(s), 0 UI panel(s), 0 asset(s) (0.0 MB) · hooks code: no · EJS templates: no
-Contains 1 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
-```
+图片和声音不用写进 `assets`：演出包和面板点名的文件都会跟着扩展包走。只有想给文件加标题、许可证或标签，或者要带一个别处都没点名的文件时，才写进 `assets`。
 
-最后那行值得停一下，第 1 节会解释。另外注意你**没写**的东西：文件清单、哈希、信任声明。这些都是构建时算出来的，安装时会重新算一遍，对不上就拒绝——所以一个手工拼出来的压缩包没法少报它带了什么。
+### 4.1 卡和设定
 
----
+设定靠卡进入房间：酒馆卡（`.png` 或 `.json`），或 Loreweaver 自己的 `*.lorecard.json`。3.0 没有单独的世界书文件；世界书放在卡的 `character_book` 里带进来。每个卡条目要写明这张卡是 `world` 还是 `character`，构建器会拿卡本身去核对（`card_kind_mismatch`）：带任何世界机制的卡——变量声明、模板、秘密条目、带类型的变量——就是世界卡。
 
-## 1. 模组文档：`*.lorecard.json`
-
-原生卡是一个扁平的 JSON 对象。它是模组自己的格式，所以能装下酒馆卡没有安全位置放的东西：守秘人专属设定、类型化追踪器、可认领的演员表、按条件触发、稳定 id、钩子脚本。
+`cards/old-quarter.lorecard.json`：
 
 ```json
 {
   "format": "loreweaver.card",
   "format_version": 1,
-  "name": "汐浦送灯",
-  "description": "一九二五年，浙东沿海渔镇汐浦。十二年一度的迎潮节为期三日……",
-  "scenario": "调查员一行乘晚船抵达汐浦，入住望潮客栈，正逢迎潮节前夜。",
-  "tags": ["调查", "民俗恐怖", "coc7", "三日祭"],
-  "opening":  "…",
-  "alternate_openings": ["…"],
-  "author_notes": "…",
-  "worldbook": [ … ],
-  "variables":  [ … ],
-  "pregens":    [ … ],
-  "hooks":      [ "on('variables_changed', …)" ]
+  "name": "The Old Quarter",
+  "description": "A maze of streets where the gas lamps went out a year ago.",
+  "opening": "Fog rolls up from the river. Somewhere ahead, a lantern swings.",
+  "worldbook": [
+    { "title": "The lamplighters", "keys": ["lamplighter", "lamp"], "content": "The lamplighters' guild still meets on Tallow Street." },
+    { "title": "Who put out the lamps", "keys": ["lamps went out"], "secret": true, "content": "The guild master cut the gas to hide what walks at night." }
+  ],
+  "variables": [
+    { "id": "dread", "kind": "number", "labels": { "en": "Dread", "zh": "恐惧" }, "minimum": 0, "maximum": 10, "default": 0 }
+  ]
 }
 ```
 
-### 顶层字段
+启用扩展包并不会导入里面的卡，要由房间管理员导入：
 
-| 字段 | 必填 | 含义 |
-|---|---|---|
-| `format` | 是 | 必须是字面量 `"loreweaver.card"` |
-| `format_version` | 是 | `1`。更老的文档会走已注册的迁移升上来；比当前构建更新的会干脆拒绝，而不是读一半 |
-| `name` | 实际上要 | 模组名 |
-| `description` | | 一句话说清这是什么 |
-| `personality` | | 人物卡用的；模组一般留空 |
-| `scenario` | | 第零回合时的处境 |
-| `tags` | | 自由字符串 |
-| `opening` | | 模组开场文本 |
-| `alternate_openings` | | 别的切入方式 |
-| `dialogue_examples` | | 语气示例，人物卡用 |
-| `author_notes` | | 给守秘人的说明，不属于设定 |
-| `worldbook` | | 设定条目，见下 |
-| `variables` | | 类型化追踪器，见下 |
-| `pregens` | | 可认领的演员表，见下 |
-| `hooks` | | JavaScript 源码，或者 `{code: "…"}` 对象 |
-
-要注意的上限：200 条世界书条目、每条 16,000 个字符、64 个变量、8 个预设角色。这几条和房间导入的上限是同一组数，处理方式也一样：条目或变量超量，会在解析/打包时直接失败；单条超过 16,000 个字符，则和房间导入一样只跳过这一条并报告。**条目级**的垃圾也是这样——一条坏掉的设定行、一个不可用的变量定义，会被跳过并记成警告，不会因为一行毁掉整次导入。
-
-### `worldbook[]`——作者写下来的设定
-
-```json
-{
-  "id": "xipu-town",
-  "title": "汐浦镇概览",
-  "content": "汐浦倚山面海，一条石板长街自码头通到山脚灯官祠。要处五所：望潮客栈…",
-  "keys": ["汐浦", "镇", "街", "码头", "地图"],
-  "category": "lore",
-  "secret": false,
-  "constant": true,
-  "priority": 10,
-  "enabled": true
-}
+```
+.import world lantern cards/old-quarter.lorecard.json
 ```
 
-| 字段 | 含义 |
-|---|---|
-| `id` | **稳定、归作者所有**，值得写。它和包 id 一起构成跨包引用句柄 `<pack-id>#<entry-id>`——连载模组的第二部就是靠这个指向共享世界的规范条目，而不是把它们复制一份。跨版本请保持不变 |
-| `title` | 给守秘人看的标题，不写会变成 `Untitled Lore` |
-| `content` | 条目正文。必填——空的会被跳过并给一条警告 |
-| `keys` / `secondary_keys` | 触发关键词。次要关键词会给条目加门：`selective_logic` 可选 `and_any`（默认）/ `and_all` / `not_any` / `not_all` |
-| `secret` | **守秘人专属。** 只在管理员导入时生效；玩家路径的导入会结构性地丢掉它，所以把一条标成 secret 永远不可能扩大任何人的可见范围 |
-| `constant` | 常驻。上传的文件会被强制关掉——一条常驻条目会不管关键词地往每一次提示里塞自己 |
-| `condition` | 一个表达式，以 `@@if` 装饰行的形式带进去。超过 500 字符它就永远不会触发，并且你会收到一条这么说的警告 |
-| `priority`、`enabled`、`probability`（0–100，由真代码掷）、`case_sensitive`、`match_whole_words`、`scan_depth`、`position`（`before`/`after`）、`sticky`、`cooldown`、`delay` | 酒馆世界书那套触发语义，都能导入也都生效 |
+（中文写法 `.导入 世界 lantern cards/old-quarter.lorecard.json`。）回复会说导入了 2 条设定（1 条秘密）、0 条变量声明、1 段开场。秘密条目归守秘人，玩家永远看不到（玩家的 `.lore list` 只列出一条）。玩家可以把已启用扩展包里的 `character` 卡导入成自己的角色：`.import character <扩展包> <卡的路径>`。两种导入各带来什么，见 [cards.zh.md](cards.zh.md)。
 
-**把秘密写成 `secret: true` 的条目，而不是写成一段“请守秘人别说出去”的正文。** 投影层认的是这个标志。
+### 4.2 规则包补丁
 
-### `variables[]`——归引擎管的追踪器
-
-```json
-{"id": "祭典日",   "kind": "number", "labels": {"en": "Festival Day", "zh": "祭典日"},
- "default": 1, "minimum": 1, "maximum": 3, "visibility": "player"},
-{"id": "仪式警觉", "kind": "number", "labels": {"en": "Rite Alert", "zh": "仪式警觉"},
- "default": 0, "minimum": 0, "maximum": 5, "visibility": "keeper"}
-```
-
-`kind` 可以是 `number` / `bool` / `text` / `enum`。`visibility: player` 会把它放上队伍面板；`visibility: keeper` 的意思是它**根本不会到达任何玩家传输**——在引擎内部就被过滤掉了，不是靠客户端藏。每一次写入都会检查边界，包括模型要求的写入。id 可以是中文。
-
-这就是“追踪器”和“笔记”的区别：追踪器是引擎会核对、限制在范围内、存下来并按人过滤的状态。把你结局要卡的东西声明成追踪器。
-
-### `pregens[]`——玩家可以认领的演员表
-
-```json
-{"name": "顾晚棠", "concept": "沪上小报记者，为「渔镇民俗」专栏而来",
- "notes": "侦查、图书馆见长；嘴快；潮汐学 5"}
-```
-
-可以再加 `skills: {"侦查": 70}` 覆盖系统默认值。卡表是下游用目标系统的默认值加上这些覆盖确定性地生成的，不经过模型。玩家用 `.pc claim 顾晚棠` 认领；认领是排他的，释放会把卡表恢复成原样。
-
-```console
-$ .pc claim 顾晚棠
-You now play “顾晚棠” (coc7-xipu) — the sheet is saved under you and set active.
-```
-
-### `hooks[]`——行为，不是文本
-
-```js
-on('variables_changed', (e) => { emitPanel('xipu-songdeng/dengzhen', {writes: e.writes}); });
-```
-
-沙箱里的 JavaScript，挂在回合生命周期上。完整 API 在 [hooks.zh.md](hooks.zh.md)。有一个坑值得在这里再说一遍，因为一次实测为它丢了一整场的计量条：
-
-```js
-// 错的——解释器每回合重建，所以这个数会永远读到 1，而且不报错。
-on('turn_start', () => { globalThis.__turns = (globalThis.__turns || 0) + 1; … })
-
-// 对的——持久状态归引擎，钩子只是去要。
-on('turn_start', () => {
-  incvar('潮感', 1);
-  emitUI([{kind: 'meter', label: '潮感', value: Number(getvar('潮感')) || 0, min: 0, max: 40}]);
-});
-```
-
-引擎持有两种持久状态，按谁来读它来选。牌桌或守秘人应该看到的状态量是**变量**（就是上面这种——在 `variables[]` 里声明）。只有你的钩子自己读的机制——账本、队列、状态机内部——改放进钩子的私有存储，这样它不占提示词的一行、不占面板，也不占一个变量位：
-
-```js
-on('dice_rolled', (e) => {
-  const tally = getstate('tide_rolls') ?? { count: 0 };   // 一份新拷贝，或 undefined
-  tally.count += e.rolls.length;
-  setstate('tide_rolls', tally);                          // 会持久化，只有钩子看得见
-});
-```
-
-`getstate`/`setstate` 在一个短键下存任意 JSON 值（`setstate(key, null)` 删除它）；上限和确切语义见 [hooks.zh.md](hooks.zh.md#私有状态getstate--setstate)。
-
-**守秘人需要在本回合拿到钩子的答案时，写一个模组动作。** 有三样东西看着像，其实不是一回事：
-
-- **`dice_rolled`（以及其他事件）**——在叙述定稿*之后*才响应。适合守秘人不据此叙述的记账：计数、刷新面板、为下一回合埋个凶兆。不适合守秘人马上要说出口的数——它早已说出了自己猜的那个。
-- **模组动作（`defineAction`）**——守秘人在回合中途以 `module_action` *调用*它，引擎掷出声明的骰子，你的处理器按房间状态记下结果，并返回守秘人据以叙述的那一行。适合模组机制：行军账本、讨价还价的桌面、仪式进度。
-- **玩家动作**（带 `player: true` 的 `defineAction`）——同样的机制，但由*玩家*用 `.act` 执行，牌桌立刻看到结果，不需要守秘人跑一轮：采集、制作、移动标记，模拟里任何 MUD 节奏的小动作。它的结果玩家可见，守秘人在下一回合开始时读到它。
-- **规则包脚本流程**（带 `script:` 的 `subsystems:`）——*规则系统*层面的机制：不接受参数，读当前角色的卡表，返回一组封闭词汇的效果并应用到那张卡表上。适合一个系统自己的检定（类似理智的损失、成长检定）；它读写不了模组的状态。
-
-```js
-defineAction('book_hour', {description: 'Book one march hour; returns the booked line',
-                           params: '{pace: "fast"|"slow"}', rolls: {march: '8d10'}}, (args, e) => {
-  const crossed = (getstate('crossed') ?? 0) + e.rolls.march.total;
-  setstate('crossed', crossed);
-  return `Booked: ${crossed} across.`;
-});
-```
-
-完整契约见 [hooks.zh.md](hooks.zh.md#模组动作defineaction)。
-
-### 你的模组为什么是一张“世界卡”
-
-再看一眼构建输出：`Contains 1 WORLD card(s)`。你从来没声明过这件事，是构建**检测**出来的——因为这张卡带了钩子、类型化变量、secret 设定或者 EJS，任何一样会重编程整张牌桌的东西。
-
-由此而来的是**拆卡**。如果你从酒馆过来，这条大概是最让人意外的一条：
-
-- **`.import <文件> pc|companion`**——谁都可以做。它只取人物那一半。世界机制会被*结构性剥离*，回执还会逐项列出剥掉了什么：
-
-  ```console
-  Imported "潮脉盘" as your player character (coc7-xipu). Key stats: STR 50, CON 45, …
-  World machinery was left out of this character import: 0 hook script(s), 1 variable declaration(s),
-  0 template block(s), 0 keeper-only entr(y/ies). Module content is imported by the room admin: `.import <card file> world`.
-  ```
-
-- **`.import <文件> world`**——只有管理员能做，而且刻意不是模型工具。这才是一个模组真正落地的方式：
-
-  ```console
-  Imported "汐浦送灯" as world content: 16 lore entries (keeper trust), 0 variable declaration(s) seeded,
-  1 hook script(s) installed.
-  Typed variables: 3 tracker(s) defined from the native bundle.
-  Cast registered (3): 顾晚棠, 白榆生, 陈九鲤 — players claim with `.pc claim <name>`.
-  ```
-
-照着这条边界写。任何会改变整桌人怎么玩的东西都属于世界那一半，而放它进来的人是房间管理员。
-
----
-
-## 2. 房规：给系统打补丁，别 fork
-
-你的模组要加一个技能，天黑之后大失败的区间还要更狠一点。这不是一个新规则系统，是一个补丁。`extends:` 会把你的文件深合并到父系统之上——子的赢，映射递归合并，显式的 `null` 删掉继承来的键，列表整个替换。
-
-`rulepacks/coc7-xipu.yaml` 全文：
+要加房规的扩展包，给内置规则系统打补丁，而不是整个重写。`rules/lantern-rules.yaml`：
 
 ```yaml
 extends: coc7
-names: [coc7-xipu, 汐浦规则]      # 什么名字能解析到这个系统
-set_keys: [xipu]                  # `.xipu` 之类用什么词选中它
-defaults:
-  潮汐学: 5                        # 一个新技能，起始值 5
-alias:
-  潮汐学: [tidology, tide lore, 观潮, 潮学]
-display:
-  en:
-    潮汐学: Tidology              # 只影响显示，永远不参与结算
-resolution:
-  variants:
-    xipu_night:                   # 节庆夜的房规档位
-      ranks:
-        - {id: crit,    when: "roll == 1", success: true, critical: true, tier: 5}
-        - {id: fumble,  when: "roll == 100", fumble: true, tier: 0}
-        - {id: extreme, when: "roll <= target && roll <= floor(raw_target / 5)", success: true, tier: 4}
-        - {id: hard,    when: "roll <= target && roll <= floor(raw_target / 2)", success: true, tier: 3}
-        - {id: regular, when: "roll <= target", success: true, tier: 2}
-        - {id: fumble,  when: "roll >= 93 && target < 50", fumble: true, tier: 0}
-        - {id: fumble,  when: "roll >= 98", fumble: true, tier: 0}
-        - {id: fail,    tier: 1}
-subsystems:
-  random_madness:
-    tables:
-      xipu:
-        display: {en: Xipu festival madness, zh: 汐浦狂乱}
-        aliases: [汐浦, xipu]
-        entries:
-          - 潮声入耳：调查员耳中潮声不退，旁人说话都像隔着一层水。
-          - 灯影追随：调查员坚信有一盏无人提的灯在身后跟着自己。
-          # …
-commands:
-  xipu: {action: make_char}                                # `.xipu` 在这个系统下建卡
-  chaokuang: {tool: random_madness, args: {table: xipu}}   # `.chaokuang` 从上面那张表抽
+names: [Lantern Rules]
+defaults: { Lamplore: 10 }
 ```
 
-这换来三件事，都是在终端里验过的：
+文件名就是规则系统的 id（`lantern-rules`）。`extends:` 把补丁深度合并到底本上（底本是内置的 `coc7`、`dnd5e`、`wod`，或者同一个扩展包里的另一个规则包）：映射逐层合并，列表和标量整体替换，`null` 删除继承来的键。规则系统不按扩展包启用：扩展包装好后，房间用 `.rule system lantern-rules`（`.规则 系统 lantern-rules`）选它。用了 2.x 规则脚本通道（`resolution.script`、`script` 子系统）的规则包会被拒收：3.0 没有这个通道。格式见 [rulepacks.md](lwf/formats/rulepacks.md)，`extends:` 在 §14。
 
-```console
-$ .xipu
-Created coc7-xipu character: Adventurer
+### 4.3 技能
 
-$ .rule
-Current house-rule ladder: 0
-Available: dg, rule1, rule2, rule3, rule4, rule5, xipu_night
-
-$ .rule xipu_night
-House-rule ladder set to xipu_night
-
-$ .ra 潮汐学
-Check Tidology: target 5 (effective 5), roll 13 -> Failure
-```
-
-注意最后一行：技能在数据里是中文，在屏幕上是英文，因为 `display` 只管呈现，规范名才是身份。一个包不需要在语言之间做选择。
-
-> **一个命名空间上的细节。** 在 `difficulties.*.target` 表达式里，`target` 是**原始**值；在 rank 的 `when:` 表达式里，`target` 是难度调整之后的值——上面那些档位同时用了 `target` 和 `raw_target`，原因就在这儿。
-
-**补丁必须有自己的 id。** 发现机制不允许用户文件盖住内置的 id，所以你没法“重定义 coc7”；你定义的是 `coc7-xipu`，你的模组跑那个。
-
----
-
-## 3. 一整个系统，也是数据
-
-有时候机制确实是新的。潮占——灯官的问潮之术——是一套数成功数的 d10 骰池，和 d100 一点关系没有，而它就是一个文件：
-
-```yaml
-names: [chaozhan, 潮占]
-set_keys: [chaozhan]
-defaults: {}
-resolution:
-  version: 1
-  roll: "{deng}d10>=7"          # 骰池：掷 deng 个 d10，数 7 以上的
-  target: none
-  compare: ">="
-  params:
-    deng: {min: 1, max: 9, default: 3}
-  ranks:
-    - {id: nichao,   when: "successes == 0 && ones >= 2", fumble: true, tier: 0}
-    - {id: gongming, when: "successes >= 3 && ones == 0", success: true, critical: true, tier: 3}
-    - {id: yingchao, when: "successes >= 1", success: true, tier: 2}
-    - {id: mochao,   tier: 1}
-  margin: successes
-  variants:
-    miji:                        # 第三夜的密祭，判得更严
-      ranks:
-        - {id: nichao,   when: "ones >= 1 && ones >= successes", fumble: true, tier: 0}
-        - {id: gongming, when: "successes >= 4 && ones == 0", success: true, critical: true, tier: 3}
-        - {id: yingchao, when: "successes >= 2", success: true, tier: 2}
-        - {id: mochao,   tier: 1}
-labels:
-  en: {nichao: [Adverse Tide], gongming: [Resonance],
-       yingchao: {display: Favorable Tide, markers: []},
-       mochao:   {display: Silent Tide,    markers: []}}
-  zh: {nichao: [逆潮], gongming: [共鸣],
-       yingchao: {display: 应潮, markers: []},
-       mochao:   {display: 默潮, markers: []}}
-expertise:
-  en: "# Tide Divination (潮占)\nThe lantern-diviner reads the festival tide…"
-  zh: "# 潮占\n灯官问潮：点起一至九盏灯掷占，数应答之水。"
-```
-
-**这套 DSL 一段话说完。** `roll` 是骰点表达式，引擎按种子掷它并记录。`ranks` 是一串有序的纯条件——第一个命中的赢，最后那条没有 `when:` 的是兜底。可用的名字是一个闭合集合：`roll`（总数）、`dice`（自然骰，从 0 起算，用 `dice[0]` / `dice.0`、`dice[1]` 取）、`target`（难度调整后）、`raw_target`（调整前）、`modifier`，以及骰池用的 `successes` / `ones`。`success` / `critical` / `fumble` 这几个标志是**你自己**声明的：引擎和 AI 只读这些标志和 `tier` 这个序数，从不读你的 rank id——所以一个系统可以自造词汇而不影响下游任何东西。`expertise` 是告诉守秘人该怎么跑它的那段话。
-
-**骰池参数**（这里的 `deng`）由守秘人的检定工具传，仪式场景就是这么要一次“五盏灯”的问占。玩家侧的点命令那条通道把参数当技能名解析，所以骰池系统的参数是守秘人在设，不是玩家。
-
-**打错字在构建时就炸，不会拖到牌桌上。** 引用到的名字是静态提取的，所以一个短路的 `&&` 藏不住拼写错误直到三场之后有人第一次检定：
-
-```console
-$ uv run python -m app --pack harbour-bell/
-Pack build failed: rulepack bell: rulepack 'bell': resolution.ranks[0].when references unknown name(s) ['rol']
-```
-
-**删掉文件就等于删掉系统**——这是“规则即数据”的验收标准，对内置包同样成立：
-
-```
-with coc7 : ['coc7', 'dnd5e', 'wod']
-deleted   : ['dnd5e', 'wod']
-load coc7 : ValueError unknown rulepack: coc7
-```
-
-如果 DSL 确实表达不了你的系统，`resolution: {script: resolver.js}` 会落到 QuickJS 沙箱：引擎把声明好的骰子先掷了，把点数递进去，你的脚本返回一个判定，引擎再核对一遍、把超界的值拉回范围内。随机性和状态永远不出引擎，而信任卡会披露你这个包带了脚本。
-
----
-
-## 4. 面板：牌桌上的仪表
-
-`ui/panels.yaml`，在 `contents.panels` 里声明。每个包最多 16 个面板。下面是这个模组完整的面板文件，你需要的机制它基本都覆盖了：
-
-```yaml
-panels:
-  - id: jieqing-richeng
-    title: {en: Festival Schedule, zh: 节庆日程}
-    slot: sidebar              # sidebar | tray | modal
-    audience: all              # all | player | keeper——在服务端解析
-    blocks:
-      - {kind: stat,  label: {en: Festival Day, zh: 祭典日}, value: {$var: 祭典日}}
-      - {kind: meter, label: {en: Tokens, zh: 信物}, value: {$var: 信物}, min: 0, max: 3}
-      - {kind: divider}
-      - {kind: text, text: {en: "Day 1 greet · Day 2 air · Day 3 send",
-                            zh: "初一迎灯 · 初二曝灯 · 初三送灯"}}
-      - {kind: text, style: warning, visible_when: "祭典日 >= 3",
-         text: {en: "Tonight the lanterns go out on the tide. What you have counted is what you have.",
-                zh: "今夜送灯。数到的就是数到的。"}}
-
-  - id: shouzhong-wu
-    title: {en: In Hand, zh: 手边物}
-    slot: tray
-    audience: all
-    blocks:
-      - {kind: image, src: ui/dengzhen/canlye.png,
-         caption: {en: "Lantern manual, torn page", zh: 灯谱残页},
-         alt: {en: "A brush-drawn array of nine lanterns, one of them unlit"}}
-      - {kind: text, style: quote, text: {en: "Count them yourself.", zh: 自己数一数。}}
-
-  - id: dengzhen
-    title: {en: Lantern Array, zh: 灯阵图}
-    slot: modal
-    audience: all
-    entry: ui/dengzhen/index.html                                  # 二级
-    assets: [ui/dengzhen/index.html, ui/dengzhen/app.js, ui/dengzhen/canlye.png]
-    fallback:                                                       # 必填
-      - {kind: text, text: {en: "The lantern array chart is best viewed in a rich client;
-                                the keeper will describe it.", zh: "灯阵图请在富客户端查看；终端下由守秘人描述。"}}
-      - {kind: badge, label: {en: "Nine lanterns", zh: "九灯之阵"}, tone: info}
-```
-
-**区块种类**：`meter`、`stat`、`badge`、`text`、`divider`、`choices`、`image`，再加上演出模板 `letter`、`clipping`、`map_pin`、`title_card`。全是声明式的。富客户端会把 `letter` 渲染成信纸，终端客户端把同样的字段打成几行。你不用写标记，也不用写两套。
-
-**活的数值**：任何标量字段都可以写成 `{$var: <id>}`，对着看的人自己那份 `state.variables` 解析。这里的规矩是拿不准就不显示：如果那个变量对**这个人**不存在或者被藏着：若该字段是必填的，**整个区块**都不画出来；若是可选字段（比如图注），只丢掉那个字段，区块保留。面板永远没法扩大可见范围。
-
-**一张手作物就是一个 `image` 区块**，不用为它手写一个页面。`src` 是包内的相对路径，构建时它会和其它素材一起按内容哈希收进包里，清单里记着哈希。你不用写哈希，而一个面板也只能指向它自己包里的图。
-
-**`visible_when`——按值开关。** `{$var}` 只能表达“不存在就藏”，`visible_when` 能表达“到第三天才显示”。它在**客户端**求值，因为数值是运行时会动的，服务端做不到按人预过滤。这意味着每个客户端都得是同一套语法的实现，所以语法被刻意做得很小：
-
-- 比较 `=== !== == != >= <= > <`；逻辑 `&& || !`（也可以写 `and` / `or` / `not`）；
-- 字面量：数字、带引号的字符串、`true` / `false` / `null` / `undefined`；
-- 裸的点分路径（可以是中文），每一段都按变量 **id** 查；查不到读作 `null`。
-- **构建时会拒绝的**：算术、任何函数调用（包括 `getvar()`）、方括号取下标。这些都是两个客户端可能悄悄给出不同答案的地方，而“能不能看见”上的悄悄分歧就是剧透。要写 `day >= -1`？反过来写成 `day < 0`。
-
-两条作者守则：
-
-1. **玩家面板的 `visible_when` 只能引用玩家可见的变量。** 条件字符串是跟你的包一起发的，每个人的客户端里都有——所以在玩家面板的条件里点名一个守秘人专属追踪器，等于泄漏了它的**名字**，哪怕它的值永远不会送过去。（值确实不会：隐藏变量在求值前就被丢掉了，所以那个区块只是永远不显示。）
-2. **判不出来就藏。** 条件报错，或者客户端算不了，都会把区块藏掉。写条件的时候，让它在变量缺失时也读得通。
-
-**二级面板**是关在沙箱 iframe 里的真 HTML/JS/CSS，用来做可交互的地图或者定制卡表。它必须声明自己带的每一个资源，以及一个显式的一级 `fallback`（或者 `fallback: null`，纯文本客户端会渲染成一行“请在富客户端查看”）。面板的身份就是在看它的那个玩家：进来的数据只有那个人过滤后的那份；出去时一个 `roll` 意图，会以那个玩家的身份走真的骰子引擎。
-
-面板进房间要管理员点头——装上不等于启用：
-
-```console
-$ .panels
-Installed panel packs:
-[off] xipu-songdeng — 4 panel(s)
-
-$ .panels enable xipu-songdeng
-Enabled UI panels from pack: xipu-songdeng
-```
-
----
-
-## 5. 演出资料包：给你的模组配一个导演
-
-面板是乐器，**演出资料包**是给演奏它们那个演员的创作简报。演出导演在剧情*节拍*上醒来——场景切换、幕次翻篇、手作物出现、极端出目——决定这桌人看见什么、听见什么。它不叙事、不掷骰、不读守秘人知识：它的全部输入就是投影过的玩家可见流，加上这个文件。它泄不出它从来没收到过的东西。
-
-`ui/presentation.yaml`，在 `contents.presentation` 里声明，一个包一份：
-
-```yaml
-version: 2
-generation: allow            # 或者 pack_only——你的否决权，见下
-style:
-  keywords:
-    zh: "水墨淡彩, 靛青与赭石, 一九二五年浙东渔镇, 湿冷海雾, 纸本质感"
-    en: "ink wash with muted color, indigo and ochre, 1925 coastal Zhejiang fishing town, damp sea fog, paper grain"
-  banned: [text overlays, modern clothing, photographic realism, visible light sources beyond lanterns]
-subjects:
-  - id: gu-wantang
-    kind: npc                                     # npc | location | item
-    name: {zh: 顾晚棠, en: Gu Wantang}
-    ref: assets/gu-wantang.png                    # 定妆参考图
-    prompt: "a woman in her thirties, dark plain jacket over a pale collar, hair damp, standing very still"
-  # 没有 ref：可以在字幕里点名，但永远不会被画出来。
-  - {id: shipu,   kind: location, name: {zh: 石埠, en: The stone quay}}
-  - {id: zhu-deng, kind: item,    name: {zh: 主灯, en: The head lantern}}
-audio:
-  - {id: chao-yong, layer: bgm,      asset: assets/chao-yong.mp3, title: 潮涌}
-  - {id: ye-wu,     layer: ambience, asset: assets/ye-wu.mp3,     title: 夜雾港湾}
-  - {id: jing-xian, layer: sfx,      asset: assets/jing-xian.mp3, title: 惊弦}
-```
-
-出图这件事由三条规矩管着，前两条是结构性的，不是模型可以选择忽略的请求：
-
-- **定妆强制。** 没有 `ref` 的对象永远不会被生成。AI 美术在模组里难的从来不是接口，是**一致性**：你的参考图和风格关键词会跟着*每一次*请求走，而一个你没授权的对象，根本没法被请求。
-- **宁缺毋滥。** `generation: pack_only` 是你的否决权——导演只用你自己的美术做舞台。运营方的任何设置都覆盖不了它；一个房间跑两个模组时，只要有一个是 `pack_only`，整个房间的生成就停了。
-- **慢菜先备。** 导演会提前把它预计要用的对象热起来，所以一个节拍端上来的画，是在它之前那几个安静回合里做好的。这个你不用配，你把对象命名出来，它就成为可能。
-
-资料包和其它东西走同一条素材流水线，而信任卡会同时披露对象数量，以及你的模组到底会不会花运营方的出图预算。房间用**同一个** `.panels enable <packId>` 开启它——演出是模组在布置牌桌，不是第二个开关。一个房间里的模组都不带资料包，就永远不会唤醒导演，所以在有作者提出要求之前，这一层不花任何钱。
-
----
-
-## 6. 一个技能：怎么“跑”这个模组
-
-故事写在卡里，程序写在 `SKILL.md` 里——Claude Code 那个形状的技能，YAML frontmatter 加 Markdown，在房间启用它期间会拼进守秘人的提示。
+技能是写给守秘人的文字：技能在房间里启用期间守秘人会读到的一段 Markdown，外加一份可选的、它解锁的工具名单。`skills/lamplighter/SKILL.md`：
 
 ```markdown
 ---
-name: 迎潮节主持
-description: Procedure guide for running 《汐浦送灯》 — act pacing, rule-system switching,
-  festival-night house rules, madness table, ending-gate enforcement, and session-zero setup.
+name: Lamplighter
+name-zh: 点灯人
+description: Run the Old Quarter as a place where darkness is a threat.
+description-zh: 把旧城区当成一个黑暗本身就是威胁的地方来主持。
+allowed-tools: [generate_image]
 ---
-
-# 迎潮节主持（模组运行程序）
-
-故事内容以导入的世界卡为准。本技能只管程序。
-
-## 规则切换纪律
-- 日常检定：coc7。**入夜后**切 `.rule xipu_night`，天亮切回 `.rule 0`——切换时给一句环境暗示，不解释规则。
-- 理智：真正的恐怖暴露才掷。疯狂发作用汐浦狂乱表（`.chaokuang`）。
-
-## 结局门（硬性，缺门不发）
-C 断锚 = 信物满 3。玩家硬闯缺门结局时，在 fiction 内让门本身拦住。
+Darkness in the Old Quarter is never safe. When the lantern is out, describe sounds,
+not sights, and call for a Listen check before anything is seen.
 ```
 
-可选的 frontmatter：`allowed-tools`（把这个房间的工具集收窄到一个白名单）、`name-zh` / `description-zh`（本地化显示）、`metadata.systems`、`metadata.content-rating`。同目录下的 `hooks.js` 在技能启用期间生效。管理员按房间启用：
+目录名就是技能 id。技能能解锁的是服务器的受限工具：`generate_image`，以及 `adjust_relationship`、`set_relationship`、`get_relationships`；不认识的名字会被忽略。`metadata.content-rating: mature` 声明成人内容。房间管理员用 `.skill enable lamplighter`（`.技能 启用 lamplighter`）启用技能，`.skill list` 列出房间能启用哪些；在聊天里安装扩展包会顺带在那个房间启用它的技能。技能要写怎么*主持*这个扩展包——节奏、该藏什么、什么时候要求检定——而不是故事本身，故事在卡里。技能只是文字：`SKILL.md` 旁边的 `hooks.js` 不会运行（构建时报告为已忽略）。代码放进模组（§4.6）。格式见 [skills-hooks.md](lwf/formats/skills-hooks.md) §1。
 
-```console
-$ .skill enable yingchao-zhuchi
-Enabled Keeper skill: yingchao-zhuchi
+### 4.4 面板
+
+面板是故事旁边的界面——仪表、追踪器、地图——放在客户端的侧栏、托盘或弹窗里。它只显示看的人自己的**视图**里有的东西：内置视图（`me`、`party`、`scene`、`variables`、`characters` 等）和模组视图，比如 `lantern/state`。`ui/panels.yaml`：
+
+```yaml
+panels:
+  - id: oil
+    title: { en: The lantern, zh: 提灯 }
+    slot: sidebar
+    views: { lamp: lantern/state }
+    blocks:
+      - { kind: meter, label: { en: Oil, zh: 灯油 }, value: { $view: lamp.oil }, min: 0, max: { $view: lamp.max } }
+      - { kind: image, src: art/lantern.png, caption: { en: The lantern, zh: 提灯 } }
+      - kind: choices
+        options:
+          - { id: light, label: { en: Light it, zh: 点亮 }, command: lantern/light }
+        visible_when: "lamp.oil > 0"
 ```
 
-**写程序，别写散文。** 上面那份里最好的一句是“切换时给一句环境暗示，不解释规则”——它告诉守秘人在某个具体时刻做什么。气氛属于设定条目，这份文件是操作手册。
+- `views` 把一个短名字映射到一个视图名；`{$view: lamp.oil}` 读视图里的一条路径。路径解析不出来，这个区块就不显示（如果是可选字段，只去掉这个字段）。
+- `choices` 的选项运行一条命令（`command`，可选 `args`），以点它的那位成员的身份和权限运行。
+- `visible_when` 只管显示，不管保密——区块照样发给能看到这个面板的每个人。不该让某人看到的东西，就不能出现在他的视图里：模组的 `for(who, room)` 逐人决定这一点，`audience: admin` 让整个面板只给管理员看。
+- `repeat` 给列表里的每个元素画一个区块：`{repeat: {each: me.character.resources, as: r, block: …}}`。
+- **页面**是一个自包含的 HTML 文件（`entry: ui/chart.html`），给富客户端用。它必须声明一份模板 `fallback`（或者写 `fallback: null`），别的客户端画这份。目前还没有参考客户端运行页面，终端客户端显示的是 fallback。
 
----
+已启用扩展包的面板默认全部打开；房间管理员用 `.panels disable lantern/oil`（`.面板 停用 lantern/oil`）关掉某一个，`.panels` 列出全部。给这个面板供数据的模组在 §4.6。格式见 [panels.md](lwf/formats/panels.md)。
 
-## 7. 构建、安装、发布
+### 4.5 演出包：图片和声音
 
-### 构建
+演出包告诉演出导演——用图片和道具来布置场景的那条车道——这个扩展包的牌桌该是什么样子、什么声音。`presentation.yaml`：
 
-```console
-$ uv run python -m app --pack xipu-songdeng/
-Packed xipu-songdeng@1.0.0 -> …/xipu-songdeng-1.0.0.lwpack
-   sha256: 8c34dd524911a6f1def97fff57a51f1e9d455e695f32668053e5c5302fd51e0e
-📦 Xipu: The Lantern Sending — xipu-songdeng@1.0.0
-   A 1925 coastal-town mystery for the Tide-Greeting Festival — three days, nine lanterns, one chosen guest.
-   by loreweaver-playtest · license: MIT
-   contains: 1 skill(s), 2 rulepack(s), 2 card(s), 1 lorebook(s), 4 UI panel(s), 9 asset(s) (0.3 MB) · hooks code: yes · EJS templates: no
-Contains 2 WORLD card(s) — module machinery (hooks/variables/EJS); the room admin imports them with `.import <file> world`.
-   presentation kit: 5 picturable subject(s) — the Stage Director MAY generate images (each call spends your image-provider budget)
+```yaml
+version: 2
+style:
+  keywords: { en: "gaslight, fog, ink wash", zh: "煤气灯、雾、水墨" }
+subjects:
+  - { id: lantern, kind: item, name: { en: The lantern, zh: 提灯 }, ref: art/lantern.png }
+audio:
+  - { id: rain, layer: ambience, asset: sound/rain.ogg, title: Rain on cobbles }
 ```
 
-`--out <文件>` 指定文件名；`--json` 会多输出一行给 CI 用的机器可读结果：
+- `subjects` 是导演可以展示的人物、地点和物品（`npc`、`location`、`item`）；`ref` 是扩展包自带的那张图。`generation: pack_only` 完全不许生成图片；`templates` 限定道具种类（`image`、`title_card`、`letter`、`clipping`、`text`）。
+- `audio` 里的音效以 `<扩展包>/<音效>` 的名字加入房间的音频库，只读。由房间管理员播放：`.ambience play rain`（还有 `.bgm`、`.sfx`；`.audio list` 列出音频库）。音效的 `title` 只给管理员看。
+- `{ … }` 里的值带逗号时要加引号：`{ en: gaslight, fog }` 会被读成两个键，构建会拒收这个演出包（`unknown_key`）。
 
-```json
-{"ok": true, "id": "xipu-songdeng", "version": "1.0.0", "sha256": "8c34dd52…",
- "trust": {"skills": 1, "rulepacks": 2, "cards": 2, "lorebooks": 1, "assets": 9,
-           "asset_bytes": 282853, "has_hooks": true, "has_ejs": false,
-           "has_rules_script": false, "world_cards": 2, "panels": 4,
-           "presentation": 5, "imagegen": true}}
+图片可以是 PNG、JPEG、WebP、GIF 或 SVG（最大 8 MiB）；声音可以是 MP3、Ogg、WAV、FLAC、M4A 或 AAC（最大 128 MiB）。文件内容必须和扩展名对得上。在房间里启用后，演出包的图片和声音成为这个房间的不公开媒体：房间成员能取，别人取不到。演出包的字段见 [pack.md](lwf/formats/pack.md) §4.2。
+
+### 4.6 模组
+
+模组是扩展包的代码：扩展包信不过守秘人自己记住的规则——追踪器、时钟、命令、私密视图。它用 TypeScript 或 JavaScript 写，基于 `loreweaver/module`，运行在房间的工作线程里。这盏灯的模组长大后给上面的面板供数据：
+
+```ts
+import { defineModule } from "loreweaver/module";
+
+let oil = 3;
+
+export default defineModule({
+  id: "lantern",
+  create() { oil = 3; },
+  load(snapshot) { oil = (snapshot as { oil: number }).oil; },
+  save() { return { oil }; },
+
+  on: {
+    turnStart(_event, fx) {
+      fx.inject(oil > 0 ? `The lantern burns; ${oil} hours of oil left.` : "The lantern is out.");
+    },
+  },
+
+  commands: {
+    light: {
+      title: "Light the lantern",
+      description: "Burn an hour of oil.",
+      run(_args, who, fx) {
+        if (oil === 0) return { text: "No oil left." };
+        oil -= 1;
+        fx.fact({ text: `${who.member?.name ?? "Someone"} lights the lantern.` });
+        return { text: `${oil} hours of oil left.` };
+      },
+    },
+  },
+
+  views: {
+    state: {
+      title: "Lantern",
+      schema: { type: "object", properties: { oil: { type: "integer" } } },
+      for: () => ({ oil, max: 3 }),
+    },
+  },
+});
 ```
 
-有两条性质值得依赖：构建用**真的引擎解析器**校验一切（一个坏技能、坏规则包、坏卡就意味着没有包，而不是以后才崩的安装），并且它是**字节确定性**的——条目排序、时间戳固定、清单稳定序列化，所以同一份源码树永远给出同一个 sha256。把那个摘要发出去，别人就能核。
+模组能做的事，简单说：
 
-### 安装
+- **事件：** `turnStart`（守秘人开始之前；`fx.inject` 往本回合提示词里加内容）、`toolUse`（守秘人要调用工具了；`fx.deny` 拒掉其中一个）、`replyPhase`（回复之后）。
+- **命令**，名字是 `<模组>/<命令>`，带一个角色：`player`（默认）、`admin`，或者 `keeper`——玩家永远看不到的守秘人机关，由守秘人的 `run_command` 工具运行，房间管理员也能运行，用来纠正守秘人弄错的地方。
+- **视图**，逐人计算：私密信息就是这样只送到一个人手上。
+- **效果**是请求，由引擎校验后执行：给整桌或给守秘人的事实、变量写入、掷骰、界面区块。模组从不直接调用引擎。
+- **角色和时钟：** `characters(room)` 提供可以入座的角色；`clock(room)` 接管房间的时钟。
 
-```console
-$ uv run python -m app --install ./xipu-songdeng-1.0.0.lwpack --yes
-📦 Xipu: The Lantern Sending — xipu-songdeng@1.0.0
-   …
-Installed xipu-songdeng@1.0.0.
-   skills: yingchao-zhuchi — an admin enables one in-room with .skill enable <id>
-   rulepacks: chaozhan, coc7-xipu — discoverable. They do not become the room's system by themselves: create a character on that system (the pack must declare a make_char word) or name the system on import.
-   cards/lorebooks/assets: 2/1/9 file(s) under <data_dir>/packs/xipu-songdeng@1.0.0 — import in-room with .import <file> / .module
-World cards (admin-imported via `.import <file> world`): cards/shipu.lorecard.json, cards/chaomai-st.json
+模组的 `id` 必须和清单条目的 `id` 一致。构建器把每个入口和它导入的 npm 包打成一个文件；`loreweaver/module` 保留为导入，由服务器用自己的 SDK 来接。完整的约定、效果表和各项上限在 [sdk/README.md](../sdk/README.md)（英文）——写模组之前先读它。
+
+**模组是真代码。** 它在服务器进程里运行，没有沙箱：能用文件系统、网络和它打包进来的任何东西。服务器隔离的是故障——模组抛错或卡住，只让它的房间少一次调用，不会拖垮服务器——不隔离信任。所以信任卡第一句就是*它会在这台服务器上运行代码*（§5）。
+
+## 5. 安装、信任和启用
+
+**信任卡。** 安装之前，服务器根据校验过的扩展包算出一份摘要给安装的人看：名字、id、版本、作者和许可证；是否运行代码，以及每个模组的文件、大小和 sha256；规则系统和各自的底本；技能和各自解锁的工具，是否声明了成人内容；卡、各自的类型和带的世界机制；面板、各自的受众和读的视图；演出包；资源的数量和大小；以及被忽略的东西。它是从内容算出来的，不可能少报扩展包里有什么。在聊天里安装完整的那盏灯（英文界面原文）：
+
+```
+Installed The Lantern (lantern 0.2.0) on this server, in place of 0.1.0: rooms that have it enabled now play the new version.
+It is enabled in this room.
+It runs code on this server, with no sandbox: modules lantern.
+rule systems: lantern-rules (extends coc7)
+skills: lamplighter (unlocks generate_image)
+cards: The Old Quarter (cards/old-quarter.lorecard.json, world)
+panels: oil
+a presentation kit
+2 assets
+Its skills are enabled in this room: lamplighter.
+Its world card: .import world lantern cards/old-quarter.lorecard.json
 ```
 
-不加 `--yes` 就会打印信任卡并要求确认，非交互运行必须显式给这个参数。安装是在写任何东西**之前**校验的：每个内容文件用真解析器重新解析一遍，每个素材的字节要和清单里的 sha256 对上，压缩包里不许有未声明的成员，条目名会检查路径穿越，符号链接直接拒绝，数量和大小都有硬上限。信任块会用同一套检测器从压缩包里重新推导，对不上就拒绝。
+**谁来安装。** 运营者在命令行里装，或者房间管理员在聊天里装。两边用同一个安装器，检查一样。模组是真代码，所以在聊天里安装扩展包的房间管理员，就是在决定服务器运行什么代码；自托管的牌桌上，管理员通常也就是运营者。不想这样的运营者，只把管理员钥匙给自己信得过、愿意把服务器交给他的人。
 
-**装上不等于启用。** 技能和规则包会变成可发现的，但房间还要自己点头（`.skill enable`、`.panels enable`、`.import … world`）。规则包不会因为装上就变成本房间的规则系统——要在该系统上建卡（包需声明 `make_char` 命令），或在导入时指定系统。这层分离就是整个信任模型：一个包带的东西，不会因为它落到了磁盘上就开始跑。
+**安装不等于启用。** 从命令行安装不改变任何房间；在聊天里安装只在那位管理员的房间里启用。在房间里启用一个扩展包（`.pack enable <id>`，用 `.pack disable <id>` 撤销；每个房间最多 16 个）会：
 
-### 发布
+- 在房间的工作线程里加载它的模组，按扩展包启用的先后顺序（两个已启用的扩展包不能有同 id 的模组：`module_id_taken`）；
+- 把它的演出包并入房间的演出包，音效加入房间的音频库；
+- 把它的面板加入房间的 `panels` 视图；
+- 让它的技能可以用 `.skill enable` 启用（停用扩展包时这些技能一并停用）；
+- 让它的卡可以用 `.import` 导入。
 
-Git Release 就是仓库。没有中心商店，没有提交审核，没有把关人——你的分发链路上也没有任何一环是别人能收走的。
+规则系统是全服务器共用的：房间用 `.rule system <id>` 选。扩展包里的规则系统或技能，如果 id 已经被占——被内置的，或被更早安装的扩展包——就不会加载，安装时会说明；先来的那个永远不会被替换。
 
-1. 在你自己的仓库里打一个 Release。
-2. 把 `.lwpack` 作为 release asset 挂上去。（在 release notes 里贴上它的 sha256，别人就能自己核那份字节确定性构建。）
-3. 玩家按引用安装：
+**发布。** Git Release 就是发布渠道：把 `.lwpack` 挂到一个 GitHub Release 上，任何人都能用 `gh:owner/repo`（最新一个 Release）或 `gh:owner/repo@v1.0.0` 安装。任何 `https://` 链接也行。把压缩包的 sha256 一起贴出来：构建是确定的，谁都可以用你的源目录重新构建一遍来比对。
 
-```bash
-uv run python -m app --install gh:owner/repo          # 最新 release
-uv run python -m app --install gh:owner/repo@v1.2.0   # 钉住某一个
-uv run python -m app --install https://example.com/my-module.lwpack
-```
+## 6. 上限和拒收
 
-引用会通过匿名 GitHub API 解析到那个 release 的 `*.lwpack` asset——没有的话它也会直说：
+出了问题，构建（和安装）会带着一个固定的代码和相关路径拒收，什么都不写。作者最常碰到的：
 
-```console
-$ uv run python -m app --install "gh:1A7432/loreweaver@v1.0.0" --yes
-Could not resolve the pack ref: release for 'gh:1A7432/loreweaver@v1.0.0' has no .lwpack asset
-```
-
-**依赖是扁平且内联的。** 一个包自带它需要的一切，没有包间依赖解析。`engine:` 只声明**最低**版本（`protocol`、`server`），达不到就明确拒绝安装，而不是半工作。
-
-**做连载？** 从第一部就给每条世界书条目一个稳定的 `id`。后续几部用 `<pack-id>#<entry-id>` 引用共享世界，而不是复制它。引擎会按文档记录来源（`meta.source`），所以更新时分得清哪些是这一桌自己改过的、哪些该跟着包走。
-
----
-
-## 8. 在别人玩到之前先自己测
-
-**开发房间——改源码，房间跟着走。**最快的循环根本不用打包：让服务器指向你的源码目录，把它挂载进一个沙盒房间。
-
-```bash
-TRPG_DEV__SOURCE_ROOT=~/my-packs uv run python -m app --serve --keys /tmp/lw-keys
-# 然后以房间管理员的身份：
-#   .dev mount ~/my-packs/my-module     ——导入模组并开始监视
-#   （随便改哪个文件、保存——lore、技能、规则包、面板都会热重载；
-#     改过的条目替换旧文本，删掉的条目跟着离开，房间里的变量值每次重载都保留）
-#   .dev reload / .dev status / .dev unmount
-```
-
-挂载被限制在 `TRPG_DEV__SOURCE_ROOT` 之下，不设置它整个功能就是关的——只在你自己的开发机上开。开发挂载直接从源码提供面板和演出资料包（跳过构建期的上限检查），所以 `--pack` 仍然是发布前必须过的那道门。
-
-**包检查——一个合法的包还会错在哪。** `--pack` 证明的是你的模组是一个*合法*的包。它没法告诉你某个面板格子永远画不出来，因为那照样是一个合法的包。这件事归包检查管：
-
-```console
-$ uv run python -m app --lint my-module/
-包检查：3 条提示——仅供参考，不影响打包：
-   提示：ui/panels.yaml: panels[gauges].blocks[1].value: 绑定了「suspicion」，这是守秘人专属变量：它不会发到任何屏幕上（管理员的也不会），所以这个绑定永远取不到值——这一格不会画出来（如果绑的是可选字段，就只少这个字段） [panel-var-keeper-only]
-   提示：cards/harbour.lorecard.json: entries[The cellar]: 没有关键词，也不是常驻条目：关键词匹配永远选不中它，只剩语义召回这一条路能把它带进提示词 [lore-no-keys]
-   提示：ui/panels.yaml: panels[status].blocks[0].label: 只写了 en——用 zh 的玩家看到的是另一种语言 [locale-gap]
-```
-
-它用引擎自己的解析器读源码目录——不调模型、不联网、什么都不导入——而且只是提示：一条提示永远不会让打包失败，`--lint` 不管查出什么都以 0 退出（只有找不到能读的 `pack.yaml` 时才是 1）。同样的提示，`--pack` 在打包成功之后也会打印；开发房间每次重载之后也会发一份——只发给挂载它的那位管理员，不发给房间里的其他人，因为提示会点名它说的是什么（一条秘密条目的标题、一个守秘人这边的变量）。所以你是在文件还开着的时候看到它们的。`--json` 把这份清单以 `{code, where, message}` 的形式交给工具。它查这些：
-
-| 代号 | 意思 |
+| 代码 | 意思 |
 |---|---|
-| `panel-var-keeper-only` | 面板读了 `visibility: keeper` 的变量。这种变量**不会**发到任何屏幕上——`audience: keeper` 决定的是谁拿到这块面板，不是哪些变量到得了面板——所以这一格永远画不出来。 |
-| `panel-var-unexposed` | 面板读了导入卡的变量（`mvu.<路径>`），而包里没有任何设定覆盖文件公开它。管理员执行 `.var expose` 之前玩家什么都收不到。 |
-| `panel-var-unknown` | 面板读了一个包里没人声明的变量（通常是手误，或者导入卡变量漏写了 `mvu.` 前缀）。 |
-| `panel-repeat-empty` | `repeat` 的前缀下没有任何玩家可见的变量。 |
-| `var-unused` | 变量声明了，但别处从没提到它——面板、条件、钩子、技能、设定正文里都没有。 |
-| `lore-no-keys` | 一个在场的条目没有关键词，也不是常驻，也没有别的模板按标题把它拉进来（`getwi`）：只有语义召回能把它带进来。 |
-| `lore-never-fires` | `probability: 0`：条目选中之后必定被丢掉。 |
-| `lore-condition-unknown-var` | 条目的条件读了一个没人声明的变量，结果永远不会变。 |
-| `overlay-expose-unknown` | 设定覆盖文件的 `expose:` 写了一个卡片 `[InitVar]` 树里没有的前缀。 |
-| `locale-gap` | 这个包是双语的（`name` 里 `en`、`zh` 都有），却有一处文案只写了一种语言。单语的包不会有这类提示，一个不带语言标记的裸字符串（`HP`）也不算缺。 |
-| `card-note` | 原生卡解析器跳过或裁掉的行（否则你要到导入时才会知道）。 |
-| `unreadable` | 解析不了的文件；打包会连同完整原因一起拒掉它。 |
+| `manifest_version_unsupported` | 清单不是 `manifest_version: 3`（一个 2.x 扩展包）。 |
+| `unsupported_kind` | `contents` 里有 `lorebooks`、`presets` 或 `prep`，3.0 没有这些。 |
+| `unknown_kind`、`unknown_key` | 格式没定义的键（每一层嵌套对象都是封闭的）。 |
+| `missing_file` | 清单点名的文件不存在。 |
+| `card_kind_mismatch` | 卡的 `kind` 和卡本身对不上；`detail` 是检测出来的类型。 |
+| `presentation_invalid`、`panels_invalid` | 演出包或面板文件有错；`detail` 写明问题和位置。 |
+| `kit_asset_missing`、`panel_asset_missing` | 演出包或面板点名的图片、声音不在扩展包里。 |
+| `asset_type`、`asset_bad_signature`、`asset_too_large` | 文件扩展名不认识、内容和扩展名不符，或者太大。 |
+| `undeclared_script` | 压缩包里有不是已声明模组入口的代码文件（手工打的包才会有，构建器从不打进去）。 |
+| `already_installed` | 这个版本已经装了；升版本号。 |
+| `engine_too_old` | 服务器比扩展包的 `engine` 最低版本旧。 |
 
-它只报引擎自己的规则能确定的事。技能里让守秘人在桌上现建的变量、钩子或设定模板会写进去的变量，都不会被说成“没声明”；一段它静态读不懂的 `[InitVar]`，或者一个在运行时拼变量名的钩子，会让和变量树形状有关的检查整个关掉，而不是去猜。没有提示不等于合格证——只说明没犯这几种错。
+一些上限：每个扩展包最多 16 个模组、16 个面板；每种内容最多 64 条；演出包最多一个；资源最多 512 个；`pack.yaml` 最大 256 KiB，规则包 512 KiB，演出包 128 KiB，页面 2 MiB，卡 32 MiB，打包后的模组 16 MiB；整个压缩包最大 512 MiB。超过上限就拒收，绝不截断。完整的表见 [pack.md](lwf/formats/pack.md) §2–§6 和 [panels.md](lwf/formats/panels.md) §8。
 
-**真跑出了问题，把工具调用记下来。** `TRPG_DEBUG__TOOL_TRACE=tool_trace.jsonl`（相对路径落在数据目录下）会把模型发出的每一次工具调用追加成一行 JSON——`{ts, ms, room, tool, phase, args, result}`，被拒绝的和被 hook 否决的也在内。它回答的是对话记录回答不了的问题：守秘人到底传了哪个参数、哪个工具每次都失败、一个回合的时间花在哪。默认关，值得一句提醒：文件里逐字记着工具的参数和结果，也就是你模组的秘密——它是调试用的，不是该贴进 bug 报告的东西。
+## 7. 从 2.x 过来
 
-**脚本化链路**——真骰子，离线与否由你决定：
+2.x 的扩展包装不到 3.0 上。对作者来说变了这些：
 
-```bash
-uv run python -m app --lint my-module/                 # 合法的包还会错在哪？
-uv run python -m app --pack my-module/                 # 它至少能构建吗？
-TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --install ./my-module-0.1.0.lwpack --yes
-TRPG_ENV_FILE=/dev/null TRPG_DATA_DIR=/tmp/lw-test uv run python -m app --cli --script my-run.txt
-```
-
-`--script` 会把文件里每一行喂给 CLI，它跑的是完整的真实链路，骰子有固定种子。**只有当没有任何模型凭据进入这个进程时，它才是离线的。** CLI 用的是它被配置的那个模型，而配置来自三处：shell 环境变量（`TRPG_LLM__*`）；一个 env 文件——`TRPG_ENV_FILE`，默认是**你运行命令时所在目录**下的 `./.env`，所以在一个已经配置了模型的仓库目录里跑 `--script`，会调用真实模型、花掉真实的调用次数；以及登录后保存在数据目录里的凭据。三处都没有时，它才退回内置的离线演示守秘人，并打印 `running offline demo mode`——不用 key，不联网。上面那行命令就是强制离线的写法：`TRPG_ENV_FILE=/dev/null`（任何空文件都行；把变量设成空值**不行**，那会退回 `./.env`）、一个全新的 `TRPG_DATA_DIR`，并且 shell 里没有 `TRPG_LLM__*`。确实想让真实守秘人跑这份脚本时，去掉 `TRPG_ENV_FILE` 即可。一份把接线从头到尾走一遍的脚本：
-
-```
-.xipu
-.rule
-.rule xipu_night
-.st
-.ra 潮汐学
-```
-
-```console
-Created coc7-xipu character: Adventurer
-Current house-rule ladder: 0
-Available: dg, rule1, rule2, rule3, rule4, rule5, xipu_night
-House-rule ladder set to xipu_night
-Adventurer: 力量 45, 敏捷 60, 体质 60, 体型 65, 外貌 45, 智力 55, 意志 45, 教育 85, 幸运 50, DB 0, …
-Check Tidology: target 5 (effective 5), roll 13 -> Failure
-```
-
-（`--script` / `--exec` 的批处理不吃消息限流——你亲手递给进程的文件不是洪水。交互式 CLI 输入仍然和桌上一样限速。）
-
-然后再查房间层面的接线——面板注册了没、技能开了没、世界卡落了没、演员表出来了没：
-
-```
-.panels enable <你的包 id>
-.skill enable <你的技能 id>
-.import <data_dir>/packs/<id>@<version>/cards/<你的卡>.lorecard.json world
-.pc list
-```
-
-真上模型的时候，**跑两遍，并且把出问题的地方记下来**。这个模组第一次跑发现的是：一个叙事很强的模型完全没碰过状态层——书记官就是因此才存在的；第二次发现的是反过来的毛病，外加几处串台。两份记录都是趁着还疼的时候写下来的，也正因为这样才有用。
-
----
+- `manifest_version: 3`；删掉 2.x 构建生成的 `files` 和 `trust` 块（信任卡由服务器计算）；每个卡条目都写上 `kind:`。
+- **`hooks.js` 没有了。** 回合生命周期代码、卡里的钩子脚本、`defineAction` 动作、`emitUI` / `emitPanel`，全部改写成模组（§4.6）。卡里的钩子脚本在导入时只计数、报告，绝不运行。
+- 作为单独内容种类的**世界书**没有了：把条目放进卡里。**提示词预设**、**准备阶段脚本**和准备阶段在 3.0 里都没有对应物。扩展包给卡配的 `overlay:` 文件也没有了：同样的开关由房间管理员用 `.lore` 和 `.var` 来设（[cards.zh.md](cards.zh.md)）。
+- **面板**改为面板 3.0：绑定读视图，选项运行命令，页面是一个自包含的 HTML 文件（[panels.md](lwf/formats/panels.md) §9 逐个字段对照了 1.0）。
+- 带规则脚本的**规则包**加载不了。
+- 没有锻造（从一段描述生成技能、规则包或模组），没有热重载开发房间，也没有单独的检查命令：构建、安装、看效果（§2）。
+- 原生卡的 `pregens` 和 AI 同伴都不在 3.0 里：玩家导入一张 `character` 卡，或者用 `genchar` 从描述生成角色；模组的 `characters()` 也可以提供座位。
 
 ## 接着看哪份
 
-| 主题 | 文档 |
-|---|---|
-| 完整扩展契约——每个字段、上限、信任规则 | [plugins.zh.md](plugins.zh.md) |
-| 从酒馆搬过来：什么能跑、哪里不一样 | [cards.zh.md](cards.zh.md) |
-| 钩子 API、事件、效果缓冲、失败语义 | [hooks.zh.md](hooks.zh.md) |
-| 面板和区块在线上的形状 | [protocol.zh.md](protocol.zh.md) |
-| 带着你的模组开一桌 | [operating.zh.md](operating.zh.md) |
+- [sdk/README.md](../sdk/README.md)——编写和测试模组（英文）。
+- [cards.zh.md](cards.zh.md)——卡、世界与人物拆分、设定、变量、模板。
+- [plugins.zh.md](plugins.zh.md)——哪些东西可以扩展，以及信任模型。
+- [LWF](lwf/SPEC.md)——各项格式；[protocol.zh.md](protocol.zh.md) §6.8——这里提到的每条命令，含中文写法。
