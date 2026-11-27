@@ -49,10 +49,48 @@ function splitMode(text: string): readonly [Mode | undefined, string] {
   return [undefined, text];
 }
 
+/** The longest reason a roll carries, in code points. */
+export const MAX_ROLL_REASON_CHARS = 100;
+/** How many leading words are tried as the notation: written with spaces, an expression is still short. */
+const MAX_NOTATION_WORDS = 16;
+
+/**
+ * `expr reason` → the notation and what the roll is for (the dice-bot habit `.r 3d6 砍门`). The
+ * notation is the longest run of leading words the dice engine reads. A text it reads whole has
+ * no reason, and one whose first word it cannot read is left whole — the roll then refuses it
+ * as bad notation: a mistyped expression is never taken for a reason.
+ */
+export function splitReason(text: string): readonly [string, string | undefined] {
+  const tokens = text.split(/\s+/u).filter((token) => token !== "");
+  for (let take = Math.min(tokens.length, MAX_NOTATION_WORDS); take >= 1; take--) {
+    const head = tokens.slice(0, take).join(" ");
+    try {
+      parseDice(head);
+    } catch (error) {
+      if (error instanceof DiceError) continue;
+      throw error;
+    }
+    const reason = tokens.slice(take).join(" ");
+    return [head, reason === "" ? undefined : reason];
+  }
+  return [text, undefined];
+}
+
 function rollArgs(rest: string): Args {
   const [repeat, afterRepeat] = splitRepeat(rest);
-  const [mode, expr] = splitMode(afterRepeat);
-  return compact({ expr: expr === "" ? undefined : expr, repeat: repeat ?? undefined, mode });
+  const [wordMode, afterMode] = splitMode(afterRepeat);
+  const [expr, said] = splitReason(afterMode);
+  // `.r 1d20 adv to hit`: the favour word sits between the notation and the reason.
+  const [innerMode, reason] = wordMode === undefined && said !== undefined ? splitLeadingMode(said) : [undefined, said];
+  return compact({ expr: expr === "" ? undefined : expr, repeat: repeat ?? undefined, mode: wordMode ?? innerMode, reason: reason === "" ? undefined : reason });
+}
+
+function splitLeadingMode(text: string): readonly [Mode | undefined, string] {
+  const [first = "", ...rest] = text.split(/\s+/u);
+  const folded = foldCase(first);
+  if (FAVOR_WORDS.has(folded)) return ["adv", rest.join(" ")];
+  if (DISFAVOR_WORDS.has(folded)) return ["dis", rest.join(" ")];
+  return [undefined, text];
 }
 
 function parseNotation(expr: string): DiceExpression | Refused {
@@ -64,17 +102,20 @@ function parseNotation(expr: string): DiceExpression | Refused {
   }
 }
 
-function diceEvent(call: CommandCall, roll: Roll, extra: Record<string, unknown> = {}): CommandEvent {
-  const text = renderRoll(roll);
-  // `detail.text` is the same line, kept where 3.0 clients first read it.
+function diceEvent(call: CommandCall, roll: Roll, extra: Record<string, unknown> = {}, reason?: string): CommandEvent {
+  const rendered = renderRoll(roll);
+  // What the roll is for leads its line, in the room's punctuation; it is also the event's label.
+  const text = reason === undefined ? rendered : call.tell("roll.reasoned", { reason, roll: rendered });
+  // `detail.text` is the roll alone, kept where 3.0 clients first read it.
   const data: DiceData = {
     actor: actorName(call.context),
     kind: "roll",
     expr: roll.notation,
     rolls: facesOf(roll),
     total: roll.total,
+    ...(reason === undefined ? {} : { label: reason }),
     text,
-    detail: { text, ...extra },
+    detail: { text: rendered, ...extra },
   };
   return { kind: "dice", data };
 }
@@ -112,7 +153,7 @@ export const rollCommand: CommandSpec = {
   id: "roll",
   source: "engine",
   key: "roll",
-  params: object({ expr: text(MAX_NOTATION_CHARS, 1), repeat: integer(1, LIMITS.maxRepeat), mode: MODE }),
+  params: object({ expr: text(MAX_NOTATION_CHARS, 1), repeat: integer(1, LIMITS.maxRepeat), mode: MODE, reason: text(MAX_ROLL_REASON_CHARS, 1) }),
   text: { en: ["roll", "r"], zh: ["r", "rd"] },
   role: "player",
   parseText: (rest) => rollArgs(rest),
@@ -122,7 +163,7 @@ export const rollCommand: CommandSpec = {
     if ("refused" in rolled) return rolled;
     return {
       data: { totals: rolled.map((entry) => entry.roll.total) },
-      events: rolled.map((entry) => diceEvent(call, entry.roll, entry.detail)),
+      events: rolled.map((entry) => diceEvent(call, entry.roll, entry.detail, args.reason as string | undefined)),
     };
   },
 };

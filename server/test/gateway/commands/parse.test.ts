@@ -127,6 +127,41 @@ describe("argument parsers", () => {
     expect(outcome.outcome.message).toContain(".pc");
   });
 
+  test("a roll may say what it is for: the words after the notation, as the dice-bot habit has it", async () => {
+    const b = bench();
+    const typed = async (line: string) => {
+      const result = await b.input(ADA, line);
+      if (result.kind !== "command") throw new Error(`not a command: ${line}`);
+      return result.outcome;
+    };
+    const dice = (outcome: Awaited<ReturnType<typeof typed>>) => {
+      const event = ok(outcome).events[0];
+      if (event?.kind !== "dice") throw new Error("expected a dice event");
+      return event.data;
+    };
+    // The reason is the event's label and leads its line; the roll alone stays in `detail.text`.
+    const door = dice(await typed(".r 1d8+2 砍门"));
+    expect([door.expr, door.label]).toEqual(["1d8 + 2", "砍门"]);
+    expect(door.text).toBe(`砍门: ${(door.detail as { text: string }).text}`);
+    // Notation written with spaces is still the notation; the reason is what follows it.
+    const spaced = dice(await typed(".r 2d6 + 1 kick the door in"));
+    expect([spaced.expr, spaced.label]).toEqual(["2d6 + 1", "kick the door in"]);
+    // A favour word may sit between the two, and N# still repeats.
+    const favoured = ok(await typed(".r 2#1d20 adv to hit"));
+    expect(favoured.events).toHaveLength(2);
+    expect(favoured.events.map((event) => (event.kind === "dice" ? [event.data.label, (event.data.detail as { mode?: string }).mode] : null))).toEqual([["to hit", "adv"], ["to hit", "adv"]]);
+    // No reason, no label: a bare roll is as it was.
+    const bare = dice(await typed(".r 3d6"));
+    expect(bare.label).toBeUndefined();
+    expect(bare.text).toBe((bare.detail as { text: string }).text);
+    // A mistyped expression is refused, never rolled as the default die with the typo for a reason.
+    expect(code(await typed(".r 2dd6 砍门"))).toBe("bad_dice");
+    expect(code(await typed(".r 砍门"))).toBe("bad_dice");
+    // The structured call takes the same argument, capped.
+    expect(dice(await b.run(ADA, "roll", { expr: "1d4", reason: "sneak attack" })).label).toBe("sneak attack");
+    expect(code(await b.run(ADA, "roll", { expr: "1d4", reason: "x".repeat(101) }))).toBe("invalid_arg");
+  });
+
   test("dice help keeps the engine's notation: comparisons count dice, d% is a d100", async () => {
     const b = bench();
     const pool = ok(await b.run(ADA, "roll", { expr: "5d10>=7" }));

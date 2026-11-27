@@ -9,9 +9,11 @@
 //   4. a prebuilt binary at `<local server folder>/server-bin/loreweaver`.
 // Nothing is downloaded. When none of these exists the bring-up fails and says so.
 //
-// The server runs `serve --local` (loopback only — the client dials it with a loopback endpoint,
-// so this works with no network at all) with its data under the local server folder
-// (`TRPG_DATA_DIR`). It prints ONE JSON line on stdout when ready: `{ok, version, ticket, notes,
+// The server runs `serve`, as an operator would run it: reachable over the public relays, so
+// the ticket it prints is the one to hand to friends, and it stays the same across restarts
+// (owner's ruling, 2026-11-27: a table hosted here is for inviting people; it once ran
+// `serve --local`, loopback only, and nobody on another machine could join). Its data is under
+// the local server folder (`TRPG_DATA_DIR`). `network: "local"` is for a test without a network. It prints ONE JSON line on stdout when ready: `{ok, version, ticket, notes,
 // first_key?}`. `first_key` — an admin key — appears only on a fresh data directory, so the shell
 // keeps it; when the data directory exists and no key was kept, a new admin key is minted with the
 // server's own `key` command before it starts.
@@ -19,6 +21,7 @@ import { existsSync, realpathSync } from "node:fs"
 import { chmod, mkdir } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import type { MessageKey } from "./i18n"
+import type { IrohMode } from "./irohLink"
 import { resolveLocalServerPaths } from "./localPaths"
 
 const READY_TIMEOUT_MS = 60_000
@@ -53,6 +56,8 @@ export interface HostHandle {
   key: string
   /** The key was handed out by this start (the first admin key, or a freshly minted one): keep it. */
   newKey: boolean
+  /** How to dial the ticket: `n0` unless the server was started loopback-only. */
+  network?: IrohMode
   /** Stop the server; resolves once its process has exited. */
   stop(): Promise<void>
   /** Resolves (with the exit code) when the server's process has exited, for whatever reason. */
@@ -66,6 +71,8 @@ export interface HostLocalOptions {
   env?: Record<string, string | undefined>
   /** Where to start looking for a development checkout (this file's directory by default). */
   searchFrom?: string
+  /** `local`: loopback only, no relay — for a test. Default `n0`: reachable by the people invited. */
+  network?: IrohMode
 }
 
 export type BringUp = (onLog: OnLog, signal: AbortSignal | undefined, options: HostLocalOptions) => Promise<HostHandle>
@@ -238,7 +245,9 @@ export const bringUpServer: BringUp = async (onLog, signal, options = {}) => {
   // `--until-stdin-closes` with a pipe this process holds: if this client dies by any means —
   // a crash, a kill, a closed terminal — the pipe ends and the server stops by itself instead
   // of running on, holding its data directory.
-  const proc = Bun.spawn([...command.argv, "serve", "--local", "--until-stdin-closes"], { cwd: command.cwd, env: childEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+  const network: IrohMode = options.network ?? "n0"
+  const flags = network === "local" ? ["--local", "--until-stdin-closes"] : ["--until-stdin-closes"]
+  const proc = Bun.spawn([...command.argv, "serve", ...flags], { cwd: command.cwd, env: childEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
   const stop = async (): Promise<void> => {
     try {
       proc.kill()
@@ -291,7 +300,7 @@ export const bringUpServer: BringUp = async (onLog, signal, options = {}) => {
     }
     onLog({ kind: "ok", key: "hostlocal.step.ready" })
     live = false
-    return { ticket: ready.ticket, key, newKey, stop, exited: proc.exited.catch(() => -1) }
+    return { ticket: ready.ticket, key, newKey, network, stop, exited: proc.exited.catch(() => -1) }
   } catch (error) {
     live = false
     void stop()

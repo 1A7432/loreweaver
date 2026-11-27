@@ -313,7 +313,7 @@ export function App({
             setLocalKeys((keys) => rememberLocalKey(keys, entry))
             onLocalKey?.(entry)
           }
-          void connect(handle.ticket, handle.key, prefill?.name ?? "", "local", false, true)
+          void connect(handle.ticket, handle.key, prefill?.name ?? "", handle.network ?? "n0", false, true)
         }}
         onBack={() => setScreen("connect")}
       />

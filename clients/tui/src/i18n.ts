@@ -5,7 +5,7 @@ const DEFAULT_LOCALE: TuiLocale = "en"
 const messages = {
   en: {
     "cli.usage":
-      "Usage:\n  loreweaver-tui                                        # open the connect screen\n  loreweaver-tui connect --host <ticket> --key <key> [--name N]   # prefill it\n  loreweaver-tui --version | selftest\n\nLocal server: choose \"Host locally & play\" on the connect screen\n(it runs the `loreweaver` server beside this program; in a checkout: bun server/src/cli/main.ts serve --local)",
+      "Usage:\n  loreweaver-tui                                        # open the connect screen\n  loreweaver-tui connect --host <ticket> --key <key> [--name N]   # prefill it\n  loreweaver-tui --version | selftest\n\nLocal server: choose \"Host locally & play\" on the connect screen\n(it runs the `loreweaver` server beside this program; in a checkout: bun server/src/cli/main.ts serve)",
     "connect.subtitle": "Lamplit table · join a room with its ticket and your access key",
     "connect.host": "Ticket",
     "connect.hostPlaceholder": "endpoint… (the ticket your room admin shared)",
@@ -393,7 +393,7 @@ const messages = {
   },
   zh: {
     "cli.usage":
-      "用法：\n  loreweaver-tui                                        # 打开连接界面\n  loreweaver-tui connect --host <ticket> --key <钥匙> [--name 名字]   # 预填连接界面\n  loreweaver-tui --version | selftest\n\n本地服务器：在连接界面选「本地开服并开玩」\n（它运行的是和本程序放在一起的服务器 `loreweaver`；在源码目录里是：bun server/src/cli/main.ts serve --local）",
+      "用法：\n  loreweaver-tui                                        # 打开连接界面\n  loreweaver-tui connect --host <ticket> --key <钥匙> [--name 名字]   # 预填连接界面\n  loreweaver-tui --version | selftest\n\n本地服务器：在连接界面选「本地开服并开玩」\n（它运行的是和本程序放在一起的服务器 `loreweaver`；在源码目录里是：bun server/src/cli/main.ts serve）",
     "connect.subtitle": "灯下的牌桌 · 用 ticket 和你的钥匙加入房间",
     "connect.host": "Ticket",
     "connect.hostPlaceholder": "endpoint…（房间管理员发你的 ticket）",

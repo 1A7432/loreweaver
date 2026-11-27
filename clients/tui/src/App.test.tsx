@@ -101,13 +101,14 @@ describe("App", () => {
     await nokey.screen("the key refusal", (text) => text.includes("An access key is required"))
   })
 
-  test("host locally: the bring-up's admin key is kept, the server dialled on loopback, the admin welcomed", async () => {
+  test("host locally: the bring-up's admin key is kept, the server dialled the way it was started, the admin welcomed", async () => {
     const server = new FakeServer({ role: "admin", name: "Admin", room: "main" })
     const kept: Array<{ home: string; key: string }> = []
     let stopped = 0
     const bringUp: AppProps["bringUp"] = async (onLog, _signal, options) => {
       onLog({ kind: "step", key: "hostlocal.step.starting", vars: { dir: "/tmp/data" } })
       expect(options.knownKey).toBeUndefined()
+      // A hosted server is reachable (`n0`) unless the bring-up says it started loopback-only.
       return { ticket: TICKET, key: "first-admin-key", newKey: true, stop: async () => void (stopped += 1) } satisfies HostHandle
     }
     const { harness, screen, modes, remembered } = await boot(server, { bringUp, onLocalKey: (entry) => kept.push(entry), prefill: { locale: "en", localServerHome: "/srv/lw" } })
@@ -121,7 +122,7 @@ describe("App", () => {
     expect(menu).toContain("Admin · Admin")
     expect(menu).toContain("every room operation is a command")
     expect(kept).toEqual([{ home: "/srv/lw", key: "first-admin-key" }])
-    expect(modes).toEqual(["local"])
+    expect(modes).toEqual(["n0"])
     expect(remembered).toEqual([])
     expect(server.current.sent[0]).toMatchObject({ type: "hello", key: "first-admin-key" })
     expect(stopped).toBe(0)

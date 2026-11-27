@@ -344,7 +344,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 
 | id | 身份 | 文本形式 | 参数 | 说明 |
 |---|---|---|---|---|
-| `roll` | player | `roll`, `r` / `r`, `rd` | `expr?`（1–1000，默认 `1d20`）、`repeat?`（1–20）、`mode?`（`adv`\|`dis`） | 每次掷骰一个 `dice` 事件；`data {totals}`。 |
+| `roll` | player | `roll`, `r` / `r`, `rd` | `expr?`（1–1000，默认 `1d20`）、`repeat?`（1–20）、`mode?`（`adv`\|`dis`）、`reason?`（1–100） | 每次掷骰一个 `dice` 事件；`data {totals}`。`reason` 是这次掷骰的理由：它是事件的 `label`，也写在 `text` 的开头。文本形式：表达式后面的文字（`.r 1d8 砍门`）。 |
 | `hidden_roll` | player | `rh`, `hroll` / `rh` | `expr?`、`mode?` | 没有事件：桌面不会知道。`text` 和 `data {expr, rolls, total}` 只给调用者。 |
 | `check` | player | `check`, `attack`, `cast`, `ra`, `rc` / `ra`, `rc`，加上规则系统自己的检定词 | `skill?`、`target?`、`difficulty?`、`bonus?`（0–10）、`penalty?`（0–10）、`mode?`、`proficient?`、`params?`（整数对象，≤16）、`repeat?`（1–20） | 房间的规则系统能评定检定时可用（`no_rule_system`）。每次检定一个 `dice` 事件。 |
 | `opposed` | player | `opposed`, `rav`, `rcv` / `rav`, `rcv` | `a` `{skill?, value?, bonus?, penalty?}`、`b?`（同上） | 规则系统有对抗时可用（`not_in_system`）。 |

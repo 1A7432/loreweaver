@@ -487,7 +487,7 @@ argument. Text forms are given as English table / Chinese table; with any of the
 
 | id | role | text forms | arguments | notes |
 |---|---|---|---|---|
-| `roll` | player | `roll`, `r` / `r`, `rd` | `expr?` (1–1000, default `1d20`), `repeat?` (1–20), `mode?` (`adv`\|`dis`) | One `dice` event per roll; `data {totals}`. |
+| `roll` | player | `roll`, `r` / `r`, `rd` | `expr?` (1–1000, default `1d20`), `repeat?` (1–20), `mode?` (`adv`\|`dis`), `reason?` (1–100) | One `dice` event per roll; `data {totals}`. `reason` says what the roll is for: it is the event's `label` and leads its `text`. Text form: words after the expression (`.r 1d8 breaking the door`). |
 | `hidden_roll` | player | `rh`, `hroll` / `rh` | `expr?`, `mode?` | No event: the table is not told. `text` and `data {expr, rolls, total}` to the caller. |
 | `check` | player | `check`, `attack`, `cast`, `ra`, `rc` / `ra`, `rc`, plus the rule system's own check words | `skill?`, `target?`, `difficulty?`, `bonus?` (0–10), `penalty?` (0–10), `mode?`, `proficient?`, `params?` (object of integers, ≤16), `repeat?` (1–20) | Available when the room's rule system grades checks (`no_rule_system`). One `dice` event per check. |
 | `opposed` | player | `opposed`, `rav`, `rcv` / `rav`, `rcv` | `a` `{skill?, value?, bonus?, penalty?}`, `b?` (same) | Available when the rule system has a contest (`not_in_system`). |

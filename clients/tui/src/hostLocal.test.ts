@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { bringUpServer, findCheckoutEntry, HostLocalError, parseReadyLine, resolveServerCommand, siblingServer, type BringUpLine, type HostHandle } from "./hostLocal"
@@ -35,6 +35,7 @@ if (process.env.FAKE_REFUSE) {
 mkdirSync(dir, { recursive: true })
 const fresh = !existsSync(join(dir, "keys.json"))
 if (fresh) writeFileSync(join(dir, "keys.json"), "{}")
+writeFileSync(join(dir, "argv.json"), JSON.stringify(process.argv.slice(2)))
 console.error("[main] opening the data directory")
 console.log(JSON.stringify({ ok: true, version: "3.0.0-test", ticket: "endpointfaketicketfaketicketfake", notes: ["model_not_configured"], ...(fresh ? { first_key: { room: "main", key: "first-admin-key" } } : {}) }))
 setInterval(() => {}, 1000)
@@ -110,13 +111,24 @@ describe("finding a server", () => {
 })
 
 describe("bringing a server up", () => {
+  test("a test without a network may ask for loopback only; the handle says how to dial", async () => {
+    const root = checkout()
+    const home = join(tempDir(), "lw")
+    const handle = await bringUpServer(() => {}, undefined, { localServerHome: home, env: {}, searchFrom: join(root, "clients", "tui", "src"), network: "local" })
+    handles.push(handle)
+    expect(handle.network).toBe("local")
+    expect(JSON.parse(readFileSync(join(home, "data", "argv.json"), "utf8"))).toEqual(["serve", "--local", "--until-stdin-closes"])
+  })
+
   test("a fresh folder: the server's first admin key is handed back to keep; again, the kept key is used", async () => {
     const root = checkout()
     const home = join(tempDir(), "lw")
     const lines: BringUpLine[] = []
     const first = await bringUpServer((line) => lines.push(line), undefined, { localServerHome: home, env: {}, searchFrom: join(root, "clients", "tui", "src") })
     handles.push(first)
-    expect(first).toMatchObject({ ticket: "endpointfaketicketfaketicketfake", key: "first-admin-key", newKey: true })
+    expect(first).toMatchObject({ ticket: "endpointfaketicketfaketicketfake", key: "first-admin-key", newKey: true, network: "n0" })
+    // Run as an operator would run it — reachable by the people invited — never loopback-only.
+    expect(JSON.parse(readFileSync(join(home, "data", "argv.json"), "utf8"))).toEqual(["serve", "--until-stdin-closes"])
     expect(existsSync(join(home, "data", "keys.json"))).toBe(true)
     expect(lines.map((line) => line.key ?? line.text)).toEqual([
       "hostlocal.step.checkout",
