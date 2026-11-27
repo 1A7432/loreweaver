@@ -4,7 +4,7 @@
 // compact object per line, in both directions. The server never pings — the client does
 // (`connection.ts`). What the lines mean is the protocol `Session`'s business.
 //
-// Every further bidirectional stream is one operation of the byte channel (protocol 3.0 §8.6,
+// Every further bidirectional stream is one operation of the byte channel (`docs/protocol.md` §11,
 // shapes and limits in `loreweaver-protocol/v3` `bytes.ts`): a GET of a file by its content
 // hash, or the PUT of an upload the control stream's `media.offer` accepted. `byteGet` and
 // `bytePut` speak one such stream; every read is bounded — the header by the protocol's header

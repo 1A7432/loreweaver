@@ -172,7 +172,8 @@ export class Connection {
       ...(options.name ? { name: options.name } : {}),
       locale: options.locale,
       client: options.client,
-      caps: ["text-only"],
+      // 3.0 defines no capability values (docs/protocol.md §4.2): send none.
+      caps: [],
       timers: this.#timers,
       ...(options.now ? { now: options.now } : {}),
       // A listener of ours that throws must not take the session down; it has nowhere useful to go.

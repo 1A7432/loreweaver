@@ -1,4 +1,4 @@
-// The byte channel (protocol 3.0 §8.6): content-addressed GET and PUT beside the control
+// The byte channel (`docs/protocol.md` §11): content-addressed GET and PUT beside the control
 // stream. Every operation is its own bidirectional stream on the same connection:
 //
 //   GET   client: {"op":"get","hash":"<sha256 hex>"}\n

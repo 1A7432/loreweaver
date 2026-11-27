@@ -24,7 +24,7 @@ describe("Connection", () => {
     await connection.start()
     await pump()
     const hello = server.current.sent[0]
-    expect(hello).toMatchObject({ type: "hello", protocol: "3.0", key: "k", locale: "en", caps: ["text-only"] })
+    expect(hello).toMatchObject({ type: "hello", protocol: "3.0", key: "k", locale: "en", caps: [] })
     expect(connection.session.status).toBe("online")
     expect(connection.getState()).toMatchObject({ phase: "online", attempt: 0 })
     const subscribed = server.current.calls("view.subscribe").flatMap((call) => call.params.names as string[])
