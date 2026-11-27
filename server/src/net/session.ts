@@ -121,6 +121,11 @@ export class Session {
     if (this.#joined === null && !this.#ended) this.#error("hello_timeout", true);
   }
 
+  /** The transport read a line longer than `MAX_LINE_BYTES`: not a frame; the connection ends. */
+  lineTooLong(): void {
+    if (!this.#ended) this.#error("line_too_long", true);
+  }
+
   /** The transport reports the connection gone. */
   closed(): void {
     this.#ended = true;

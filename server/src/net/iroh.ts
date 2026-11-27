@@ -21,6 +21,7 @@ import {
   HeaderReader,
   HELLO_TIMEOUT_MS,
   MAX_BYTE_HEADER_BYTES,
+  MAX_LINE_BYTES,
   PROTOCOL_MAJOR,
   type ClientFrame,
   type ServerFrame,
@@ -83,8 +84,13 @@ class Writer {
   }
 
   write(value: unknown): void {
-    const line = Array.from(encodeLine(value));
-    this.#tail = this.#tail.then(() => this.#send.writeAll(line)).catch(() => undefined);
+    this.writeBytes(encodeLine(value));
+  }
+
+  /** Bytes as they are, in order with the frames (a test's misbehaving peer writes half a line). */
+  writeBytes(bytes: Uint8Array): void {
+    const data = Array.from(bytes);
+    this.#tail = this.#tail.then(() => this.#send.writeAll(data)).catch(() => undefined);
   }
 
   async finish(): Promise<void> {
@@ -207,6 +213,12 @@ export class IrohServer {
         () => {
           session.receive(null);
         },
+        {
+          maxLineChars: MAX_LINE_BYTES,
+          onOverflow: () => {
+            session.lineTooLong();
+          },
+        },
       );
       const channel = new ByteChannel(
         () => session.byteAccess(),
@@ -256,6 +268,8 @@ export interface RawByteStream {
 /** A dialled connection: the client half, used by tests and the self-test. */
 export interface IrohLink {
   send(frame: ClientFrame): void;
+  /** Text on the control stream exactly as given — no newline added (tests drive misbehaving peers with it). */
+  sendRaw(text: string): void;
   /** Resolves with the next frame; rejects if the stream ends first. */
   next(): Promise<ServerFrame>;
   /** Open a byte stream of this connection. */
@@ -344,6 +358,9 @@ export async function dial(ticket: string, options: IrohOptions): Promise<IrohLi
     },
     send: (frame) => {
       writer.write(frame);
+    },
+    sendRaw: (text) => {
+      writer.writeBytes(new TextEncoder().encode(text));
     },
     next: () => {
       const ready = inbox.shift();

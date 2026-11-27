@@ -64,7 +64,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 
 ### 2.2 分帧
 
-控制帧是按行分隔的 JSON：每行一个紧凑的 JSON 对象，UTF-8，以 `\n` 结尾。空行跳过。每一帧都是一个对象，带一个字符串 `type`。
+控制帧是按行分隔的 JSON：每行一个紧凑的 JSON 对象，UTF-8，以 `\n` 结尾。空行跳过。每一帧都是一个对象，带一个字符串 `type`。一行连同换行符最长 `MAX_LINE_BYTES` = **8 MiB**：对方发了更多却不结束这一行，那就不是在发帧——接收方停止缓冲并结束连接（服务器会先回 `line_too_long`）。一行装不下的东西走字节通道（[11](#11-字节通道)）。
 
 不是合法 JSON 的行按读不懂的帧处理（`bad_frame`，[4.5](#45-连接级错误)）。
 
@@ -178,6 +178,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 | `bad_name` | 是 | `hello.name` 超过 64 个码点。 |
 | `hello_first` | 是 | 在成功的 `hello` 之前收到了 `input` 或 `call`。 |
 | `hello_timeout` | 是 | 连接打开后 15 秒内没收到 `hello`（`HELLO_TIMEOUT_MS`）。 |
+| `line_too_long` | 是 | 控制流里的一行超过了 `MAX_LINE_BYTES`（[2.2](#22-分帧)）。 |
 | `bad_frame` | `welcome` 之前是，之后不是 | 读不懂的帧：不是 JSON、不是对象、没有字符串 `type`、未知的 `type`、缺必填字段、`input` 或 `call` 没有合法的 `rid`，或第二个 `hello`。 |
 
 格式有误但带着合法 `rid` 的 `input` 或 `call` 不算 `error`：它得到一个 `result` 拒绝（`input_too_long`、`invalid_params`）。
@@ -940,6 +941,7 @@ server: {"ok":false,"code":"<stable code>","message":"<in the member's language>
 |---|---|---|
 | `input.text` | 8000 个码点 | `MAX_INPUT_CHARS` |
 | `hello.name` | 64 个码点 | 服务器 |
+| 控制流里的一行 | 8 MiB（`MAX_LINE_BYTES`） | `frames.ts` |
 | `rid` | 1–64 个字符 | `frames.ts` |
 | `command.run` `id` | 200 个码点 | 服务器 |
 | 文本命令的参数字符串 | 4000 个码点 | 服务器 |

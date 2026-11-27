@@ -11,15 +11,16 @@
 // limit, a body by the size its header declared — and a server that sends more is an error.
 import {
   BYTE_STALL_MS,
+  type ByteFile,
+  type ClientFrame,
   decodeByteReply,
   encodeByteLine,
   HeaderReader,
   isContentHash,
   MAX_BYTE_HEADER_BYTES,
   MAX_BYTE_STREAMS,
+  MAX_LINE_BYTES,
   PROTOCOL_MAJOR,
-  type ByteFile,
-  type ClientFrame,
 } from "loreweaver-protocol/v3"
 import { createHash } from "node:crypto"
 
@@ -29,8 +30,9 @@ const NEWLINE = 10
 const READ_CHUNK = 64 * 1024
 /** How long a close waits for queued lines before hanging up anyway. */
 const CLOSE_DRAIN_MS = 2_000
-/** A line longer than this is not a frame anyone sends: the connection is dropped instead of buffering it. */
-export const MAX_LINE_BYTES = 8 * 1024 * 1024
+// A line longer than the protocol's `MAX_LINE_BYTES` is not a frame anyone sends: the connection
+// is dropped instead of buffering it.
+export { MAX_LINE_BYTES }
 
 const encoder = new TextEncoder()
 const bytes = (text: string): number[] => Array.from(encoder.encode(text))

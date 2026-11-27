@@ -66,3 +66,14 @@ test("a connection that never says hello is told so and closed", async () => {
   await expect(link.next()).rejects.toThrow("the connection ended");
   await link.close().catch(() => undefined);
 }, 15_000);
+
+test("a line that never ends is not buffered for ever: the server says so and closes", async () => {
+  const ticket = await serve({ closeGraceMs: 150 });
+  const link = await dial(ticket, { mode: "local" });
+  // 9 MiB of a JSON string with no newline, on the control stream, before any hello.
+  const junk = `{"type":"hello","key":"${"x".repeat(1024 * 1024)}`;
+  for (let sent = 0; sent < 9; sent += 1) link.sendRaw(junk);
+  expect(await link.next()).toEqual({ type: "error", code: "line_too_long", message: "A line of the control stream may be at most 8 MiB.", fatal: true });
+  await expect(link.next()).rejects.toThrow("the connection ended");
+  await link.close().catch(() => undefined);
+}, 30_000);

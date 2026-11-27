@@ -284,6 +284,12 @@ export const MAX_INPUT_CHARS = 8000;
  */
 export const RESUME_LIMIT = 200;
 /**
+ * The longest line of the control stream, newline included, either side sends or accepts. A
+ * peer that sends more without ending the line is not sending a frame: the receiver stops
+ * buffering and ends the connection (a server says `line_too_long` first).
+ */
+export const MAX_LINE_BYTES = 8 * 1024 * 1024;
+/**
  * How long either side waits for the other's first word: a server for `hello` on a new
  * connection, a client for `welcome` after its hello. Past it the server answers
  * `hello_timeout` and closes; a client drops the link and may dial again.

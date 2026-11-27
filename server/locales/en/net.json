@@ -12,6 +12,7 @@
   "net.error.hello_timeout": "No hello arrived in time.",
   "net.error.input_too_long": "That message is too long.",
   "net.error.invalid_params": "Those parameters are not valid.",
+  "net.error.line_too_long": "A line of the control stream may be at most 8 MiB.",
   "net.error.media_bad_hash": "That is not a sha256 hash (64 lowercase hex digits).",
   "net.error.media_bad_mime": "That type of file cannot be uploaded here.",
   "net.error.media_bad_offer": "That upload offer could not be read.",

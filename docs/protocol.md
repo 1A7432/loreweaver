@@ -84,7 +84,11 @@ room `main`). Further keys are minted with `loreweaver key <room> <admin|player|
 ### 2.2 Framing
 
 Control frames are newline-delimited JSON: one compact JSON object per line, UTF-8, ended by
-`\n`. Blank lines are skipped. Every frame is an object with a string `type`.
+`\n`. Blank lines are skipped. Every frame is an object with a string `type`. A line is at most
+`MAX_LINE_BYTES` = **8 MiB**, newline included: a peer that sends more without ending the line
+is not sending a frame — the receiver stops buffering and ends the connection (a server answers
+`line_too_long` first). What does not fit in a line travels on the byte channel
+([11](#11-the-byte-channel)).
 
 A line that is not valid JSON is treated as an unreadable frame (`bad_frame`,
 [4.5](#45-connection-level-errors)).
@@ -217,6 +221,7 @@ client marks the session ended).
 | `bad_name` | yes | `hello.name` is over 64 code points. |
 | `hello_first` | yes | An `input` or `call` arrived before a successful `hello`. |
 | `hello_timeout` | yes | No `hello` arrived within 15 seconds of the connection opening (`HELLO_TIMEOUT_MS`). |
+| `line_too_long` | yes | A line of the control stream passed `MAX_LINE_BYTES` ([2.2](#22-framing)). |
 | `bad_frame` | yes before the welcome, no after it | A frame that cannot be read: not JSON, not an object, no string `type`, an unknown `type`, a missing required field, an `input` or `call` without a valid `rid`, or a second `hello`. |
 
 A malformed `input` or `call` that does carry a valid `rid` is not an `error`: it is answered
@@ -1260,6 +1265,7 @@ terminal control characters before writing to a terminal: `loreweaver-protocol/v
 |---|---|---|
 | `input.text` | 8000 code points | `MAX_INPUT_CHARS` |
 | `hello.name` | 64 code points | server |
+| a line of the control stream | 8 MiB (`MAX_LINE_BYTES`) | `frames.ts` |
 | `rid` | 1–64 characters | `frames.ts` |
 | `command.run` `id` | 200 code points | server |
 | text-command argument string | 4000 code points | server |
