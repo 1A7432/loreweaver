@@ -27,6 +27,7 @@ import { type Clock, systemClock } from "../infra/ids.ts";
 import { ImageGenError, type ImageGenerator, RASTER_MIMES } from "../infra/imagegen/index.ts";
 import { RoomStorages } from "../infra/lifecycle/storages.ts";
 import { DEFAULT_MEDIA_LIMITS, MediaStore } from "../infra/media/index.ts";
+import { takeDataLock } from "../infra/data_lock.ts";
 import { ensurePrivateDir, writePrivateFile } from "../infra/private_files.ts";
 import { OpenAIEmbeddings, VectorIndex } from "../infra/recall/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
@@ -289,6 +290,11 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
   const review = reviewFrom(settings);
   const clock = systemClock;
   const report = options.report ?? ((room: string, text: string): void => console.error(`[${room}] ${text}`));
+  // One server per data directory: a second one over the same database, key file and media
+  // folder is refused before it opens any of them.
+  ensurePrivateDir(settings.dataDir);
+  const lock = takeDataLock(settings.dataDir);
+  if (!lock.held) throw new StartupError("data_dir_in_use");
   const { store, serverSettings, media, storages, recall } = openData(settings, clock);
   if (recall === undefined) notes.push("recall_off");
 
@@ -389,6 +395,7 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
       await server.close();
       await hub.close();
       store.close();
+      lock.release();
     },
   };
 }

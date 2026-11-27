@@ -1,6 +1,6 @@
 // The whole server, composed the way `serve` composes it.
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -255,4 +255,32 @@ test("serve: an admin's model switch survives a restart on the same data directo
   expect(restarted.models.reset()).toEqual({ ok: true, lanes: ["keeper"] });
   expect(restarted.models.describeLane("keeper")).toMatchObject({ source: "environment", provider: "openai", model: "gpt-5.5" });
   await restarted.close();
+});
+
+test("serve: a data directory another live server holds is refused; the shell's key and import are refused while one runs", async () => {
+  const dir = dataDir();
+  // Another process holds the directory (the test runner's parent stands in for a server).
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "server.lock"), JSON.stringify({ pid: process.ppid }));
+  const env = { TRPG_DATA_DIR: dir };
+  const refused = await run(["serve", "--local"], env);
+  expect([refused.code, JSON.parse(refused.out), refused.server]).toEqual([2, { ok: false, code: "data_dir_in_use" }, undefined]);
+  // Nothing was opened or written beside the lock.
+  expect(existsSync(join(dir, "loreweaver.db"))).toBe(false);
+  for (const argv of [["key", "main", "player", "Bo"], ["import-world", "main", "/nowhere/card.json"]]) {
+    const busy = await run(argv, env);
+    expect([argv[0], busy.code, JSON.parse(busy.out)]).toEqual([argv[0], 1, { ok: false, code: "server_running", pid: process.ppid }]);
+  }
+  expect(existsSync(join(dir, "keys.json"))).toBe(false);
+
+  // A server that stops gives the directory back, and the next one takes it.
+  rmSync(join(dir, "server.lock"));
+  const first = await run(["serve", "--local", "--until-stdin-closes"], env);
+  expect([first.code, first.untilStdinCloses]).toEqual([0, true]);
+  expect(JSON.parse(readFileSync(join(dir, "server.lock"), "utf8"))).toEqual({ pid: process.pid });
+  await first.server?.close();
+  expect(existsSync(join(dir, "server.lock"))).toBe(false);
+  // An unknown or repeated flag is a usage error, not a server.
+  expect((await run(["serve", "--loud"], env)).code).toBe(2);
+  expect((await run(["serve", "--local", "--local"], env)).code).toBe(2);
 });

@@ -16,6 +16,7 @@
 // starts. `doctor` and `lint` arrive with the layers they drive.
 import { ConfigError, loadSettings, type Settings } from "../infra/config.ts";
 import { roomWorkerEntry } from "../infra/runtime/worker.ts";
+import { runningServer } from "../infra/data_lock.ts";
 import { SERVER_VERSION } from "../infra/version.ts";
 import { openServer, type RunningServer, StartupError } from "./compose.ts";
 import { importWorldCard, mintKey, ROLES } from "./operator.ts";
@@ -23,14 +24,25 @@ import { buildPack, installPack, listPacks, uninstallPack } from "./packs.ts";
 import { selftest } from "./selftest.ts";
 
 const USAGE =
-  "usage: loreweaver serve [--local] | key <room> <admin|player|observer> <name> | import-world <room> <card-file> | pack <source-dir> [--out <file>] | install <path|https-url|gh:owner/repo[@tag]> [--yes] | packs | uninstall <id> | selftest | --version";
+  "usage: loreweaver serve [--local] [--until-stdin-closes] | key <room> <admin|player|observer> <name> | import-world <room> <card-file> | pack <source-dir> [--out <file>] | install <path|https-url|gh:owner/repo[@tag]> [--yes] | packs | uninstall <id> | selftest | --version";
 
 export interface Outcome {
   readonly code: number;
   readonly out: string;
   /** Present when the command left a server running. */
   readonly server?: RunningServer;
+  /** `serve --until-stdin-closes`: stop the server when standard input ends. */
+  readonly untilStdinCloses?: true;
 }
+
+/**
+ * `--until-stdin-closes`: for a program that HOSTS this server as a child. The parent keeps
+ * the child's standard input open as a pipe; when the parent goes away — by any means, a
+ * crash included — the pipe ends and the server stops as on SIGTERM. Without it a server
+ * outlives a parent that was killed, holding its data directory.
+ */
+const STDIN_FLAG = "--until-stdin-closes";
+const SERVE_FLAGS: readonly string[] = ["--local", STDIN_FLAG];
 
 export type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -43,6 +55,16 @@ function settingsFrom(env: Environment): Settings | Outcome {
   }
 }
 
+/**
+ * `key` and `import-world` write the key file and the database directly: with a server
+ * running over the same directory they would write behind its back (it holds both in
+ * memory). They are refused while one runs — a room's admin does the same from a client.
+ */
+function heldBy(settings: Settings): Outcome | null {
+  const pid = runningServer(settings.dataDir);
+  return pid === null ? null : { code: 1, out: JSON.stringify({ ok: false, code: "server_running", pid }) };
+}
+
 export async function run(argv: readonly string[], env: Environment = {}): Promise<Outcome> {
   const [command, ...rest] = argv;
   if (argv.length === 1 && command === "--version") return { code: 0, out: SERVER_VERSION };
@@ -52,16 +74,19 @@ export async function run(argv: readonly string[], env: Environment = {}): Promi
     const report = await selftest(roomWorkerEntry());
     return { code: report.ok ? 0 : 1, out: JSON.stringify(report) };
   }
-  if (command === "serve" && (rest.length === 0 || (rest.length === 1 && rest[0] === "--local"))) {
+  if (command === "serve" && rest.every((flag) => SERVE_FLAGS.includes(flag)) && new Set(rest).size === rest.length) {
     const settings = settingsFrom(env);
     if ("code" in settings) return settings;
     try {
-      const server = await openServer(settings, { mode: rest.length === 1 ? "local" : "n0", workerEntry: roomWorkerEntry() });
+      const server = await openServer(settings, { mode: rest.includes("--local") ? "local" : "n0", workerEntry: roomWorkerEntry() });
       const ready = { ok: true, version: SERVER_VERSION, ticket: server.ticket, notes: server.notes, ...(server.firstKey === null ? {} : { first_key: server.firstKey }) };
-      return { code: 0, out: JSON.stringify(ready), server };
+      return { code: 0, out: JSON.stringify(ready), server, ...(rest.includes(STDIN_FLAG) ? { untilStdinCloses: true } : {}) };
     } catch (error) {
       if (error instanceof StartupError) return { code: 2, out: JSON.stringify({ ok: false, code: error.code }) };
-      throw error;
+      // Anything else that stops a server from starting (the address cannot be bound, the
+      // database cannot be opened) is answered in the same shape, not as a stack trace: a
+      // program that hosts this server reads one JSON object either way.
+      return { code: 1, out: JSON.stringify({ ok: false, code: "startup_failed", detail: error instanceof Error ? error.message : String(error) }) };
     }
   }
   if (command === "key" && rest.length === 3) {
@@ -70,6 +95,8 @@ export async function run(argv: readonly string[], env: Environment = {}): Promi
     if (known === undefined) return { code: 2, out: USAGE };
     const settings = settingsFrom(env);
     if ("code" in settings) return settings;
+    const busy = heldBy(settings);
+    if (busy !== null) return busy;
     const minted = mintKey(settings, room, known, name);
     return { code: minted.ok ? 0 : 1, out: JSON.stringify(minted) };
   }
@@ -77,6 +104,8 @@ export async function run(argv: readonly string[], env: Environment = {}): Promi
     const [room, file] = rest as [string, string];
     const settings = settingsFrom(env);
     if ("code" in settings) return settings;
+    const busy = heldBy(settings);
+    if (busy !== null) return busy;
     const imported = await importWorldCard(settings, room, file);
     return { code: imported.ok ? 0 : 1, out: JSON.stringify(imported) };
   }
@@ -124,4 +153,15 @@ if (import.meta.main) {
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  if (outcome.untilStdinCloses === true) {
+    // One stop however the pipe's end is reported (`end`, then `close`): a second call to
+    // `stop` means "a second signal" and would cut the close short.
+    const parentGone = (): void => {
+      if (!closing) stop();
+    };
+    process.stdin.on("end", parentGone);
+    process.stdin.on("close", parentGone);
+    process.stdin.on("error", parentGone);
+    process.stdin.resume();
+  }
 }

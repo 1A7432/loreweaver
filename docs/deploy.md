@@ -58,6 +58,24 @@ Bun on the machine it runs on. Give it its settings as environment variables. Pl
 `<local server folder>/server-bin/loreweaver`, it is also what the terminal client's *Host locally &
 play* runs when the client is not inside a checkout.
 
+### One server per data directory
+
+A running server holds `server.lock` in its data directory. A second `serve` over the same
+directory is refused (`data_dir_in_use`) before it opens anything, and `key` and `import-world`
+are refused while a server runs there (`server_running`): they write the key file and the
+database directly. A lock left behind by a server that was killed names a process that no
+longer exists, and the next start takes it over.
+
+### Hosting it from another program
+
+A program that starts the server as a child (a client's "host locally") adds
+`--until-stdin-closes` and keeps the child's standard input open as a pipe. When the parent
+goes away — a crash and a kill included — the pipe ends and the server stops as on SIGTERM,
+instead of running on with nobody to stop it. `serve` answers with ONE JSON object either way:
+the ready line (`ok: true`, the ticket, the notes, the first admin key of a fresh directory),
+or a refusal with a `code` (`bad_settings`, `data_dir_in_use`, `startup_failed` with a
+`detail`).
+
 ### A ticket that survives restarts
 
 The server's identity is `transport.key` in its data directory: the same key, the same ticket, after

@@ -41,6 +41,14 @@ bun server/src/cli/main.ts --version
 
 `cd server && bun run build` 会把服务器编成一个可执行文件 `server/dist/loreweaver`，并跑一遍它的自检。命令都一样（`loreweaver serve`、`loreweaver key …`），运行它的机器上不需要装 Bun。设置用环境变量给它。把它放到 `<本地服务器目录>/server-bin/loreweaver`，终端客户端不在源码目录里运行时，「本地开服并开玩」跑的就是它。
 
+### 一个数据目录只跑一个服务器
+
+正在运行的服务器会在数据目录里放一个 `server.lock`。对同一个目录再起一个 `serve` 会被拒绝（`data_dir_in_use`），而且是在它打开任何东西之前；有服务器在跑的时候，`key` 和 `import-world` 也会被拒绝（`server_running`），因为它们直接写钥匙文件和数据库。服务器被强杀后留下的锁指向一个已经不存在的进程，下次启动会直接接管。
+
+### 由别的程序来托管
+
+把服务器当子进程启动的程序（比如客户端的「本地开服」），加上 `--until-stdin-closes`，并让子进程的标准输入保持为一条打开的管道。父进程一旦消失——崩溃、被杀都算——管道就断，服务器像收到 SIGTERM 一样停下，不会在没人管的情况下一直跑着。`serve` 不管成败都只回一个 JSON 对象：就绪行（`ok: true`、ticket、提示，以及新目录的第一把管理员钥匙），或者带 `code` 的拒绝（`bad_settings`、`data_dir_in_use`、带 `detail` 的 `startup_failed`）。
+
 ### 重启后仍然有效的 ticket
 
 服务器的身份是数据目录里的 `transport.key`：同一个 key，重启之后还是同一个 ticket。留好它（复制数据目录就带上了）；删了它，服务器就换一个新 ticket，每个玩家都得拿新的。

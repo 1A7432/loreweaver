@@ -208,7 +208,10 @@ export const bringUpServer: BringUp = async (onLog, signal, options = {}) => {
   if (signal?.aborted) throw new HostLocalError("hostlocal.error.cancelled")
 
   onLog({ kind: "step", key: "hostlocal.step.starting", vars: { dir: paths.dataDir } })
-  const proc = Bun.spawn([...command.argv, "serve", "--local"], { cwd: command.cwd, env: childEnv, stdout: "pipe", stderr: "pipe" })
+  // `--until-stdin-closes` with a pipe this process holds: if this client dies by any means —
+  // a crash, a kill, a closed terminal — the pipe ends and the server stops by itself instead
+  // of running on, holding its data directory.
+  const proc = Bun.spawn([...command.argv, "serve", "--local", "--until-stdin-closes"], { cwd: command.cwd, env: childEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
   const stop = async (): Promise<void> => {
     try {
       proc.kill()
