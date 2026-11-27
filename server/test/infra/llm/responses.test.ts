@@ -270,6 +270,13 @@ test("a failure inside the stream: `response.failed`, a named `error` event and 
   expect([named.code, named.retryable, named.providerMessage]).toEqual(["transient", true, "boom"]);
   const bare = await failure({ events: [data({ type: "error", code: "rate_limit_exceeded", message: "later", param: null, sequence_number: 1 })] });
   expect([bare.code, bare.retryable]).toEqual(["rate_limited", true]);
+  // No code, or a proxy's own: the stream was cut short, and is asked for again. A named fault in the request is not.
+  const cut = await failure({ events: [event("error", { type: "error", code: null, message: "unexpected EOF", param: null, sequence_number: 1 })] });
+  expect([cut.code, cut.retryable, cut.providerMessage]).toEqual(["transient", true, "unexpected EOF"]);
+  const proxied = await failure(failed("upstream_error", "upstream stream closed before any chunk carried finish_reason"));
+  expect([proxied.code, proxied.retryable]).toEqual(["transient", true]);
+  const key = await failure(failed("invalid_api_key", "Incorrect API key"));
+  expect([key.code, key.retryable]).toEqual(["unknown", false]);
 });
 
 test("a context overflow is recognised in each vendor's wording on this endpoint, and is never retried", async () => {

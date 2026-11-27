@@ -219,6 +219,34 @@ test("a context overflow is recognised in each vendor's own wording, and is neve
   }
 });
 
+test("a stream cut short by an error payload is asked for again; one that faults the request is not", async () => {
+  const cut = (error: Record<string, unknown>) => failure({ events: [chunk({ content: "The lamp" }), data({ error })] });
+  // What one proxy sent in three live sessions, each costing a turn while it was not retried.
+  for (const message of ["unexpected EOF", "upstream stream closed before any chunk carried finish_reason"]) {
+    const error = await cut({ message });
+    expect([message, error.code, error.retryable, error.status, error.providerMessage]).toEqual([message, "transient", true, undefined, message]);
+  }
+  const named = await cut({ message: "boom", code: "upstream_error", type: "proxy_error" });
+  expect([named.code, named.retryable]).toEqual(["transient", true]);
+  const server = await cut({ message: "The server had an error", type: "server_error", code: "server_error" });
+  expect([server.code, server.retryable]).toEqual(["transient", true]);
+  const limited = await cut({ message: "Slow down", code: "rate_limit_exceeded" });
+  expect([limited.code, limited.retryable]).toEqual(["rate_limited", true]);
+  // The request is at fault: asking again is answered the same way.
+  for (const error of [
+    { message: "Invalid value", type: "invalid_request_error" },
+    { message: "Incorrect API key", code: "invalid_api_key" },
+    { message: "You exceeded your current quota", code: "insufficient_quota" },
+    { message: "Blocked", code: "content_policy_violation" },
+    { message: "Prompt rejected.", code: "invalid_prompt" },
+  ]) {
+    const refused = await cut(error);
+    expect([error.message, refused.code, refused.retryable]).toEqual([error.message, "unknown", false]);
+  }
+  const overflow = await cut({ message: "This model's maximum context length is 128000 tokens.", type: "invalid_request_error" });
+  expect([overflow.code, overflow.retryable]).toEqual(["context_overflow", false]);
+});
+
 test("an ordinary bad request, or overflow wording on another status, is not an overflow", async () => {
   const plain = await failure({ status: 400, json: { error: { message: "Invalid value for max_tokens: must be at most 8192", code: "invalid_request_error" } } });
   expect(plain.code).toBe("bad_request");

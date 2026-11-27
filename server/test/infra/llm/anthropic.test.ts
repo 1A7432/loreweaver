@@ -246,6 +246,17 @@ test("an error event in the middle of a stream is classified by its type", async
     events: [start(), blockStart(0, { type: "text", text: "" }), delta(0, { type: "text_delta", text: "Hal" }), event("error", body("overloaded_error", "Overloaded"))],
   });
   expect([error.code, error.retryable, error.status]).toEqual(["transient", true, undefined]);
+  const cut = (type: string, message: string) => failure({ events: [start(), blockStart(0, { type: "text", text: "" }), delta(0, { type: "text_delta", text: "Hal" }), event("error", body(type, message))] });
+  // A proxy's own payload, with a type of its own: the stream was cut short, and is asked for again.
+  const proxied = await cut("upstream_error", "upstream stream closed before any chunk carried finish_reason");
+  expect([proxied.code, proxied.retryable, proxied.providerMessage]).toEqual(["transient", true, "upstream stream closed before any chunk carried finish_reason"]);
+  const limited = await cut("rate_limit_error", "Slow down");
+  expect([limited.code, limited.retryable]).toEqual(["rate_limited", true]);
+  // A fault in the request is not asked again.
+  for (const type of ["invalid_request_error", "authentication_error", "billing_error", "permission_error", "not_found_error"]) {
+    const refused = await cut(type, "no");
+    expect([type, refused.code, refused.retryable]).toEqual([type, "unknown", false]);
+  }
 });
 
 test("aborting mid-stream throws instead of returning the partial reply as if complete", async () => {

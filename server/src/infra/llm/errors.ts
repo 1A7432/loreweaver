@@ -109,6 +109,39 @@ export function retryAfterMs(headers: Headers | undefined, now: () => number = D
   return Math.max(0, date - now());
 }
 
+// A reply cut short inside its stream — an error payload with no HTTP status — is asked for
+// again, as a dropped connection is: to the table the two are the same event, and which one a
+// vendor or a proxy in front of it reports is its own habit ("unexpected EOF", "upstream
+// stream closed before any chunk carried finish_reason": seen from one proxy in three live
+// sessions, each costing a turn while it was not retried). The exception is a payload that
+// says the fault is in the REQUEST, by one of the names below: asking again would be answered
+// the same way, and only delays the operator learning about it.
+//
+// The names are the request-side error types of the Anthropic SDK (`ErrorType` in
+// node_modules/@anthropic-ai/sdk/resources/shared.d.ts, read 2026-11-28; `not_found_error`
+// and `conflict_error` among them) and OpenAI's request-side codes as its API reference
+// lists them; a `ResponseError.code` of the Responses API is in `STREAM_CODES_WITH_MEANING`.
+const STREAM_ERRORS_ABOUT_THE_REQUEST = new Set([
+  "invalid_request_error",
+  "authentication_error",
+  "billing_error",
+  "permission_error",
+  "not_found_error",
+  "conflict_error",
+  "memory_precondition_failed_error",
+  "memory_path_conflict_error",
+  "invalid_api_key",
+  "insufficient_quota",
+  "model_not_found",
+  "content_filter",
+  "content_policy_violation",
+]);
+
+/** Whether a stream's error payload names a fault in the request, by its `code` or its `type`. */
+function aboutTheRequest(...names: readonly unknown[]): boolean {
+  return names.some((name) => typeof name === "string" && STREAM_ERRORS_ABOUT_THE_REQUEST.has(name));
+}
+
 /** The class every vendor shares for an HTTP status; overflow is decided per lane. */
 function byStatus(status: number): { code: LLMErrorCode; retryable: boolean } {
   if (status === 401 || status === 402 || status === 403) return { code: "auth", retryable: false };
@@ -139,10 +172,10 @@ export function fromAnthropicError(error: unknown, signal?: AbortSignal): LLMErr
     // An `error` event in the middle of a stream (node_modules/@anthropic-ai/sdk/core/streaming.js):
     // no HTTP status, only the body's `error.type`.
     if (error.type === "rate_limit_error") return new LLMError({ ...base, code: "rate_limited", retryable: true });
-    if (error.type === "overloaded_error" || error.type === "api_error" || error.type === "timeout_error") {
-      return new LLMError({ ...base, code: "transient", retryable: true });
-    }
-    return new LLMError({ ...base, code: "unknown", retryable: false });
+    // Anything but a named fault in the request: the vendor's own "not now" types, and a
+    // proxy's payload with a type of its own or none.
+    if (aboutTheRequest(error.type)) return new LLMError({ ...base, code: "unknown", retryable: false });
+    return new LLMError({ ...base, code: "transient", retryable: true });
   }
   let { code, retryable } = byStatus(error.status);
   if (error.status === 400 && error.type === "invalid_request_error" && ANTHROPIC_OVERFLOW.test(providerMessage)) {
@@ -221,7 +254,10 @@ export function responsesStreamFailure(code: string | null | undefined, message:
   if (code === "context_length_exceeded" || (!saysOtherwise && OPENAI_WIRE_OVERFLOW.some((pattern) => pattern.test(message)))) {
     return new LLMError({ ...base, code: "context_overflow", retryable: false });
   }
-  return new LLMError({ ...base, code: "unknown", retryable: false });
+  // A documented code, or a name for a fault in the request: said, and not asked again.
+  if (saysOtherwise || aboutTheRequest(code)) return new LLMError({ ...base, code: "unknown", retryable: false });
+  // No code, or one of a proxy's own: the stream was cut short.
+  return new LLMError({ ...base, code: "transient", retryable: true });
 }
 
 // The documented `ResponseError.code` values; one of these already says what went wrong.
@@ -259,8 +295,16 @@ function fromOpenAIWireError(error: unknown, signal: AbortSignal | undefined, wi
     return new LLMError({ code: "unknown", wire, retryable: false, providerMessage: messageOf(error), cause: error });
   }
   const base = { wire, providerMessage: error.message, cause: error, retryAfterMs: retryAfterMs(error.headers) };
-  // A mid-stream error payload carries no status, and Chat Completions documents no shape for it.
-  if (error.status === undefined) return new LLMError({ ...base, code: "unknown", retryable: false });
+  // A mid-stream error payload carries no status, and Chat Completions documents no shape for
+  // it: what it says about the request is believed, and anything else is a stream cut short.
+  if (error.status === undefined) {
+    if (openAIWireOverflow(error)) return new LLMError({ ...base, code: "context_overflow", retryable: false });
+    if (error.code === "rate_limit_exceeded" || error.type === "rate_limit_error") return new LLMError({ ...base, code: "rate_limited", retryable: true });
+    if (aboutTheRequest(error.code, error.type) || (typeof error.code === "string" && STREAM_CODES_WITH_MEANING.has(error.code) && error.code !== "server_error")) {
+      return new LLMError({ ...base, code: "unknown", retryable: false });
+    }
+    return new LLMError({ ...base, code: "transient", retryable: true });
+  }
   let { code, retryable } = byStatus(error.status);
   if (error.status === 400 && openAIWireOverflow(error)) code = "context_overflow";
   // The SDK obeys this header in its own retry decision (node_modules/openai/client.js, `shouldRetry`).
