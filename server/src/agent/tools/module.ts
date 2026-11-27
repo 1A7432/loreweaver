@@ -1,7 +1,12 @@
 // The two fixed tools through which the Keeper reaches a room's module commands
 // (decision 34): `run_command` and `lookup_command`. The prompt carries one line per
-// command (its id and title); tool cost does not grow with the module. The command table
-// and the function that runs a command in the room's worker are the turn engine's.
+// command the Keeper may run (its id and the first line of its description); tool cost does
+// not grow with the module. An `admin` command and a member's own verb (`keeper: false`) are
+// not in that list; the tools still find them by id, describe them as not the Keeper's, and
+// refuse to run them. The command table and the function that runs a command in the room's
+// worker are the turn engine's.
+import { keeperMayRun } from "loreweaver/runner";
+
 import type { JsonObject } from "../../core/documents/model.ts";
 import { param } from "./params.ts";
 import { refuse } from "./shared.ts";
@@ -32,6 +37,14 @@ const WHO_MAY_RUN: Readonly<Record<ModuleCommand["info"]["role"], string>> = {
   admin: "the room admin only; you cannot run it",
 };
 
+/** A member's own verb: the Keeper does not run it, whatever its role allows a member. */
+const MEMBERS_ONLY = "the players themselves (it is a player's own action); you cannot run it";
+
+/** Who may run a command, as the Keeper is told. */
+function whoMayRun(info: ModuleCommand["info"]): string {
+  return info.keeper ? WHO_MAY_RUN[info.role] : MEMBERS_ONLY;
+}
+
 export const lookupCommandTool = defineTool({
   name: "lookup_command",
   description: "Look up one of this room's module commands: what it does, who may run it, and the full JSON Schema of its arguments. Use it before run_command when you do not know a command's parameters.",
@@ -47,7 +60,7 @@ export const lookupCommandTool = defineTool({
     const lines = [
       `Command ${commandId(command)}: ${info.title}`,
       info.description,
-      `Who may run it: ${WHO_MAY_RUN[info.role]}${info.checksAvailability ? " (the module may refuse it at the moment of use)" : ""}`,
+      `Who may run it: ${whoMayRun(info)}${info.checksAvailability ? " (the module may refuse it at the moment of use)" : ""}`,
       `Arguments (JSON Schema): ${JSON.stringify(info.params)}`,
     ];
     return { text: lines.filter((line) => line !== "").join("\n") };
@@ -70,6 +83,11 @@ export const runCommandTool = defineTool({
     const runner = turn.deps.runCommand;
     if (runner === undefined) return refuse("modules_unavailable", "Module commands cannot be run on this server.");
     const id = commandId(command);
+    // Refused here, before the worker: an admin command or a member's own verb is not the Keeper's.
+    if (!keeperMayRun(command.info.role, command.info.keeper)) {
+      const why = command.info.keeper ? "it is reserved for the room admin; you cannot run it" : "it is a player's own action; you cannot run it";
+      return { status: "refused", code: "command_role", text: `${id} refused: ${why}.` };
+    }
     const outcome = await runner({ module: command.module, command: command.info.name, args: args.args as JsonObject });
     const bookkeeping = { moduleCommand: { module: command.module, command: command.info.name, outcome } };
     switch (outcome.status) {
@@ -84,6 +102,7 @@ export const runCommandTool = defineTool({
           // The Keeper may run any command but an admin's, whoever is speaking.
           role: "it is reserved for the room admin; you cannot run it",
           invalid: "the arguments are not a JSON object within the size limit",
+          args: `the arguments do not fit its schema (${outcome.problem?.code ?? "invalid_arg"} at ${outcome.problem === undefined || outcome.problem.path === "" ? "the top level" : outcome.problem.path}); call lookup_command for the schema`,
           unavailable: `the module says it is unavailable now${outcome.text === null ? "" : `: ${outcome.text}`}`,
         } as const;
         const reason: string = reasons[outcome.reason];

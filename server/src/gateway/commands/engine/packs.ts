@@ -16,7 +16,24 @@ import type { LoadedPack, RoomPacks, RuntimeInstallOutcome } from "../../packs.t
 import { firstWord } from "../parse.ts";
 import { compact, object, oneOf, text } from "../schema.ts";
 import { MAX_ENABLED_PACKS, ROOM_PACKS, ROOM_PANELS_OFF } from "../state.ts";
+import type { RoomContext } from "../../../agent/context.ts";
 import { type Args, type CommandCall, type CommandSpec, type Done, isRefused, refuse, type Refused } from "../types.ts";
+
+/** The module text forms the room drops, as the registry finds them (`CommandRegistry.moduleFormDrops`). */
+export type FormDrops = (context: RoomContext) => Promise<readonly { readonly code: string; readonly command: string; readonly form: string }[]>;
+
+/**
+ * The line naming the text forms of `loaded`'s modules the room does not take (a word that is
+ * the room's own, a word another module also claims), or none. Asked once the room's worker
+ * runs the new module list.
+ */
+async function droppedFormLines(call: CommandCall, loaded: LoadedPack, formDrops: FormDrops): Promise<string[]> {
+  const own = new Set(loaded.pack.modules.map((module) => module.id));
+  const drops = (await formDrops(call.context)).filter((drop) => own.has(drop.command.split("/")[0] ?? ""));
+  if (drops.length === 0) return [];
+  const items = drops.map((drop) => call.say("pack.form_dropped", { form: `.${drop.form}`, command: drop.command, reason: call.say(`pack.form_${drop.code}`) }));
+  return [call.say("pack.forms_dropped", { list: items.join(call.say("list.separator")) })];
+}
 
 const LIST_WORDS: ReadonlySet<string> = new Set(["list", "ls", "列表", "列出"]);
 const ENABLE_WORDS: ReadonlySet<string> = new Set(["enable", "on", "启用", "啟用", "开启", "開啟"]);
@@ -193,8 +210,12 @@ function adminLine(call: CommandCall, summary: Record<string, unknown>): string 
   return parts.length === 0 ? head : `${head}\n  ${parts.join("\n  ")}`;
 }
 
-/** `pack`: anyone sees the packs enabled here, by name; the admin sees every installed pack, installs one, and switches them. */
-export function packCommand(packs: RoomPacks): CommandSpec {
+/**
+ * `pack`: anyone sees the packs enabled here, by name; the admin sees every installed pack,
+ * installs one, and switches them. Enabling names the pack's text forms the room does not
+ * take (`formDrops`), beside the media that could not be stored.
+ */
+export function packCommand(packs: RoomPacks, formDrops: FormDrops = () => Promise.resolve([])): CommandSpec {
   return {
     id: "pack",
     source: "engine",
@@ -247,10 +268,12 @@ export function packCommand(packs: RoomPacks): CommandSpec {
           data: { id, enabled: true, changed: true },
           events: [{ kind: "narrative", data: { speaker: "system", text: call.tell("pack.event_enabled", { name: localText(loaded.pack.manifest.name, call.context.locale) || id }), format: "plain" } }],
           modulesChanged: true,
-          // The kit's pictures and sounds become this room's media once the switch committed.
+          // The kit's pictures and sounds become this room's media once the switch committed;
+          // its modules' text forms are known once the worker runs them (it was swapped already).
           after: async () => {
             const problems = await packs.registerAssets(room, store);
-            return problems.length === 0 ? [] : [call.say("pack.assets_failed", { count: problems.length })];
+            const lines = problems.length === 0 ? [] : [call.say("pack.assets_failed", { count: problems.length })];
+            return [...lines, ...(await droppedFormLines(call, loaded, formDrops))];
           },
         };
       }

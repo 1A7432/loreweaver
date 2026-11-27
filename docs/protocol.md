@@ -358,7 +358,14 @@ the command is refused with `too_long`, never cut short).
   refused (`not_in_system`) instead of becoming speech.
 - Engine forms win over rule-pack forms. Every command has an English and a Chinese alias table;
   both are always searched, the caller's language first.
-- A module command's only text entrance is its full id followed by a JSON object:
+- A module command is typed by the text forms its module declares, as the `commands` view
+  shows them ([6.5](#65-discovering-commands-the-commands-view)): `.strike Bo`. Engine and
+  rule-pack words win over module words, and a word two of the room's modules claim runs
+  neither; of two forms of one word that fit a line, the one with more literal words wins.
+  A line whose word a module form takes but that fits none of its forms is refused with
+  `usage`. The typed words are converted by the declared type of their argument (an
+  integer, a number, `true`/`false`, else text) and validated like any arguments.
+- Every module command can also be typed as its full id followed by a JSON object:
   `.duel/strike {"target":"Bo"}` (no argument string means `{}`; anything that is not a JSON
   object is refused with `module_args`).
 
@@ -418,9 +425,12 @@ this viewer may use them now:
   arguments are refused with `forbidden`. See the table in [6.8](#68-the-engines-commands).
 - `text.forms` lists the viewer's language table (or the other one when it is empty). The
   server accepts the forms of both tables.
-- A module command's `text.forms` are the templates its module declared (such as
-  `strike {target}`), shown for people, and its `available` is `true` for any player: the
-  module answers at the moment of use.
+- A module command's `text.forms` are the words that run it in this room now (the forms
+  its module declared, less those whose word is an engine or rule-pack word or is claimed by
+  another of the room's modules), and `text.usage` is each such form as it is typed
+  (`.strike {target} | .strike at {target}`); without one, `text` is absent and the command
+  is typed by its id. Its `available` is `true` for any player: the module answers at the
+  moment of use.
 
 ### 6.6 Parameter schemas
 
@@ -439,7 +449,10 @@ strictly:
 A name the schema does not list is refused (`unknown_arg`); an integer must be a JSON number
 with no fraction, and a number a finite JSON number, never the text `"5"`; an argument given as `null` counts only where the type
 allows `null`; nesting deeper than 8 levels is refused. A module command's `params` is the
-schema its module declared.
+schema its module declared; its arguments are checked against it before the module is
+called, with the keywords the module contract applies (`type`, `properties`, `required`,
+`additionalProperties: false`, `enum`, `const`, `minimum`/`maximum`,
+`minLength`/`maxLength`, `minItems`/`maxItems`, `items`), refused with the same codes.
 
 ### 6.7 Room-lifecycle commands, as a client sees them
 

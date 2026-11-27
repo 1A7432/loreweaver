@@ -6,6 +6,7 @@
 // neither reaches into the other: the engine never sees a connection, and the room never
 // sees a prompt.
 import type { EventKind, EventPayloads, SignalKind, SignalPayloads } from "loreweaver-protocol/v3";
+import type { RoomMember } from "loreweaver/module";
 
 import type { SkillRegistry } from "../../core/skills/index.ts";
 import type { Usage } from "../../infra/llm/index.ts";
@@ -28,6 +29,8 @@ export interface TurnPorts {
   moduleWorker(): RoomWorker | null;
   /** The room's worker for the lore exchange, started on demand. */
   loreWorker(): RoomWorker;
+  /** Every member of the room (every key of it), in a stable order: what each module call carries. */
+  members(): readonly RoomMember[];
   /**
    * The last check on text bound for the table. `unfiltered` rooms (a mature skill is
    * enabled) are the room's business: the engine passes text, the room answers.

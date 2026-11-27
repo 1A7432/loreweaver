@@ -39,7 +39,7 @@ The other commands, from the shell. Each prints one JSON object, so a script can
 bun server/src/cli/main.ts key <room> <admin|player|observer> <name>   # a new key; its value is printed once
 bun server/src/cli/main.ts import-world <room> <card-file>             # a SillyTavern card as the room's world
 bun server/src/cli/main.ts packs                                       # the installed packs
-bun server/src/cli/main.ts install <path|https-url|gh:owner/repo[@tag]> [--yes]
+bun server/src/cli/main.ts install <path|https-url|gh:owner/repo[@tag]> [--yes] [--force]   # --force: replace the same id and version
 bun server/src/cli/main.ts uninstall <id>
 bun server/src/cli/main.ts selftest                                    # can this build run a turn end to end
 bun server/src/cli/main.ts --version

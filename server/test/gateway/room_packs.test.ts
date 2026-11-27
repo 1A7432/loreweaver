@@ -16,12 +16,14 @@ import { ROOM_PACKS } from "../../src/gateway/commands/index.ts";
 import { assemblePacks, type LoadedPack, RoomPacks } from "../../src/gateway/packs.ts";
 import { ByteChannel, type ByteSink, type ByteSource } from "../../src/net/bytes.ts";
 import { writeZip } from "../../src/infra/zip.ts";
-import { manifestYaml, packEntries, PNG_BYTES } from "../packs/fixture.ts";
+import { manifestYaml, packEntries, PNG_BYTES, text } from "../packs/fixture.ts";
 import { KEYS, resultFor, RoomBench, ROOM, views } from "./room_bench.ts";
 import { schemaProblems } from "./views/schema_check.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "loreweaver-room-packs-"));
 let installed: readonly LoadedPack[] = [];
+/** Packs whose modules declare text forms, installed apart so the other tests see the two above only. */
+let withForms: readonly LoadedPack[] = [];
 
 beforeAll(async () => {
   const dataDir = join(dir, "data");
@@ -32,7 +34,29 @@ beforeAll(async () => {
     const outcome = await installPack(dataDir, file, { yes: true, fetch: () => Promise.reject(new Error("offline")) });
     if (!outcome.ok) throw new Error(JSON.stringify(outcome));
   }
+  // Two packs whose modules declare text forms: `roll` is the engine's word, `shout` both claim.
+  for (const [id, forms] of [
+    ["crier", '["roll {text...}", "shout {text...}", "cry {text...}"]'],
+    ["herald", '["shout {text...}"]'],
+  ] as const) {
+    const module = `import { defineModule } from "loreweaver/module";
+let voice = "";
+export default defineModule({
+  id: "${id}",
+  create(init) { voice = String(init.options.voice); },
+  load(_snapshot, init) { voice = String(init.options.voice); },
+  commands: { call: { title: "Call", params: { type: "object", properties: { text: { type: "string" } } }, text: ${forms}, run: (args) => ({ text: "${id} (" + voice + "): " + String(args.text) }) } },
+});
+`;
+    const manifest = manifestYaml({ id }).replace("{ id: tally, entry: modules/tally.js }", `{ id: ${id}, entry: modules/tally.js, options: { voice: loud } }`);
+    const file = join(dir, `${id}.lwpack`);
+    const entries = packEntries({ "modules/tally.js": text(module) }, manifest);
+    writeFileSync(file, writeZip(entries.sort((a, b) => (a.path === "pack.yaml" ? -1 : b.path === "pack.yaml" ? 1 : a.path < b.path ? -1 : 1))));
+    const outcome = await installPack(join(dir, "forms-data"), file, { yes: true, fetch: () => Promise.reject(new Error("offline")) });
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome));
+  }
   installed = loadInstalledPacks(dataDir).packs;
+  withForms = loadInstalledPacks(join(dir, "forms-data")).packs;
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -41,8 +65,8 @@ afterEach(async () => {
   await Promise.all(benches.splice(0).map((bench) => bench.close()));
 });
 
-function setup(): RoomBench {
-  const bench = new RoomBench({ media: true, packs: (media) => new RoomPacks({ packs: installed, skills: assemblePacks(installed).skills, media }) });
+function setup(packs: readonly LoadedPack[] = installed): RoomBench {
+  const bench = new RoomBench({ media: true, packs: (media) => new RoomPacks({ packs, skills: assemblePacks(packs).skills, media }) });
   benches.push(bench);
   return bench;
 }
@@ -75,8 +99,25 @@ async function get(b: RoomBench, key: string, hash: string): Promise<unknown> {
 }
 
 function turnStart(b: RoomBench): ReturnType<typeof dispatchTurnStart> {
-  return dispatchTurnStart(b.hub.moduleWorker(ROOM), { turn: 1, seed: "s", text: "hello", who: { member: null, character: null }, variables: {}, clock: null });
+  return dispatchTurnStart(b.hub.moduleWorker(ROOM), { turn: 1, seed: "s", text: "hello", who: { member: null, character: null }, variables: {}, clock: null, members: [] });
 }
+
+test("enabling names the pack's text forms the room does not take: the room's own words and a word two modules claim", async () => {
+  const b = setup(withForms);
+  const crier = await say(b, KEYS.root, "c", ".pack enable crier");
+  expect(crier).toMatchObject({ ok: true });
+  expect(String(crier.text)).toContain(".roll {text...} of crier/call");
+  expect(String(crier.text)).not.toContain(".shout");
+  // The manifest's options reached the module's `create` as `init.options`.
+  expect(await say(b, KEYS.ada, "cry", ".cry hear ye")).toMatchObject({ ok: true, text: "crier (loud): hear ye" });
+  expect(await say(b, KEYS.ada, "s1", ".shout hear ye")).toMatchObject({ ok: true, text: "crier (loud): hear ye" });
+  const herald = await say(b, KEYS.root, "h", ".pack enable herald");
+  expect(String(herald.text)).toContain(".shout {text...} of herald/call");
+  // The shared word is dropped for both: a line of speech now, not a command.
+  expect(await say(b, KEYS.ada, "s2", ".shout hear ye")).toEqual({ type: "result", rid: "s2", ok: true });
+  expect(b.reports.filter((line) => line.includes("word_shared"))).toHaveLength(2);
+  expect(b.reports.filter((line) => line.includes("word_taken"))).toHaveLength(1);
+});
 
 test("enabling loads the pack's module in the room's worker; disabling unloads it", async () => {
   const b = setup();

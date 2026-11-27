@@ -139,6 +139,28 @@ describe("tool rounds", () => {
     expect(ran.result.status).toBe("replied");
   });
 
+  test("the prompt's command list leaves out what the Keeper cannot run: admin commands and members' own verbs", async () => {
+    const h = new Harness();
+    const worker = fakeWorker({
+      id: "dock",
+      commands: [
+        { name: "hit", title: "Hit", description: "Lose some hp.\nMore on a second line.", params: { type: "object" }, text: [], role: "player" },
+        { name: "tide", title: "Tide", description: "Move the tide.", params: { type: "object" }, text: [], role: "keeper" },
+        { name: "wipe", title: "Wipe", description: "Wipe the board.", params: { type: "object" }, text: [], role: "admin" },
+        { name: "wave", title: "Wave", description: "Wave at the boats.", params: { type: "object" }, text: [], role: "player", keeper: false },
+      ],
+    });
+    h.keeper.script(["The tide turns."]);
+    await h.turn("I watch the harbor.", { worker });
+    const head = String(h.keeper.requests[0]?.messages[0]?.content ?? "");
+    expect(head).toContain("dock/hit");
+    expect(head).toContain("Lose some hp.");
+    expect(head).not.toContain("More on a second line.");
+    expect(head).toContain("dock/tide");
+    expect(head).not.toContain("dock/wipe");
+    expect(head).not.toContain("dock/wave");
+  });
+
   test("run_command: the module's effects are applied and published before the reply", async () => {
     const h = new Harness();
     putTree(h.services, h.seedWriter(), { dock: { hp: 10 } });

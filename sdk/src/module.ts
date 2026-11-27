@@ -8,7 +8,8 @@
 // unit of atomicity: a call that throws loses its effects and the module is reloaded
 // from its last checkpoint (see `save`). Read-only handlers (`toolUse`, `available`,
 // views, `characters`, `clock`) leave no trace: the module is restored from its last
-// checkpoint after each of them, whatever the handler did.
+// checkpoint after them, whatever the handler did — after each of them, except that the
+// views read for one viewer in one render share one restore (see `ViewSpec.for`).
 
 /** Anything that survives `JSON.stringify` unchanged. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -26,6 +27,14 @@ export interface Who {
   /** The character that member plays, or null: a member with no character is a spectator. */
   readonly character: { readonly id: string; readonly name: string } | null;
 }
+
+/** One member of the room: every key of the room, whether or not its holder is connected. */
+// A type alias, not an interface, so a module can return the members inside a view's data.
+export type RoomMember = {
+  readonly id: string;
+  readonly name: string;
+  readonly role: Role;
+};
 
 /** The time a room's clock shows. */
 // A type alias, not an interface: an alias of an object type is assignable to `Json`,
@@ -110,6 +119,11 @@ export interface RoomSnapshot {
   readonly variables: JsonObject;
   /** The room's clock, or null when the room keeps none. */
   readonly clock: ClockReading | null;
+  /**
+   * Every member of the room (every key of the room, connected or not), in a stable order.
+   * At most 256: a room past that sends the first 256 and tells the operator.
+   */
+  readonly members: readonly RoomMember[];
 }
 
 /** Every event is also a room snapshot: `turn`, `variables` and `clock` mean the same in all three. */
@@ -200,20 +214,51 @@ type Awaitable<T> = T | Promise<T>;
  */
 export type CommandRole = "player" | "admin" | "keeper";
 
-/** Who is running a command now: the Keeper (its `run_command` tool, during a turn) or a member. */
+/** Who is running a command now, and the call's seed. */
 export interface CommandOrigin {
+  /** The Keeper (its `run_command` tool, during a turn) or a member. */
   readonly by: "keeper" | "member";
+  /**
+   * Derived from persisted inputs only, as an event's seed is: the same call replayed over
+   * the same room state gets the same seed. `fx.roll` already derives its dice from it.
+   */
+  readonly seed: string;
+}
+
+/** What `create` and `load` are given: the same for every load of one life of the room. */
+export interface ModuleInit {
+  /** The module entry's `options` in the pack's manifest; `{}` when it declares none. */
+  readonly options: JsonObject;
+  /**
+   * Derived from the room, its generation and the module id: the same whenever this life of
+   * the room loads the module, a different one after a reset or an undo starts a new one.
+   */
+  readonly seed: string;
 }
 
 export interface CommandSpec {
   readonly title: string;
   readonly description?: string;
-  /** JSON Schema (an object schema) for the arguments. */
+  /**
+   * JSON Schema (an object schema) for the arguments. The engine checks the arguments
+   * against it before `run` is called, whoever runs the command (see the README for the
+   * keywords it applies); without it, any JSON object is taken.
+   */
   readonly params?: JsonObject;
-  /** Text forms such as `"attack {target}"`; data for the engine's parser. */
+  /**
+   * Text forms a member types, such as `"attack {target}"` or `"say {text...}"`: the first word
+   * is the command word, later tokens are literal words, `{name}` (one word) or, last only,
+   * `{name...}` (the rest of the line). Every `name` is a property of `params`. See the README.
+   */
   readonly text?: readonly string[];
   /** Who may run it; see `CommandRole`. Default `player`. */
   readonly role?: CommandRole;
+  /**
+   * `false`: a member's own verb that the Keeper never runs — left out of the Keeper's command
+   * list and refused to its tools, like an `admin` command. Default `true`. Not allowed on a
+   * `keeper` command.
+   */
+  readonly keeper?: boolean;
   /**
    * Destructive or hard to take back (it wipes a tracker, ends a scene). A client asks the
    * person before running it — and a pack's own page cannot answer that question for them.
@@ -221,9 +266,9 @@ export interface CommandSpec {
    */
   readonly danger?: boolean;
   /**
-   * Read-only. `true`, or a reason shown to that viewer. Asked from a member's point of view:
-   * for a member's `commands` view, and at the moment of use (when the Keeper runs the
-   * command, `who` is the member whose turn it is).
+   * Read-only. `true`, or a reason shown to that member. Asked at the moment of use only —
+   * never when views are rendered — from the point of view of the member the action belongs
+   * to (when the Keeper runs the command, `who` is the member whose turn it is).
    */
   available?(who: Who, room: RoomSnapshot): Awaitable<true | string>;
   /**
@@ -237,7 +282,11 @@ export interface ViewSpec {
   readonly title?: string;
   /** JSON Schema of the data `for` returns. */
   readonly schema: JsonObject;
-  /** Read-only: the view's data as this viewer may see it. */
+  /**
+   * Read-only: the view's data as this viewer may see it. Computed only for viewers who asked
+   * for the view. The views read for one viewer in one render share one restore: the module
+   * is restored from its checkpoint after that viewer's last view, not after each.
+   */
   for(who: Who, room: RoomSnapshot): Awaitable<Json>;
 }
 
@@ -246,9 +295,9 @@ export interface ModuleDefinition {
   /** Stable id, `[a-z][a-z0-9_]*`; a module's commands and views are namespaced `<id>/<name>`. */
   readonly id: string;
   /** A fresh room: build the initial state. */
-  create?(): void;
+  create?(init: ModuleInit): void;
   /** Restore from a value `save` returned earlier. */
-  load?(snapshot: Json): void;
+  load?(snapshot: Json, init: ModuleInit): void;
   /**
    * Hand over the module's whole state. Called after every successful mutating call;
    * the value (through JSON text and back) is the checkpoint every rollback, restore and

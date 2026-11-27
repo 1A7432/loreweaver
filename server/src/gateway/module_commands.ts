@@ -1,21 +1,23 @@
 // The registry's module-command seam (`ModuleCommands`): module commands are listed from the
-// room worker's load-time descriptions and run through the worker (`agent/modules.ts`); the
-// effects a command asks for are applied by `applyModuleEffects` under the command's own
+// room worker's load-time descriptions — with the text forms that read at load; which of
+// them a room really takes is the registry's to decide — and run through the worker
+// (`agent/modules.ts`, which checks the arguments against the command's `params` first);
+// the effects a command asks for are applied by `applyModuleEffects` under the command's own
 // context, with the room's fact review.
 //
 // The events come back in the command's outcome like any command's. One kind does not fit
 // the registry's event shape: a `blocks` event a module emits WITH an id replaces the
 // earlier one of that id, and `CommandEvent` has no id. Such an event carries its id as an
 // extra field (`eventIdOf` reads it back) and the room publishes it under that id.
-import type { JsonObject, RoomSnapshot } from "loreweaver/module";
+import type { JsonObject, RoomMember, RoomSnapshot } from "loreweaver/module";
 
 import type { RoomContext, Services } from "../agent/context.ts";
 import { applyModuleEffects, type EffectEvent, type TextReview } from "../agent/effects.ts";
-import { type ClockInfo, describeModules, dispatchCommand } from "../agent/modules.ts";
+import { type ClockInfo, describedModules, describeModules, dispatchCommand, type ModuleInfo } from "../agent/modules.ts";
 import { clockReading, moduleVariablesJson } from "../agent/turn/reader.ts";
 import { translate } from "../infra/i18n.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
-import { type Args, COMMANDS_CATALOG, type CommandEvent, type CommandOutcome, type CommandRefusal, type ModuleCommandEntry, type ModuleCommands } from "./commands/index.ts";
+import { type Args, COMMANDS_CATALOG, type CommandEvent, type CommandOutcome, type CommandRefusal, type KeyBook, type ModuleCommandEntry, type ModuleCommands } from "./commands/index.ts";
 import { runAsWork } from "./keeper.ts";
 
 /** What the seam needs of the room a context belongs to. */
@@ -28,6 +30,8 @@ export interface ModuleCommandRooms {
   reviewFact(context: RoomContext): TextReview;
   /** The clock the room's module keeps, from the last render, when one does. */
   moduleClock(room: string): ClockInfo | null;
+  /** Every member of the room, as a module call carries them (`roomMembers`). */
+  members(room: string): readonly RoomMember[];
 }
 
 /** A command event, with the id of the event it replaces when a module gave one. */
@@ -39,9 +43,25 @@ export function eventIdOf(event: CommandEvent): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
-/** The room as a module call carries it: the turn, the variables, the clock. */
-export function moduleRoom(services: Services, room: string, turn: number, moduleClock: ClockInfo | null): RoomSnapshot {
-  return { turn, variables: moduleVariablesJson(services, room) as JsonObject, clock: clockReading(services, room, moduleClock) };
+/** The room as a module call carries it: the turn, the variables, the clock, the members. */
+export function moduleRoom(services: Services, room: string, turn: number, moduleClock: ClockInfo | null, members: readonly RoomMember[]): RoomSnapshot {
+  return { turn, variables: moduleVariablesJson(services, room) as JsonObject, clock: clockReading(services, room, moduleClock), members };
+}
+
+function byId(a: RoomMember, b: RoomMember): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Every member of a room: one per key of the room, whether or not its holder is connected,
+ * sorted by member id so the same keys always give the same list. None without a keystore.
+ */
+export function roomMembers(keys: KeyBook | null, room: string): readonly RoomMember[] {
+  if (keys === null) return [];
+  return keys
+    .listForAdmin(room)
+    .map((key) => ({ id: key.member, name: key.name, role: key.role }))
+    .sort(byId);
 }
 
 function refusal(locale: string, code: string, params: Readonly<Record<string, string | number>> = {}): CommandRefusal {
@@ -54,6 +74,32 @@ function asCommandEvent(event: EffectEvent): IdentifiedEvent {
   return event.id === null ? plain : { ...plain, id: event.id };
 }
 
+/** The members' table of module commands, from the accepted descriptions. */
+function entriesOf(modules: readonly ModuleInfo[]): ModuleCommandEntry[] {
+  const entries: ModuleCommandEntry[] = [];
+  for (const module of modules) {
+    for (const command of module.commands) {
+      // A `keeper` command is the Keeper's machinery. Among MEMBERS only an admin may run it,
+      // so in the members' table it is an admin command: listed for admins, absent for
+      // everyone else (the registry leaves admin entries out of a player's view).
+      const entry: { -readonly [K in keyof ModuleCommandEntry]: ModuleCommandEntry[K] } = {
+        id: `${module.id}/${command.name}`,
+        module: module.id,
+        title: command.title,
+        description: command.description,
+        params: command.params,
+        forms: command.forms,
+        role: command.role === "keeper" ? "admin" : command.role,
+        // The module's own `available` is asked at the moment of use, never for a listing.
+        available: true,
+      };
+      if (command.danger) entry.danger = true;
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
 export class RoomModuleCommands implements ModuleCommands {
   readonly #rooms: ModuleCommandRooms;
 
@@ -64,28 +110,14 @@ export class RoomModuleCommands implements ModuleCommands {
   async list(context: RoomContext): Promise<readonly ModuleCommandEntry[]> {
     const described = await describeModules(this.#rooms.worker(context.room));
     for (const problem of described.problems) context.services.report(context.room, problem);
-    const entries: ModuleCommandEntry[] = [];
-    for (const module of described.modules) {
-      for (const command of module.commands) {
-        // A `keeper` command is the Keeper's machinery. Among MEMBERS only an admin may run it,
-        // so in the members' table it is an admin command: listed for admins, absent for
-        // everyone else (the registry leaves admin entries out of a player's view).
-        const entry: { -readonly [K in keyof ModuleCommandEntry]: ModuleCommandEntry[K] } = {
-          id: `${module.id}/${command.name}`,
-          title: command.title,
-          description: command.description,
-          params: command.params,
-          role: command.role === "keeper" ? "admin" : command.role,
-          // Whether the module's own `available` says yes is known per viewer from a render;
-          // the table lists the command and the module answers at the moment of use.
-          available: true,
-        };
-        if (command.text.length > 0) entry.forms = command.text;
-        if (command.danger) entry.danger = true;
-        entries.push(entry);
-      }
-    }
-    return entries;
+    return entriesOf(described.modules);
+  }
+
+  listNow(context: RoomContext): readonly ModuleCommandEntry[] | null {
+    const described = describedModules(this.#rooms.worker(context.room));
+    if (described === null) return null;
+    for (const problem of described.problems) context.services.report(context.room, problem);
+    return entriesOf(described.modules);
   }
 
   async run(context: RoomContext, id: string, args: Args, locale: string): Promise<CommandOutcome> {
@@ -102,7 +134,7 @@ export class RoomModuleCommands implements ModuleCommands {
         who: context.who,
         by: "member",
         seed: `${room}:${context.writer.epoch}:${context.turn}:${action}:command`,
-        room: moduleRoom(context.services, room, context.turn, this.#rooms.moduleClock(room)),
+        room: moduleRoom(context.services, room, context.turn, this.#rooms.moduleClock(room), this.#rooms.members(room)),
       }),
     );
     for (const problem of outcome.problems) context.services.report(room, problem);
@@ -116,6 +148,9 @@ export class RoomModuleCommands implements ModuleCommands {
             return refusal(locale, "forbidden");
           case "invalid":
             return refusal(locale, "module_args");
+          case "args":
+            // The engine's own refusal of arguments that do not fit, as for an engine command.
+            return refusal(locale, outcome.problem?.code ?? "invalid_arg", { path: outcome.problem?.path ?? "" });
           case "unavailable":
             // The module's own reason is authorial text, shown to that member as written.
             return outcome.text === null ? refusal(locale, "module_unavailable") : { ok: false, code: "module_unavailable", message: outcome.text };

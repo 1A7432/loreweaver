@@ -6,7 +6,7 @@
 // What the test host does NOT do is the engine's half: it applies nothing, and it does
 // not enforce the engine's size limits (see the README for them). Effects come back
 // exactly as the module requested them.
-import type { ClockAdvance, ClockReading, CommandOrigin, Json, JsonObject, ModuleDefinition, Role, RollResult, RoomSnapshot, VariableWrite, Who } from "./module.ts";
+import type { ClockAdvance, ClockReading, CommandOrigin, Json, JsonObject, ModuleDefinition, Role, RollResult, RoomMember, RoomSnapshot, VariableWrite, Who } from "./module.ts";
 import {
   type CallValue,
   type CommandOutcome,
@@ -34,7 +34,14 @@ export interface TestHostOptions {
   readonly variables?: JsonObject;
   /** The room's clock for every call that sets none. Default null. */
   readonly clock?: ClockReading | null;
-  /** The prefix of the seeds the host derives for each call. Default `test`. */
+  /** The room's members for every call that sets none. Default: none. */
+  readonly members?: readonly RoomMember[];
+  /** The module's `options`, as a pack's manifest would give them (`init.options`). Default `{}`. */
+  readonly options?: JsonObject;
+  /**
+   * The prefix of the seeds the host derives for each call. Default `test`. `create` and
+   * `load` get `init.seed` = `<seed>:<module id>`.
+   */
   readonly seed?: string;
   /**
    * A NEW instance of the module, for `restart()`: e.g.
@@ -82,6 +89,7 @@ export interface RoomInput {
   readonly turn?: number;
   readonly variables?: JsonObject;
   readonly clock?: ClockReading | null;
+  readonly members?: readonly RoomMember[];
 }
 
 export interface ToolCallInput {
@@ -125,9 +133,9 @@ export interface TestHost {
   /** A view's data for `who`; throws when there is no such view or it failed. */
   view(name: string, who?: Who, room?: RoomInput): Promise<Json>;
   /**
-   * Whether the member `who` may use a command: `"role"` when the role forbids it (always,
-   * for a `keeper` command), otherwise what the
-   * command's `available` answers (`true` when it has none).
+   * Whether the member `who` may use a command: `"role"` when the role forbids it (a `keeper`
+   * command: for everyone but an admin), otherwise what the command's `available` answers
+   * (`true` when it has none) — the question the engine asks at the moment of use.
    */
   available(name: string, who?: Who, room?: RoomInput): Promise<Json>;
   characters(room?: RoomInput): Promise<Json>;
@@ -167,7 +175,7 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
 
   function start(module: ModuleDefinition, snapshot: Json | undefined): void {
     runner = new ModuleRunner({ dice });
-    const loaded = runner.load([{ path: PATH, definition: module }], snapshot === undefined ? {} : { [module.id]: snapshot });
+    const loaded = runner.load([{ path: PATH, definition: module, options: options.options ?? {} }], snapshot === undefined ? {} : { [module.id]: snapshot }, seedPrefix);
     const first = loaded.modules[0];
     if (!first) throw new Error("test host: the module did not load");
     description = first;
@@ -196,11 +204,12 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       turn: room.turn ?? Math.max(lastTurn, 1),
       variables: room.variables ?? options.variables ?? {},
       clock: room.clock === undefined ? (options.clock ?? null) : room.clock,
+      members: room.members ?? options.members ?? [],
     };
   }
 
-  async function renderFor(viewer: Who, room?: RoomInput) {
-    const rendered = await runner.render({ viewers: [viewer], room: snapshot(room) });
+  async function renderFor(viewer: Who, room?: RoomInput, view?: string) {
+    const rendered = await runner.render({ viewers: [{ who: viewer, views: view === undefined ? [] : [{ module: description.id, view }] }], room: snapshot(room) });
     const failure = rendered.failures[0];
     if (failure) throw new Error(`test host: ${failure.error}`);
     return rendered;
@@ -274,7 +283,7 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       return runCommand("keeper", name, args, caller, room);
     },
     async view(name, caller, room) {
-      const rendered = await renderFor(caller ?? defaultWho, room);
+      const rendered = await renderFor(caller ?? defaultWho, room, name);
       const found = rendered.viewers[0]?.views.find((entry) => entry.view === name);
       if (!found) throw new Error(`test host: no view "${name}"`);
       if ("error" in found) throw new Error(`test host: view "${name}" failed — ${found.error}`);
@@ -285,12 +294,9 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       const command = description.commands.find((entry) => entry.name === name);
       if (!command) throw new Error(`test host: no command "${name}"`);
       if (!mayUse(command.role, viewer)) return "role";
-      if (!command.available) return true;
-      const rendered = await renderFor(viewer, room);
-      const found = rendered.viewers[0]?.available.find((entry) => entry.command === name);
-      if (!found) throw new Error(`test host: no verdict for "${name}"`);
-      if ("error" in found) throw new Error(`test host: available() of "${name}" failed — ${found.error}`);
-      return found.verdict;
+      const answer = await runner.available({ module: description.id, command: name, who: viewer, room: snapshot(room) });
+      if ("error" in answer) throw new Error(`test host: available() of "${name}" failed — ${answer.error}`);
+      return answer.value;
     },
     async characters(room) {
       const rendered = await renderFor(defaultWho, room);

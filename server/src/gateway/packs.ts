@@ -32,6 +32,7 @@
 import type { InstalledKit, KitAsset, RoomKit } from "../agent/lanes/presentation.ts";
 import { mergeRoomKit } from "../agent/lanes/presentation.ts";
 import type { PanelEntry, Role } from "loreweaver-protocol/v3";
+import type { JsonObject } from "loreweaver/module";
 
 import type { Pack, PackAsset, PackPanel, TrustCard } from "../core/packs/index.ts";
 import type { KitCue } from "../core/presentation/kit.ts";
@@ -279,6 +280,11 @@ export class RoomPacks {
   /** The module entry files of the room's enabled packs, in dispatch order. */
   modulesFor(store: Store, room: string): readonly string[] {
     return this.enabled(store, room).flatMap((loaded) => loaded.pack.modules.map((module) => loaded.filePath(module.path)));
+  }
+
+  /** Each of those entry files' manifest `options`, by entry file (what `init.options` carries). */
+  moduleOptionsFor(store: Store, room: string): ReadonlyMap<string, JsonObject> {
+    return new Map(this.enabled(store, room).flatMap((loaded) => loaded.pack.modules.map((module) => [loaded.filePath(module.path), module.options as JsonObject] as const)));
   }
 
   /** The room's kit: every enabled pack's kit merged; null when none of them has one. */

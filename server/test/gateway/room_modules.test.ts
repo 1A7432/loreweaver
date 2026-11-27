@@ -35,6 +35,38 @@ test("a module command by text and by command.run: effects applied, events publi
   expect(b.actions).toEqual([{ actor: "Ada", action: "kitchen/hit", text: "Ada is hit" }]);
 });
 
+test("a module command by its text form: arguments coerced by type and checked against params before the module runs", async () => {
+  const b = setup();
+  const ada = b.join(KEYS.ada);
+  // The first line arrives before the modules were ever loaded: it is resolved under the lock.
+  ada.receive({ type: "input", rid: "one", text: ".hit 3" });
+  await b.settled();
+  ada.receive({ type: "input", rid: "two", text: ".HIT two" });
+  ada.receive({ type: "call", rid: "run", method: "command.run", params: { id: "kitchen/hit", args: { amount: 1.5 } } });
+  ada.receive({ type: "input", rid: "speech", text: ".hum a tune" });
+  await b.settled();
+  expect(resultFor(ada.sent, "one")).toMatchObject({ ok: true, text: "hp 7" });
+  expect(resultFor(ada.sent, "two")).toMatchObject({ ok: false, error: { code: "invalid_arg", message: "Invalid argument: amount." } });
+  expect(resultFor(ada.sent, "run")).toMatchObject({ ok: false, error: { code: "invalid_arg" } });
+  expect(resultFor(ada.sent, "speech")).toEqual({ type: "result", rid: "speech", ok: true });
+  expect(b.store.moduleStates(ROOM).get("kitchen")).toEqual({ hp: 7, said: [] });
+  ada.receive({ type: "call", rid: "s", method: "view.subscribe", params: { names: ["commands"] } });
+  await b.settled();
+  const listed = (views(ada.sent, "commands").at(-1)?.data as { commands: { id: string; text?: unknown }[] }).commands.find((entry) => entry.id === "kitchen/hit");
+  expect(listed?.text).toEqual({ forms: ["hit"], usage: ".hit {amount}" });
+});
+
+test("every member of the room reaches a module, connected or not, sorted by id", async () => {
+  const b = setup({ modules: ["peeker"] });
+  const ada = b.join(KEYS.ada);
+  ada.receive({ type: "call", rid: "s", method: "view.subscribe", params: { names: ["peeker/vars"] } });
+  await b.settled();
+  const members = (views(ada.sent, "peeker/vars").at(-1)?.data as { members: { id: string; name: string; role: string }[] }).members;
+  expect(members.map((member) => member.name).sort()).toEqual(["Ada", "Bao", "Eve", "Root"]);
+  expect(members.map((member) => member.id)).toEqual(members.map((member) => member.id).sort());
+  expect(members.find((member) => member.name === "Root")?.role).toBe("admin");
+});
+
 test("the commands view lists module commands; a module view is rendered for its subscriber", async () => {
   const b = setup();
   const ada = b.join(KEYS.ada);

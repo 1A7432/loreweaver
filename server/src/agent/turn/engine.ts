@@ -36,6 +36,7 @@
 // the prompt read are cleared only in step 11, so a turn that ends any other way loses none.
 import type { DiceData, NarrativeData } from "loreweaver-protocol/v3";
 import type { JsonObject as ModuleJson, RollResult, VariableWrite as ModuleVariableWrite } from "loreweaver/module";
+import { keeperMayRun } from "loreweaver/runner";
 
 import { summaryThroughTurn, overflowReading } from "../../core/chronicle/index.ts";
 import { DocumentRefused } from "../../core/documents/raw.ts";
@@ -302,6 +303,7 @@ class KeeperTurn {
       who: context.who,
       variables: moduleVariablesJson(services, room),
       clock: clockReading(services, room, null),
+      members: this.#ports.members(),
     });
     this.#checkpoint();
 
@@ -579,7 +581,7 @@ class KeeperTurn {
                 who: context.who,
                 by: "keeper",
                 seed: this.#seed(`command:${++this.#commands}`),
-                room: { turn: context.turn, variables: moduleVariablesJson(services, room), clock: clockReading(services, room, this.#moduleClock) },
+                room: { turn: context.turn, variables: moduleVariablesJson(services, room), clock: clockReading(services, room, this.#moduleClock), members: this.#ports.members() },
               }),
           }),
     };
@@ -688,8 +690,10 @@ class KeeperTurn {
     if (opening !== null) injections.push(opening);
 
     const skills = activeSkills(this.#env.skills, readEnabledSkills(store, room)).map((skill) => skill.body);
+    // Only what the Keeper can run: an admin command, or a member's own verb (`keeper: false`),
+    // would be a line in the prompt the Keeper must not act on.
     const moduleCommands = this.#modules.flatMap((module) =>
-      module.commands.map((info) => commandLine(commandId({ module: module.id, info }), info.description)),
+      module.commands.filter((info) => keeperMayRun(info.role, info.keeper)).map((info) => commandLine(commandId({ module: module.id, info }), info.description)),
     );
     const snapshot = readKeeperSnapshot(context, {
       pack: context.pack,
@@ -781,6 +785,7 @@ class KeeperTurn {
       who: context.who,
       variables: moduleVariablesJson(services, room),
       clock: clockReading(services, room, this.#moduleClock),
+      members: this.#ports.members(),
       calls: calls.map((call) => ({ id: call.id, name: call.name, args: (call.input.valid ? call.input.value : {}) as ModuleJson })),
     });
     this.#checkpoint();
@@ -926,6 +931,7 @@ class KeeperTurn {
       who: context.who,
       variables: moduleVariablesJson(services, room),
       clock: clockReading(services, room, this.#moduleClock),
+      members: this.#ports.members(),
     });
     // Past the publication an abort has nothing left to stop; a rewind still ends the turn.
     this.#ensureCurrent();

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { defineModule, type Json, type ModuleDefinition, type Who } from "./module.ts";
-import { isValidName, mayRun, mayUse, ModuleRunner } from "./runner.ts";
+import { defineModule, type Json, type ModuleDefinition, type ModuleInit, type Who } from "./module.ts";
+import { isValidName, keeperMayRun, mayRun, mayUse, ModuleRunner, type ViewerRequest } from "./runner.ts";
 
 const ada: Who = { member: { id: "m1", name: "Ada", role: "player" }, character: { id: "ada", name: "Ada" } };
 const eve: Who = { member: { id: "m3", name: "Eve", role: "observer" }, character: null };
@@ -75,11 +75,16 @@ function runner(...definitions: ModuleDefinition[]): ModuleRunner {
 }
 
 function room(turn: number, variables: Record<string, Json> = {}) {
-  return { turn, variables, clock: null };
+  return { turn, variables, clock: null, members: [] };
 }
 
 function turn(text: string, number = 1) {
-  return { turn: number, seed: `s${number}`, text, who: ada, variables: {}, clock: null };
+  return { turn: number, seed: `s${number}`, text, who: ada, variables: {}, clock: null, members: [] };
+}
+
+/** A viewer asking for these views of `module`. */
+function asking(who: Who, module: string, ...views: string[]): ViewerRequest {
+  return { who, views: views.map((view) => ({ module, view })) };
 }
 
 test("names: the pattern, and nothing every object already has", () => {
@@ -182,8 +187,9 @@ test("a throwing call loses its effects and its state; the sibling keeps both", 
 test("read-only calls leave no trace, even when the handler mutates", async () => {
   const r = runner(counterModule("a"));
   await r.turnStart(turn("one"));
-  const rendered = await r.render({ viewers: [ada, mo], room: room(1) });
-  // Each view call starts from the checkpoint: the second viewer does not see the first's change.
+  const rendered = await r.render({ viewers: [asking(ada, "a", "count"), asking(mo, "a", "count")], room: room(1) });
+  // Each viewer starts from the checkpoint: the second viewer does not see the first's change.
+  expect(rendered.notices).toEqual([{ module: "a", code: "read_changed_state" }]);
   expect(rendered.viewers.map((viewer) => viewer.views)).toEqual([
     [{ module: "a", view: "count", data: 1001 }],
     [{ module: "a", view: "count", data: 1001 }],
@@ -281,7 +287,7 @@ test("a restore that fails marks the module broken until the next load", async (
       on: { turnStart() {} },
     }),
   );
-  const rendered = await r.render({ viewers: [ada], room: room(1) });
+  const rendered = await r.render({ viewers: [asking(ada, "fragile", "v")], room: room(1) });
   expect(rendered.broken).toEqual(["fragile"]);
   const value = await r.turnStart(turn("x"));
   expect(value.failures).toEqual([{ module: "fragile", error: "module is broken" }]);
@@ -334,9 +340,143 @@ test("each module gets its own copy of the room: a write by one never reaches th
 
   const peek = await r.command({ module: "second", command: "peek", args: {}, who: ada, by: "member", seed: "s", room: room(1, variables) });
   expect(peek.outcome).toEqual({ status: "ok", result: { data: { hp: 7 } } });
-  const rendered = await r.render({ viewers: [ada, mo], room: room(1, variables) });
+  const rendered = await r.render({ viewers: [{ who: ada, views: [{ module: "first", view: "hp" }, { module: "second", view: "hp" }] }, { who: mo, views: [{ module: "first", view: "hp" }, { module: "second", view: "hp" }] }], room: room(1, variables) });
   expect(rendered.viewers.map((viewer) => viewer.views.map((view) => ("data" in view ? view.data : null)))).toEqual([
     [7, 7],
     [7, 7],
   ]);
+});
+
+/** A module that counts its loads and lets the test see what each view read found. */
+function ledger(id: string) {
+  const counts = { loads: 0, availables: 0, reads: [] as string[] };
+  let marks = 0;
+  const definition = defineModule({
+    id,
+    create() {
+      marks = 0;
+    },
+    load(snapshot) {
+      counts.loads += 1;
+      marks = (snapshot as { marks: number }).marks;
+    },
+    save: () => ({ marks }),
+    commands: {
+      gated: {
+        title: "Gated",
+        available(who) {
+          counts.availables += 1;
+          return who.member?.role === "admin" ? true : "Admins only today.";
+        },
+        run: () => ({ text: "ran" }),
+      },
+    },
+    views: {
+      first: {
+        schema: {},
+        for(who) {
+          // A read that changes state: what the viewer's NEXT view finds.
+          marks += 1;
+          counts.reads.push(`first:${who.member?.name}:${marks}`);
+          return marks;
+        },
+      },
+      second: {
+        schema: {},
+        for(who) {
+          counts.reads.push(`second:${who.member?.name}:${marks}`);
+          return marks;
+        },
+      },
+      unwatched: {
+        schema: {},
+        for() {
+          counts.reads.push("unwatched");
+          return 0;
+        },
+      },
+    },
+  });
+  return { definition, counts };
+}
+
+test("a render reads only the views each viewer asked for and restores once per viewer", async () => {
+  const { definition, counts } = ledger("ledger");
+  const idle = ledger("idle");
+  const r = runner(definition, idle.definition);
+  const before = counts.loads;
+  const rendered = await r.render({ viewers: [asking(ada, "ledger", "first", "second"), asking(mo, "ledger", "second")], room: room(1) });
+  expect(rendered.viewers.map((viewer) => viewer.views.map((view) => view.view))).toEqual([["first", "second"], ["second"]]);
+  // Ada's second view sees what her first did; Mo starts from the checkpoint again.
+  expect(counts.reads).toEqual(["first:Ada:1", "second:Ada:1", "second:Mo:0"]);
+  // One restore per viewer, none per read; a module nobody asked a view of is not touched.
+  expect(counts.loads - before).toBe(2);
+  expect(idle.counts.reads).toEqual([]);
+  expect(idle.counts.loads).toBe(0);
+});
+
+test("a read that changes state is reported once per runner, and never reaches another viewer or the next render", async () => {
+  const { definition, counts } = ledger("ledger");
+  const r = runner(definition);
+  const once = await r.render({ viewers: [asking(ada, "ledger", "first"), asking(mo, "ledger", "first")], room: room(1) });
+  expect(once.viewers.map((viewer) => viewer.views)).toEqual([[{ module: "ledger", view: "first", data: 1 }], [{ module: "ledger", view: "first", data: 1 }]]);
+  expect(once.notices).toEqual([{ module: "ledger", code: "read_changed_state" }]);
+  const twice = await r.render({ viewers: [asking(ada, "ledger", "first")], room: room(1) });
+  expect(twice.viewers[0]?.views).toEqual([{ module: "ledger", view: "first", data: 1 }]);
+  expect(twice.notices).toEqual([]);
+  expect(r.checkpointOf("ledger")).toEqual({ marks: 0 });
+  // A read that changes nothing is never reported.
+  const quiet = runner(ledger("quiet").definition);
+  expect((await quiet.render({ viewers: [asking(ada, "quiet", "second")], room: room(1) })).notices).toEqual([]);
+  expect(counts.reads.length).toBe(3);
+});
+
+test("a render never asks a command's available; the moment of use still does", async () => {
+  const { definition, counts } = ledger("ledger");
+  const r = runner(definition);
+  await r.render({ viewers: [asking(ada, "ledger", "second"), asking(mo, "ledger", "second")], room: room(1) });
+  expect(counts.availables).toBe(0);
+  const refused = await r.command({ module: "ledger", command: "gated", args: {}, who: ada, by: "member", seed: "s", room: room(1) });
+  expect(refused.outcome).toEqual({ status: "refused", reason: "unavailable", text: "Admins only today." });
+  const ran = await r.command({ module: "ledger", command: "gated", args: {}, who: mo, by: "member", seed: "s", room: room(1) });
+  expect(ran.outcome).toEqual({ status: "ok", result: { text: "ran" } });
+  expect(counts.availables).toBe(2);
+});
+
+test("create and load get the manifest's options and a seed of the room and the module; run gets the call's seed", async () => {
+  const inits: [string, ModuleInit][] = [];
+  const seeds: string[] = [];
+  const definition = defineModule({
+    id: "seeded",
+    create(init) {
+      inits.push(["create", init]);
+    },
+    load(_snapshot, init) {
+      inits.push(["load", init]);
+    },
+    save: () => 1,
+    commands: { go: { title: "Go", run: (_args, _who, _fx, _room, call) => void seeds.push(call.seed) } },
+  });
+  const r = new ModuleRunner({ dice });
+  r.load([{ path: "seeded", definition, options: { depth: 3 } }], {}, "room-a:1");
+  r.load([{ path: "seeded", definition, options: { depth: 3 } }], { seeded: 1 }, "room-a:1");
+  r.load([{ path: "seeded", definition }], {}, "room-a:2");
+  expect(inits).toEqual([
+    ["create", { options: { depth: 3 }, seed: "room-a:1:seeded" }],
+    ["load", { options: { depth: 3 }, seed: "room-a:1:seeded" }],
+    ["create", { options: {}, seed: "room-a:2:seeded" }],
+  ]);
+  await r.command({ module: "seeded", command: "go", args: {}, who: ada, by: "member", seed: "room-a:2:7:command", room: room(7) });
+  await r.command({ module: "seeded", command: "go", args: {}, who: ada, by: "keeper", seed: "room-a:7:command:1", room: room(7) });
+  expect(seeds).toEqual(["room-a:2:7:command", "room-a:7:command:1"]);
+});
+
+test("keeper: false is a member's own verb: the Keeper may not run it, a member may", async () => {
+  expect(keeperMayRun("player", false)).toBe(false);
+  expect(keeperMayRun(undefined, undefined)).toBe(true);
+  expect(keeperMayRun("admin", true)).toBe(false);
+  const r = runner(defineModule({ id: "verbs", commands: { wave: { title: "Wave", keeper: false, run: () => ({ text: "waved" }) } } }));
+  const by = async (who: Who, origin: "keeper" | "member") => (await r.command({ module: "verbs", command: "wave", args: {}, who, by: origin, seed: "s", room: room(1) })).outcome;
+  expect(await by(ada, "keeper")).toEqual({ status: "refused", reason: "role" });
+  expect(await by(ada, "member")).toEqual({ status: "ok", result: { text: "waved" } });
 });

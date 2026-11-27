@@ -69,7 +69,7 @@ async function send(wire: Wire, rid: string, text: string): Promise<ResultFrame>
 }
 
 function turnStart(b: RoomBench, room = ROOM): ReturnType<typeof dispatchTurnStart> {
-  return dispatchTurnStart(b.hub.moduleWorker(room), { turn: 1, seed: "s", text: "hello", who: { member: null, character: null }, variables: {}, clock: null });
+  return dispatchTurnStart(b.hub.moduleWorker(room), { turn: 1, seed: "s", text: "hello", who: { member: null, character: null }, variables: {}, clock: null, members: [] });
 }
 
 function answerText(frame: ResultFrame): string {

@@ -7,7 +7,8 @@
 // the modules gave at load are kept for the life of this handle (they depend on the module
 // files alone), so an exchange no module handles is answered here without a round trip —
 // even when the worker is not running, without starting one.
-import type { Json, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
+import type { Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent } from "loreweaver/module";
+import type { ViewerRequest } from "loreweaver/runner";
 
 import type { WorkerHandle } from "./runtime/worker.ts";
 import type {
@@ -72,6 +73,12 @@ export interface RoomWorkerOptions {
   readonly coldStart?: boolean;
   /** Milliseconds, for idle time. Default `Date.now`. */
   readonly now?: () => number;
+  /**
+   * Read at every load (a new worker): the room's seed (its id and current generation), from
+   * which each module's `init.seed` derives, and each entry file's manifest `options` by path.
+   * Default: an empty seed and no options.
+   */
+  readonly init?: () => { readonly seed: string; readonly options: ReadonlyMap<string, JsonObject> };
 }
 
 function emptyCall(): CallValue {
@@ -87,6 +94,7 @@ export class RoomWorker {
   readonly #token: () => unknown;
   readonly #coldStart: boolean;
   readonly #now: () => number;
+  readonly #init: () => { readonly seed: string; readonly options: ReadonlyMap<string, JsonObject> };
   #descriptions: readonly ModuleDescription[] | null = null;
   #loadProblems: readonly string[] = [];
   #running: Running | null = null;
@@ -104,6 +112,7 @@ export class RoomWorker {
     this.#token = options.token ?? (() => undefined);
     this.#coldStart = options.coldStart ?? false;
     this.#now = options.now ?? Date.now;
+    this.#init = options.init ?? (() => ({ seed: "", options: new Map() }));
     this.#lastActive = this.#now();
     for (const [module, snapshot] of options.checkpoints ?? []) this.#checkpoints.set(module, snapshot);
   }
@@ -174,15 +183,16 @@ export class RoomWorker {
   }
 
   /**
-   * Every read-only output (views, command availability, characters, clock) for these
-   * viewers, all seeing the same room.
+   * The read-only outputs for these viewers, all seeing the same room: each viewer's asked-for
+   * module views, every module's characters and the clock. No round trip when no module has
+   * characters, a clock or a view somebody asked for.
    */
-  render(viewers: readonly Who[], room: RoomSnapshot): Promise<RenderValue> {
+  render(viewers: readonly ViewerRequest[], room: RoomSnapshot): Promise<RenderValue> {
+    const asked = new Set(viewers.flatMap((viewer) => viewer.views.map((ref) => ref.module)));
     return this.#call(
       { op: "render", request: { viewers, room } },
-      (module) =>
-        module.characters || module.clock || (viewers.length > 0 && (module.views.length > 0 || module.commands.some((command) => command.available))),
-      () => ({ viewers: viewers.map(() => ({ views: [], available: [] })), characters: [], clock: null, failures: [], broken: [] }),
+      (module) => module.characters || module.clock || (asked.has(module.id) && module.views.length > 0),
+      () => ({ viewers: viewers.map(() => ({ views: [] })), characters: [], clock: null, failures: [], broken: [], notices: [] }),
       false,
     );
   }
@@ -310,7 +320,12 @@ export class RoomWorker {
     const running: Running = { handle, ready: Promise.resolve() };
     this.#running = running;
     const snapshots = Object.fromEntries(this.#checkpoints);
-    running.ready = this.#send(running, { op: "load", paths: this.#paths, snapshots }).then(
+    const init = this.#init();
+    const options = this.#paths.flatMap((path) => {
+      const given = init.options.get(path);
+      return given === undefined ? [] : [[path, given] as const];
+    });
+    running.ready = this.#send(running, { op: "load", paths: this.#paths, snapshots, seed: init.seed, options }).then(
       (value) => {
         const loaded = value as LoadValue & { readonly failed?: readonly string[] };
         this.#descriptions = loaded.modules;

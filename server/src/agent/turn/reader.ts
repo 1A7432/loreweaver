@@ -69,7 +69,7 @@ import type { MacroContext } from "../../core/worldbook/index.ts";
 import type { Store } from "../../infra/store.ts";
 import { readWorldCard } from "../card_import.ts";
 import type { RoomContext, Services } from "../context.ts";
-import type { PendingFact } from "../effects.ts";
+import { IMPORTANCE_RANK, type PendingFact } from "../effects.ts";
 import type { Whisper } from "../lanes/scribe.ts";
 import type { ClockInfo } from "../modules.ts";
 import type { KeeperPromptSnapshot, ModuleCommandLine, PartyMember, PastExchange, PlayerAction } from "../prompt/index.ts";
@@ -231,12 +231,15 @@ export function renderWhisper(locale: string, whisper: Whisper): string {
 
 /**
  * Pending module facts as module notes for the prompt: a Keeper fact's text, a table fact's
- * data (its text was already shown at the table). The prompt snapshot has no slot of its
- * own for facts, so they ride the module-notes section beside this turn's injections.
+ * data (its text was already shown at the table). High importance first, then normal, then
+ * low; in the order they came within a level. The prompt snapshot has no slot of its own for
+ * facts, so they ride the module-notes section beside this turn's injections.
  */
 export function renderPendingFacts(facts: readonly PendingFact[]): string[] {
   const lines: string[] = [];
-  for (const fact of facts) {
+  // `sort` is stable: within a level, the order they came in.
+  const ordered = [...facts].sort((a, b) => IMPORTANCE_RANK[b.importance] - IMPORTANCE_RANK[a.importance]);
+  for (const fact of ordered) {
     const parts: string[] = [];
     if (fact.text !== null && fact.text.trim() !== "") parts.push(fact.text.trim());
     if (fact.data !== null) parts.push(JSON.stringify(fact.data));

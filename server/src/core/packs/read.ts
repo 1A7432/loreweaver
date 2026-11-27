@@ -35,6 +35,7 @@ import {
   type Manifest,
   type ManifestProblem,
   MAX_MANIFEST_BYTES,
+  type ModuleOptions,
   parseManifest,
   ruleSystemId,
   skillId,
@@ -81,6 +82,8 @@ export interface PackFile {
 
 export interface PackModule extends PackFile {
   readonly id: string;
+  /** The manifest's `options` for it (`init.options`); `{}` when none. */
+  readonly options: ModuleOptions;
 }
 
 export interface PackRuleSystem extends PackFile {
@@ -304,7 +307,7 @@ export function readPack(entries: readonly PackEntry[]): PackRead {
       continue;
     }
     if (textOf(module.entry, bytes) === null) continue;
-    modules.push({ id: module.id, ...fileOf(module.entry, bytes) });
+    modules.push({ id: module.id, options: module.options, ...fileOf(module.entry, bytes) });
   }
 
   // Rule packs: compiled with the pack's own rule packs as the first `extends:` bases.

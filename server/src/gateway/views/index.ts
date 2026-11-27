@@ -11,9 +11,10 @@ export {
   moduleViewName,
   type ModuleViewListing,
   type ModuleViewSet,
+  viewRefs,
   NO_MODULE_VIEWS,
 } from "./modules.ts";
-export { type ComputedView, RoomViews, viewCatalog, type ViewInputs } from "./room_views.ts";
+export { type ComputedView, type ModuleViewRequest, RoomViews, viewCatalog, type ViewInputs } from "./room_views.ts";
 export { byteSize, stableStringify } from "./serialize.ts";
 export {
   type Delivery,

@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { MAX_ASSETS, MAX_MODULES, parseManifest, versionAtLeast } from "../../src/core/packs/index.ts";
-import { MAX_MANIFEST_BYTES } from "../../src/core/packs/manifest.ts";
+import { MAX_MANIFEST_BYTES, MAX_MODULE_OPTIONS_BYTES } from "../../src/core/packs/manifest.ts";
 import { manifestYaml } from "./fixture.ts";
 
 function problems(text: string): { code: string; path: string; detail?: string }[] {
@@ -27,7 +27,7 @@ describe("a full manifest", () => {
     expect(m.authors).toEqual(["Ada"]);
     expect(m.license).toBe("CC-BY-4.0");
     expect(m.engine).toEqual({ protocol: "3.0", server: null });
-    expect(m.modules).toEqual([{ id: "tally", entry: "modules/tally.js" }]);
+    expect(m.modules).toEqual([{ id: "tally", entry: "modules/tally.js", options: {} }]);
     expect(m.skills).toEqual(["skills/harbor-guide"]);
     expect(m.rulepacks).toEqual(["rules/harbor-rules.yaml"]);
     expect(m.cards).toEqual([
@@ -42,6 +42,19 @@ describe("a full manifest", () => {
   test("the smallest manifest", () => {
     const parsed = parseManifest(BASE);
     expect(parsed.ok && parsed.manifest.modules).toEqual([]);
+  });
+
+  test("a module entry may carry options: a JSON object of up to 16 KiB as JSON text", () => {
+    const yaml = (options: string) => `${BASE}modules:\n  - { id: tally, entry: modules/tally.js, options: ${options} }\n`;
+    const read = (options: string) => parseManifest(yaml(options));
+    const parsed = read("{ depth: 3, names: [a, 港], deep: { on: true, none: null } }");
+    expect(parsed.ok && parsed.manifest.modules).toEqual([{ id: "tally", entry: "modules/tally.js", options: { depth: 3, names: ["a", "港"], deep: { on: true, none: null } } }]);
+    expect(problems(yaml("[1, 2]"))).toEqual([{ code: "bad_field", path: "modules.0.options" }]);
+    expect(problems(yaml("seven"))).toEqual([{ code: "bad_field", path: "modules.0.options" }]);
+    // Bytes, not characters: a CJK string is three bytes to the character.
+    const chars = Math.ceil(MAX_MODULE_OPTIONS_BYTES / 3);
+    expect(problems(yaml(`{ text: "${"港".repeat(chars)}" }`))).toEqual([{ code: "options_too_large", path: "modules.0.options" }]);
+    expect(read(`{ text: "${"a".repeat(MAX_MODULE_OPTIONS_BYTES - 20)}" }`).ok).toBe(true);
   });
 
   test("a module entry may be TypeScript in a source tree", () => {

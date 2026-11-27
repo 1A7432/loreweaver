@@ -29,7 +29,7 @@
 // when a module asked for narration now (decision 35), ONE facts turn runs before the lock
 // is released. Nothing under the lock ever waits for the chain.
 import type { EventKind, EventPayloads, EventFrame, MediaData, Role, ServerFrame, SignalFrame, SignalKind, SignalPayloads, ViewFrame, ViewListing } from "loreweaver-protocol/v3";
-import type { Who } from "loreweaver/module";
+import type { RoomMember, Who } from "loreweaver/module";
 
 import type { RoomContext, Services } from "../agent/context.ts";
 import { decideNarrateNow, NARRATE_NOW, narrateNowEnabled, type TextReview } from "../agent/effects.ts";
@@ -71,7 +71,7 @@ import type { CommandCall } from "./commands/types.ts";
 import { type RecordPlayerAction, type RunKeeperTurn, runAsWork } from "./keeper.ts";
 import { type LaneSettings, runLanePass } from "./lanes.ts";
 import type { ModelSettings } from "./model_settings.ts";
-import { eventIdOf, moduleRoom } from "./module_commands.ts";
+import { eventIdOf, moduleRoom, roomMembers } from "./module_commands.ts";
 import type { RateLimiter } from "./rate_limit.ts";
 import { type ReviewFilter, reviewFact, reviewNarrative } from "./review.ts";
 import type { RoomPacks } from "./packs.ts";
@@ -82,7 +82,10 @@ import {
   type Delivery,
   listedModuleViews,
   mergeModuleViews,
+  type ModuleViewRequest,
   type ModuleViewSet,
+  viewRefs,
+  whoOf,
   NO_MODULE_VIEWS,
   type OnlineMember,
   recordUsage,
@@ -93,7 +96,6 @@ import {
   viewerKey,
   type ViewProblem,
   type ViewSource,
-  whoOf,
 } from "./views/index.ts";
 
 /** One connection in a room. A person with two connections is two members with one `id`. */
@@ -326,14 +328,16 @@ export class Room {
       reply({ ok: false, code: parsed.code, message: parsed.message });
       return;
     }
-    // A `module/command` word is a module command, which only the dispatcher knows.
-    const id = parsed?.id ?? (splitCommand(text)?.word.includes("/") === true ? (splitCommand(text)?.word ?? null) : null);
+    // A `module/command` word, or a word a module's text form takes, is a module command,
+    // which only the dispatcher runs; it resolves the line under the lock (speech after all
+    // when no module takes it).
+    const id = parsed?.id ?? (registry.mayBeModuleText(probe, text) ? (splitCommand(text)?.word ?? null) : null);
     if (id === null) {
       const accepted = this.#accept(member, text, reply);
       if (accepted !== null) this.#queueTurn(accepted);
       return;
     }
-    this.#dispatch(member, id, parsed?.args ?? {}, (context) => registry.input(context, text, member.locale), reply);
+    this.#dispatch(member, id, parsed?.args ?? {}, (context) => registry.input(context, text, member.locale), reply, parsed !== null);
   }
 
   /** `command.run {id, args}` from `member`. */
@@ -352,9 +356,10 @@ export class Room {
    * run at once so the room goes on taking input. `args` is only that hint: the registry
    * validates the arguments as for any command.
    */
-  #dispatch(member: Member, id: string, args: Readonly<Record<string, unknown>>, execute: (context: RoomContext) => Promise<InputOutcome>, reply: Reply): void {
+  #dispatch(member: Member, id: string, args: Readonly<Record<string, unknown>>, execute: (context: RoomContext) => Promise<InputOutcome>, reply: Reply, known = true): void {
     const probe = this.#context(member, this.#host.services.store.writer(this.id), "probe");
-    const spec = this.#host.registry.spec(probe, id);
+    // A module's word is no engine command, even when it spells an engine command's id.
+    const spec = known ? this.#host.registry.spec(probe, id) : undefined;
     const unlocked = spec?.lifecycle === true || spec?.unlocked?.(args) === true;
     const job = (): Promise<void> => this.#command(member, id, execute, reply, !unlocked);
     if (unlocked) void job();
@@ -490,7 +495,7 @@ export class Room {
     // a character — so the module views are rendered again for whoever watches one; without
     // this a panel fed by a module view stayed as it was until the next Keeper turn. (With no
     // rendering yet, the refresh below makes the first one.)
-    if (published && this.#moduleViews !== null && this.views.moduleViewers().length > 0) await this.#renderModules();
+    if (published && this.#moduleViews !== null && this.views.moduleRequests().length > 0) await this.#renderModules();
     await this.refreshViews();
     if (locked && published) await this.#maybeNarrateNow(context, action, actorName(context));
   }
@@ -627,6 +632,7 @@ export class Room {
       },
       moduleWorker: () => this.#host.moduleWorker(this.id),
       loreWorker: () => this.#host.loreWorker(this.id),
+      members: () => this.members(),
       reviewNarrative: (text) => reviewNarrative(review, { unfiltered }, text, context.locale),
       reviewFact: (text) => reviewFact(review, { unfiltered }, text, context.locale),
     };
@@ -647,7 +653,7 @@ export class Room {
     });
     const kit = host.lanes.director ? host.kitFor(this.id) : null;
     const director = kit === null ? null : { kit, images: readDirectorImageState(services.store, this.id) };
-    const vetoRoom = moduleRoom(services, this.id, context.turn, this.#moduleClock);
+    const vetoRoom = moduleRoom(services, this.id, context.turn, this.#moduleClock, this.members());
     void host.chains.schedule(this.id, async () => {
       // Pictures are on when the operator allows them AND an image client exists right now.
       const images = host.images(this.id);
@@ -794,7 +800,7 @@ export class Room {
     return this.#viewQueue.run(async () => {
       if (!BUILT_IN_NAMES.has(name)) {
         const viewer = this.views.subscriptions.viewer(member.connection);
-        if (viewer !== null) await this.#renderModules([viewer]);
+        if (viewer !== null) await this.#renderModules([{ viewer, views: [name] }]);
       }
       return this.views.get(member.connection, name, await this.#inputs());
     });
@@ -850,41 +856,65 @@ export class Room {
     return { source, modules: await this.#modules(), at: this.meta.head };
   }
 
-  /** The module views as last rendered, or as listed by the modules when none was. */
+  /**
+   * Every member of the room — every key of it, connected or not — sorted by id, so a module
+   * call made over the same room state carries the same list. The cap is applied (and
+   * reported) where a call is sent (`boundedSnapshot`).
+   */
+  members(): readonly RoomMember[] {
+    return roomMembers(this.#host.keys, this.id);
+  }
+
+  /**
+   * The module views as last rendered or, before any render, as the modules list them: the
+   * listing comes from the load-time description and needs no render. When a module keeps
+   * the clock, its first reading is taken then — a render that reads no view — so the `scene`
+   * view shows it before any turn has run.
+   */
   async #modules(): Promise<ModuleViewSet> {
     if (this.#moduleViews !== null) return this.#moduleViews;
     const worker = this.#host.moduleWorker(this.id);
     if (worker === null) return NO_MODULE_VIEWS;
-    // The first look at a room with modules asks them once: what views they have, and the
-    // clock one of them may keep — the `scene` view shows it before any turn has run.
-    await this.#renderModules();
-    if (this.#moduleViews !== null) return this.#moduleViews;
     const described = await describeModules(worker);
     for (const problem of described.problems) this.#report(problem);
+    if (this.views.moduleRequests().length > 0 || described.modules.some((module) => module.clock)) {
+      await this.#renderModules();
+      if (this.#moduleViews !== null) return this.#moduleViews;
+    }
     const listed = listedModuleViews(described.modules);
     this.#moduleViews = listed;
     return listed;
   }
 
   /**
-   * Render the module views for the viewers subscribed to one (and `extra`): one read-only
-   * exchange. It also reads the clock a module keeps.
+   * Render the module views each viewer subscribed to (and `extra`'s): one read-only
+   * exchange, which computes nothing else of the views. It also reads the clock a module keeps.
    */
-  async #renderModules(extra: readonly ViewerContext[] = []): Promise<void> {
+  async #renderModules(extra: readonly ModuleViewRequest[] = []): Promise<void> {
     const worker = this.#host.moduleWorker(this.id);
     if (worker === null) return;
-    const seen = new Set<string>();
-    const viewers = [...this.views.moduleViewers(), ...extra].filter((viewer) => {
-      const key = viewerKey(viewer);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    const requests = new Map<string, { viewer: ViewerContext; views: Set<string> }>();
+    for (const request of [...this.views.moduleRequests(), ...extra]) {
+      const key = viewerKey(request.viewer);
+      const entry = requests.get(key) ?? { viewer: request.viewer, views: new Set<string>() };
+      requests.set(key, entry);
+      for (const name of request.views) entry.views.add(name);
+    }
+    const viewers = [...requests.values()];
     const described = await describeModules(worker);
-    const outcome = await dispatchRender(worker, viewers.map(whoOf), moduleRoom(this.#host.services, this.id, this.meta.turn, this.#moduleClock));
+    const room = moduleRoom(this.#host.services, this.id, this.meta.turn, this.#moduleClock, this.members());
+    const outcome = await dispatchRender(
+      worker,
+      viewers.map((entry) => ({ who: whoOf(entry.viewer), views: viewRefs([...entry.views]) })),
+      room,
+    );
     for (const problem of [...described.problems, ...outcome.problems]) this.#report(problem);
     this.#moduleClock = outcome.clock;
-    const merged = mergeModuleViews(outcome, viewers, described.modules);
+    const merged = mergeModuleViews(
+      outcome,
+      viewers.map((entry) => entry.viewer),
+      described.modules,
+    );
     for (const problem of merged.problems) this.#report(problem);
     this.#moduleViews = merged;
   }

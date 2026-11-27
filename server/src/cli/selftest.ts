@@ -93,6 +93,7 @@ export function selftestTurn(): RunKeeperTurn {
       who: context.who,
       variables: {},
       clock: null,
+      members: ports.members(),
     });
     const reply = started.injections.length > 0 ? started.injections.join("\n") : `[${input.speaker}] ${input.text}`;
     const replyId = context.services.clock.id();

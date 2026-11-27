@@ -5,7 +5,8 @@
 //              pack, the archive written deterministically (same tree, same bytes);
 //   install    a local path, an https URL or `gh:owner/repo[@tag]` → validated, its trust card
 //              shown, and with `yes` unpacked under `<dataDir>/packs/<id>/<version>/` and
-//              listed in the index. Installing enables nothing anywhere;
+//              listed in the index. Installing enables nothing anywhere. The version already
+//              installed is refused unless `force` (the shell's `--force`) asks to replace it;
 //   list / uninstall;
 //   load       every installed pack read back from disk and validated again (start-up): one
 //              that no longer validates is skipped with a note, never a crash.
@@ -73,7 +74,7 @@ export async function buildPack(sourceDir: string, options: { readonly out?: str
   };
 
   // Modules: each entry and what it imports, as one file.
-  const modules: { id: string; entry: string }[] = [];
+  const modules: { id: string; entry: string; options?: unknown }[] = [];
   for (const module of manifest.modules) {
     if (!hasConfinedFile(root, module.entry)) return { ok: false, code: "missing_file", path: module.entry };
     const entry = readConfined(root, module.entry, MAX_ENTRY_BYTES);
@@ -84,7 +85,7 @@ export async function buildPack(sourceDir: string, options: { readonly out?: str
     if (!bundled.ok) return { ok: false, code: bundled.code, path: module.entry, detail: bundled.detail };
     const target = bundledEntry(module.id);
     files.set(target, new TextEncoder().encode(bundled.code));
-    modules.push({ id: module.id, entry: target });
+    modules.push(Object.keys(module.options).length === 0 ? { id: module.id, entry: target } : { id: module.id, entry: target, options: module.options });
   }
   for (const directory of manifest.skills) {
     const failed = read(`${directory}/SKILL.md`);
@@ -155,6 +156,8 @@ export { loadInstalledPacks } from "../gateway/pack_install.ts";
 
 export interface InstallOptions {
   readonly yes: boolean;
+  /** Replace an installed pack of the same id and version. The shell only: a room's `pack install` never forces. */
+  readonly force?: boolean;
   readonly fetch: FetchLike;
   readonly now?: () => number;
 }
@@ -163,7 +166,8 @@ export interface InstallOptions {
 export async function installPack(dataDir: string, ref: string, options: InstallOptions): Promise<InstallOutcome> {
   const source = await fetchPackSource(ref, { fetch: options.fetch });
   if (!source.ok) return source.detail === undefined ? { ok: false, code: source.code } : { ok: false, code: source.code, detail: source.detail };
-  return installArchive(dataDir, source.bytes, options.now === undefined ? { yes: options.yes } : { yes: options.yes, now: options.now });
+  const force = options.force === true;
+  return installArchive(dataDir, source.bytes, options.now === undefined ? { yes: options.yes, force } : { yes: options.yes, force, now: options.now });
 }
 
 export interface ListedPack {

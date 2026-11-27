@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 
 import type { Json, Who } from "loreweaver/module";
-import { NOBODY } from "loreweaver/runner";
+import { NOBODY, type ViewerRequest } from "loreweaver/runner";
 
 import {
   DEFAULT_CAPS,
+  MAX_ROOM_MEMBERS,
   dispatchCommand,
   dispatchRender,
   dispatchReplyPhase,
@@ -27,7 +28,12 @@ const ada: Who = { member: { id: "m-ada", name: "Ada", role: "player" }, charact
 const mo: Who = { member: { id: "m-mo", name: "Mo", role: "admin" }, character: null };
 const eve: Who = { member: { id: "m-eve", name: "Eve", role: "observer" }, character: null };
 
-const ROOM = { turn: 1, variables: {}, clock: null };
+const ROOM = { turn: 1, variables: {}, clock: null, members: [] };
+
+/** A viewer asking for these views (`<module>/<view>`). */
+function asking(who: Who, ...names: string[]): ViewerRequest {
+  return { who, views: names.map((name) => ({ module: name.split("/")[0] as string, view: name.split("/")[1] as string })) };
+}
 
 const workers: RoomWorker[] = [];
 afterEach(async () => {
@@ -62,7 +68,7 @@ const x = (n: number): string => "x".repeat(n);
 const blob = (bytes: number): Json => ({ s: x(bytes) });
 
 function command(name: string, extra: Record<string, unknown> = {}) {
-  return { name, title: "T", description: null, params: { type: "object" }, text: [], role: "player", available: false, ...extra };
+  return { name, title: "T", description: null, params: { type: "object" }, text: [], role: "player", keeper: true, available: false, ...extra };
 }
 
 function described(extra: Record<string, unknown> = {}) {
@@ -112,17 +118,67 @@ test("load: command and view tables are capped; malformed entries are left out",
           command("bad_text", { text: ["", "ok"] }),
           command("bad_role", { role: "observer" }),
           command("long_description", { description: x(2001) }),
-          command("good", { text: ["go {where}"], role: "admin", available: true }),
+          command("good", { params: { type: "object", properties: { where: { type: "string" } } }, text: ["go {where}"], role: "admin", available: true }),
           command("keepers", { role: "keeper" }),
+          command("contradiction", { role: "keeper", keeper: false }),
+          command("bad_keeper", { keeper: "no" }),
         ],
       }),
     ],
   });
+  const where = { type: "object", properties: { where: { type: "string" } } };
   expect(bad.modules[0]?.commands).toEqual([
-    { name: "good", title: "T", description: "", params: { type: "object" }, text: ["go {where}"], role: "admin", danger: false, checksAvailability: true },
-    { name: "keepers", title: "T", description: "", params: { type: "object" }, text: [], role: "keeper", danger: false, checksAvailability: false },
+    {
+      name: "good",
+      title: "T",
+      description: "",
+      params: where,
+      forms: [{ source: "go {where}", word: "go", tokens: [{ kind: "one", name: "where" }], literals: 0 }],
+      role: "admin",
+      keeper: true,
+      danger: false,
+      checksAvailability: true,
+    },
+    { name: "keepers", title: "T", description: "", params: { type: "object" }, forms: [], role: "keeper", keeper: true, danger: false, checksAvailability: false },
   ]);
-  expect(bad.problems).toHaveLength(6);
+  expect(bad.problems).toHaveLength(8);
+});
+
+test("load: an invalid text form is left out and reported; its command stays", () => {
+  const params = { type: "object", properties: { target: { type: "string" }, text: { type: "string" }, n: { type: "integer" } } };
+  const { modules, problems } = validateLoad({
+    modules: [
+      described({
+        commands: [
+          command("strike", {
+            params,
+            text: [
+              "attack {target}",
+              "attack  {target}",
+              "say {text...} now",
+              "attack {nobody}",
+              "a/b {target}",
+              "{target} attack",
+              "attack {target} {target}",
+              "攻击 {target}",
+              "say {text...}",
+              `${x(33)} {n}`,
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+  expect(modules[0]?.commands[0]?.forms.map((form) => form.source)).toEqual(["attack {target}", "攻击 {target}", "say {text...}"]);
+  expect(problems).toEqual([
+    'module m: command strike: text form "attack  {target}" left out (spacing)',
+    'module m: command strike: text form "say {text...} now" left out (rest_not_last)',
+    'module m: command strike: text form "attack {nobody}" left out (unknown_param)',
+    'module m: command strike: text form "a/b {target}" left out (bad_word)',
+    'module m: command strike: text form "{target} attack" left out (bad_word)',
+    'module m: command strike: text form "attack {target} {target}" left out (repeated_param)',
+    `module m: command strike: text form "${x(33)} {n}" left out (bad_word)`,
+  ]);
 });
 
 test("load: a second clock claim is dropped and both modules are named", () => {
@@ -302,9 +358,8 @@ const info: ModuleInfo[] = [
     id: "m",
     events: { turnStart: false, toolUse: false, replyPhase: false },
     commands: [
-      { name: "open", title: "Open", description: "", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: false },
-      { name: "sit", title: "Sit", description: "", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: true },
-      { name: "boss", title: "Boss", description: "", params: { type: "object" }, text: [], role: "admin", danger: false, checksAvailability: false },
+      { name: "open", title: "Open", description: "", params: { type: "object" }, forms: [], role: "player", keeper: true, danger: false, checksAvailability: false },
+      { name: "sit", title: "Sit", description: "", params: { type: "object" }, forms: [], role: "player", keeper: true, danger: false, checksAvailability: true },
     ],
     views: [
       { name: "status", title: null, schema: {} },
@@ -315,7 +370,7 @@ const info: ModuleInfo[] = [
   },
 ];
 
-test("render: the role rule, availability failing closed, views capped at 512 KB", () => {
+test("render: only the views asked for are taken, views capped at 512 KB, a read that changed state is reported", () => {
   const raw = {
     viewers: [
       {
@@ -324,33 +379,21 @@ test("render: the role rule, availability failing closed, views capped at 512 KB
           { module: "m", view: "huge", data: blob(512 * 1024) },
           { module: "m", view: "undeclared", data: 1 },
         ],
-        available: [{ module: "m", command: "sit", verdict: true }],
       },
-      { views: [{ module: "m", view: "status", error: "Error: no" }], available: [{ module: "m", command: "sit", verdict: "sit down" }] },
-      { views: [], available: [] },
+      { views: [{ module: "m", view: "status", error: "Error: no" }] },
+      // Sent, but this viewer did not ask for it: it is not taken.
+      { views: [{ module: "m", view: "status", data: { hp: 2 } }] },
     ],
     characters: [],
     clock: null,
     failures: [],
     broken: [],
+    notices: [{ module: "m", code: "read_changed_state" }],
   };
-  const outcome = validateRender(raw, [ada, mo, eve], info);
-  expect(outcome.viewers[0]).toEqual({
-    views: [{ module: "m", view: "status", data: { hp: 1 } }],
-    commands: [
-      { module: "m", command: "open", availability: { available: true } },
-      { module: "m", command: "sit", availability: { available: true } },
-      { module: "m", command: "boss", availability: { available: false, reason: "role", text: null } },
-    ],
-  });
-  expect(outcome.viewers[1]?.commands.map((entry) => entry.availability)).toEqual([
-    { available: true },
-    { available: false, reason: "module", text: "sit down" },
-    { available: true },
-  ]);
-  // An observer uses nothing; a missing verdict is "not available", never "available".
-  expect(outcome.viewers[2]?.commands.map((entry) => entry.availability.available)).toEqual([false, false, false]);
-  expect(outcome.problems).toHaveLength(2);
+  const outcome = validateRender(raw, [asking(ada, "m/status", "m/huge", "m/undeclared"), asking(mo, "m/status"), asking(eve, "m/huge")], info);
+  expect(outcome.viewers).toEqual([{ views: [{ module: "m", view: "status", data: { hp: 1 } }] }, { views: [] }, { views: [] }]);
+  expect(outcome.problems).toHaveLength(3);
+  expect(outcome.problems[0]).toStartWith("module m: read_changed_state");
 });
 
 test("render: characters and the clock are validated; a clock from a non-claimer is dropped", () => {
@@ -384,7 +427,7 @@ test("render: characters and the clock are validated; a clock from a non-claimer
 // ---------------------------------------------------------------- end to end
 
 test("dispatch: greedy modules are capped end to end; problems name the module", async () => {
-  const outcome = await dispatchTurnStart(worker(["greedy"]), { turn: 1, seed: "s", text: "go", who: ada, variables: {}, clock: null });
+  const outcome = await dispatchTurnStart(worker(["greedy"]), { turn: 1, seed: "s", text: "go", who: ada, variables: {}, clock: null, members: [] });
   expect(outcome.injections).toHaveLength(8);
   expect(outcome.facts).toHaveLength(32);
   expect(outcome.rolls).toHaveLength(16);
@@ -409,26 +452,14 @@ test("dispatch: a command left out at load is refused without a round trip, and 
   expect(posts).toEqual(["load", "command"]);
 });
 
-test("render: a keeper command is part of an admin's commands and of no other viewer's", () => {
-  const modules: ModuleInfo[] = [
-    {
-      id: "k",
-      events: { turnStart: false, toolUse: false, replyPhase: false },
-      commands: [
-        { name: "open", title: "Open", description: "", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: false },
-        { name: "advance", title: "Advance", description: "", params: { type: "object" }, text: [], role: "keeper", danger: false, checksAvailability: true },
-      ],
-      views: [],
-      clock: false,
-      characters: false,
-    },
-  ];
-  const verdict = [{ module: "k", command: "advance", verdict: true }];
-  const raw = { viewers: [{ views: [], available: verdict }, { views: [], available: verdict }], characters: [], clock: null, failures: [], broken: [] };
-  const outcome = validateRender(raw, [ada, mo], modules);
-  // Ada plays; Mo is the admin. A verdict the worker sent for a player is not what lists it.
-  expect(outcome.viewers.map((viewer) => viewer.commands.map((entry) => entry.command))).toEqual([["open"], ["open", "advance"]]);
-  expect(outcome.problems).toEqual([]);
+test("dispatch: arguments are checked against the command's params before the module is called", async () => {
+  const posts: string[] = [];
+  const w = worker(["kitchen"], { posts });
+  const base = { module: "kitchen", command: "hit", who: ada, by: "member" as const, seed: "s", room: ROOM };
+  expect(await dispatchCommand(w, { ...base, args: { amount: "two" } })).toMatchObject({ status: "refused", reason: "args", problem: { code: "invalid_arg", path: "amount" } });
+  expect(await dispatchCommand(w, { ...base, args: { amount: 1.5 }, by: "keeper" })).toMatchObject({ status: "refused", reason: "args", problem: { code: "invalid_arg", path: "amount" } });
+  expect(posts).toEqual(["load"]);
+  expect(await dispatchCommand(w, { ...base, args: { amount: 2 } })).toMatchObject({ status: "ok", result: { text: "hp 8" } });
 });
 
 test("dispatch: who runs a command — a keeper command is refused to players and observers without a round trip; the Keeper never runs an admin one", async () => {
@@ -457,12 +488,14 @@ test("dispatch: who runs a command — a keeper command is refused to players an
 
 test("dispatch: render and tool veto through a real worker; a hung veto allows every call", async () => {
   const w = worker(["kitchen"]);
-  const rendered = await dispatchRender(w, [ada, eve], ROOM);
+  const rendered = await dispatchRender(w, [asking(ada, "kitchen/status", "kitchen/scratch"), asking(eve, "kitchen/scratch")], ROOM);
   expect(rendered.viewers[0]?.views.map((view) => view.view)).toEqual(["status", "scratch"]);
-  expect(rendered.viewers[1]?.commands.every((entry) => !entry.availability.available)).toBe(true);
+  expect(rendered.viewers[1]?.views.map((view) => view.view)).toEqual(["scratch"]);
   expect(rendered.characters.map((character) => character.id)).toEqual(["hero"]);
   expect(rendered.clock).toEqual({ module: "kitchen", time: "hp 10", round: 0 });
-  expect(rendered.problems).toEqual([]);
+  // `status` bumps the state as it reads: said once, with its code.
+  expect(rendered.problems).toEqual([expect.stringContaining("module kitchen: read_changed_state")]);
+  expect((await dispatchRender(w, [asking(ada, "kitchen/status")], ROOM)).problems).toEqual([]);
 
   const veto = await dispatchToolUse(w, { ...ROOM, who: ada, calls: [{ id: "a", name: "forbidden", args: {} }, { id: "b", name: "look", args: {} }] });
   expect(veto.verdicts).toEqual([{ allowed: false, denials: [{ module: "kitchen", reason: "not here" }] }, { allowed: true }]);
@@ -477,7 +510,7 @@ test("dispatch: render and tool veto through a real worker; a hung veto allows e
 test("the room snapshot: one module writing to its copy never changes what the next module sees", async () => {
   const w = worker(["scribbler", "peeker"]);
   const variables = { hp: 7, name: "Ada" };
-  const started = await dispatchTurnStart(w, { turn: 2, seed: "s", text: "x", who: ada, variables, clock: null });
+  const started = await dispatchTurnStart(w, { turn: 2, seed: "s", text: "x", who: ada, variables, clock: null, members: [] });
   expect(started.injections).toEqual(['turnStart 2 {"hp":7,"name":"Ada"}']);
   expect(variables).toEqual({ hp: 7, name: "Ada" });
 
@@ -491,14 +524,16 @@ test("the room snapshot: one module writing to its copy never changes what the n
     who: ada,
     variables,
     clock: { time: "dusk" },
+    members: [],
   });
   expect(replied.logs).toEqual([{ module: "peeker", text: 'replyPhase 2 {"hp":7,"name":"Ada"} dusk' }]);
 
-  const room = { turn: 3, variables, clock: { time: "night", round: 4 } };
-  const rendered = await dispatchRender(w, [ada, mo], room);
+  const members = [{ id: "m-ada", name: "Ada", role: "player" as const }];
+  const room = { turn: 3, variables, clock: { time: "night", round: 4 }, members };
+  const rendered = await dispatchRender(w, [asking(ada, "scribbler/scribble", "peeker/vars"), asking(mo, "scribbler/scribble", "peeker/vars")], room);
   expect(rendered.viewers.map((viewer) => viewer.views.find((view) => view.view === "vars")?.data)).toEqual([
-    { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 } },
-    { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 } },
+    { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 }, members },
+    { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 }, members },
   ]);
   const used = await dispatchCommand(w, { module: "peeker", command: "vars", args: {}, who: ada, by: "member", seed: "s", room });
   expect(used).toMatchObject({ status: "ok", result: { data: { hp: 7, name: "Ada" } } });
@@ -507,14 +542,23 @@ test("the room snapshot: one module writing to its copy never changes what the n
 test("a variables snapshot over the cap is not sent: the modules see {} and the operator is told", async () => {
   const w = worker(["peeker"]);
   const huge = { blob: x(DEFAULT_CAPS.variablesBytes) };
-  const started = await dispatchTurnStart(w, { turn: 1, seed: "s", text: "x", who: ada, variables: huge, clock: null });
+  const started = await dispatchTurnStart(w, { turn: 1, seed: "s", text: "x", who: ada, variables: huge, clock: null, members: [] });
   expect(started.injections).toEqual(["turnStart 1 {}"]);
   expect(started.problems).toEqual([`the room's variables were not sent to the modules: not a JSON object of up to ${DEFAULT_CAPS.variablesBytes} bytes`]);
 
   const caps = { ...DEFAULT_CAPS, variablesBytes: 10 };
-  const rendered = await dispatchRender(w, [ada], { turn: 1, variables: { a: "long enough" }, clock: null }, caps);
-  expect(rendered.viewers[0]?.views[0]?.data).toEqual({ turn: 1, variables: {}, clock: null });
+  const rendered = await dispatchRender(w, [asking(ada, "peeker/vars")], { turn: 1, variables: { a: "long enough" }, clock: null, members: [] }, caps);
+  expect(rendered.viewers[0]?.views[0]?.data).toEqual({ turn: 1, variables: {}, clock: null, members: [] });
   expect(rendered.problems).toHaveLength(1);
-  const fits = await dispatchRender(w, [ada], { turn: 1, variables: { a: 1 }, clock: null }, caps);
-  expect(fits.viewers[0]?.views[0]?.data).toEqual({ turn: 1, variables: { a: 1 }, clock: null });
+  const fits = await dispatchRender(w, [asking(ada, "peeker/vars")], { turn: 1, variables: { a: 1 }, clock: null, members: [] }, caps);
+  expect(fits.viewers[0]?.views[0]?.data).toEqual({ turn: 1, variables: { a: 1 }, clock: null, members: [] });
+});
+
+test("members: every member is carried; past the cap, the first ones and a problem for the operator", async () => {
+  const w = worker(["peeker"]);
+  const many = Array.from({ length: MAX_ROOM_MEMBERS + 3 }, (_, i) => ({ id: `m${String(i).padStart(4, "0")}`, name: `M${i}`, role: "player" as const }));
+  const rendered = await dispatchRender(w, [asking(ada, "peeker/vars")], { turn: 1, variables: {}, clock: null, members: many });
+  const data = rendered.viewers[0]?.views[0]?.data as { members: unknown[] };
+  expect(data.members).toEqual(many.slice(0, MAX_ROOM_MEMBERS));
+  expect(rendered.problems).toEqual([`the room has ${MAX_ROOM_MEMBERS + 3} members; the modules were sent the first ${MAX_ROOM_MEMBERS}`]);
 });

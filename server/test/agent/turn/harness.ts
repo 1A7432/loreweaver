@@ -196,6 +196,7 @@ export class Harness {
         if (options.loreWorker === undefined) throw new Error("no lore worker in this test");
         return options.loreWorker;
       },
+      members: () => [],
       reviewNarrative: options.reviewNarrative ?? PASS,
       reviewFact: options.reviewFact ?? PASS,
     };
@@ -249,7 +250,8 @@ export function fakeWorker(module: FakeModule): RoomWorker {
     {
       id: module.id,
       events: { turnStart: false, toolUse: false, replyPhase: false, ...module.events },
-      commands: module.commands ?? [],
+      // As the runner describes them: `keeper` is always sent (true unless declared false).
+      commands: (module.commands ?? []).map((command) => ({ keeper: true, ...command })),
       views: [],
       clock: module.clock ?? false,
       characters: false,

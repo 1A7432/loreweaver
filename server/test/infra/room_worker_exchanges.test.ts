@@ -50,14 +50,19 @@ function worker(modules: string[], options: Partial<RoomWorkerOptions> & { spawn
   return created;
 }
 
-const ROOM = { turn: 1, variables: {}, clock: null };
+const ROOM = { turn: 1, variables: {}, clock: null, members: [] };
 
 function turn(number: number, text: string) {
-  return { turn: number, seed: `room:${number}:turnStart`, text, who: ada, variables: {}, clock: null };
+  return { turn: number, seed: `room:${number}:turnStart`, text, who: ada, variables: {}, clock: null, members: [] };
 }
 
 function reply(number: number, text = "the end") {
-  return { turn: number, seed: `room:${number}:replyPhase`, reply: text, rolls: [], clockAdvances: [], variableWrites: [], who: ada, variables: {}, clock: null };
+  return { turn: number, seed: `room:${number}:replyPhase`, reply: text, rolls: [], clockAdvances: [], variableWrites: [], who: ada, variables: {}, clock: null, members: [] };
+}
+
+/** A viewer asking for these views of the kitchen. */
+function kitchen(who: Who, ...views: string[]) {
+  return { who, views: views.map((view) => ({ module: "kitchen", view })) };
 }
 
 function command(name: string, args: Record<string, Json> = {}, who: Who = ada) {
@@ -84,7 +89,7 @@ test("load describes every module; a fresh module's state is kept at once", asyn
     ["sit", "player", true],
     ["echo", "player", false],
   ]);
-  expect(described[0]?.commands[0]).toMatchObject({ title: "Hit", description: "Lose some hp.", text: ["hit {amount}"] });
+  expect(described[0]?.commands[0]).toMatchObject({ title: "Hit", description: "Lose some hp.", text: ["hit {amount}"], keeper: true });
   expect(persisted).toEqual([
     ["kitchen", { hp: 10, said: [] }],
     ["counter", { turns: 0 }],
@@ -129,24 +134,23 @@ test("read-only exchanges leave no trace, even when their handlers mutate", asyn
   expect(veto.effects).toEqual([{ module: "kitchen", kind: "deny", callId: "c1", reason: "not here" }]);
   expect(veto.checkpoints).toEqual({});
 
-  const rendered = await w.render([ada, mo], ROOM);
-  // Each call starts from the checkpoint: hp 10, plus the view's own 1000, for each viewer.
+  const rendered = await w.render([kitchen(ada, "status", "scratch"), kitchen(mo, "status", "scratch")], ROOM);
+  // Each viewer starts from the checkpoint: hp 10, plus the view's own 1000, for each viewer.
   expect(rendered.viewers).toEqual([
     {
       views: [
         { module: "kitchen", view: "status", data: { hp: 1010, viewer: "Ada" } },
         { module: "kitchen", view: "scratch", data: 0 },
       ],
-      available: [{ module: "kitchen", command: "sit", verdict: true }],
     },
     {
       views: [
         { module: "kitchen", view: "status", data: { hp: 1010, viewer: "Mo" } },
         { module: "kitchen", view: "scratch", data: 0 },
       ],
-      available: [{ module: "kitchen", command: "sit", verdict: "find a seat first" }],
     },
   ]);
+  expect(rendered.notices).toEqual([{ module: "kitchen", code: "read_changed_state" }]);
   expect(rendered.characters).toEqual([
     { module: "kitchen", characters: [{ id: "hero", name: "Hero", blurb: "the one", resources: [{ id: "hp", label: "HP", value: 10, max: 10 }] }] },
   ]);
@@ -167,12 +171,12 @@ test("an exchange no module handles is answered without a round trip, even with 
   expect((await w.toolUse({ ...ROOM, who: ada, calls: [{ id: "c", name: "x", args: {} }] })).effects).toEqual([]);
   expect((await w.replyPhase(reply(1))).effects).toEqual([]);
   expect((await w.command({ ...command("hit"), module: "counter" })).outcome).toEqual({ status: "refused", reason: "unknown" });
-  expect((await w.render([ada], ROOM)).viewers).toEqual([{ views: [], available: [] }]);
+  expect((await w.render([{ who: ada, views: [{ module: "counter", view: "x" }] }], ROOM)).viewers).toEqual([{ views: [] }]);
   expect(stats.ops).toEqual(["load", "turnStart"]);
 
   await w.stop();
   await w.toolUse({ ...ROOM, who: ada, calls: [] });
-  await w.render([ada], ROOM);
+  await w.render([kitchen(ada, "status")], ROOM);
   expect(stats.spawns).toBe(1);
   // A handled exchange starts a new worker from the checkpoints.
   expect((await w.turnStart(turn(2, "two"))).checkpoints).toEqual({ counter: { turns: 2 } });
@@ -183,13 +187,13 @@ test("an exchange no module handles is answered without a round trip, even with 
 test("cold start: every mutating call ends the worker, which shows a save() that drops state", async () => {
   const warm = worker(["kitchen"]);
   await warm.command(command("hit"));
-  expect((await warm.render([ada], ROOM)).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 1 });
+  expect((await warm.render([kitchen(ada, "status", "scratch")], ROOM)).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 1 });
 
   const { stats, spawn } = counting();
   const cold = worker(["kitchen"], { coldStart: true, spawn });
   await cold.command(command("hit"));
   expect(cold.running).toBe(false);
-  expect((await cold.render([ada], ROOM)).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 0 });
+  expect((await cold.render([kitchen(ada, "status", "scratch")], ROOM)).viewers[0]?.views[1]).toEqual({ module: "kitchen", view: "scratch", data: 0 });
   // A read-only exchange does not end the worker.
   expect(cold.running).toBe(true);
   expect(stats.spawns).toBe(2);
@@ -216,6 +220,26 @@ test("commands under prototype names are described but never dispatched; argumen
   const echoed = await w.command(command("echo", args));
   expect(echoed.outcome).toEqual({ status: "ok", result: { data: { keys: ["__proto__", "constructor"], args } } });
   expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+});
+
+test("init: create and load get the manifest's options and the room's seed with the module id; a command gets its call's seed", async () => {
+  let epoch = 1;
+  const path = fixtureModule("seeded");
+  const w = worker(["seeded"], { init: () => ({ seed: `table:${epoch}`, options: new Map([[path, { depth: 3, names: ["a"] }]]) }) });
+  const view = async () => (await w.render([{ who: ada, views: [{ module: "seeded", view: "init" }] }], ROOM)).viewers[0]?.views[0];
+  expect(await view()).toEqual({ module: "seeded", view: "init", data: { how: "create", options: { depth: 3, names: ["a"] }, seed: "table:1:seeded" } });
+  const ran = await w.command({ module: "seeded", command: "seed", args: {}, who: ada, by: "member", seed: "table:1:1:act:command", room: ROOM });
+  expect(ran.outcome).toEqual({ status: "ok", result: { text: "table:1:1:act:command" } });
+  // A restart of the same life loads with the same seed.
+  await w.stop();
+  expect(await view()).toEqual({ module: "seeded", view: "init", data: { how: "load", options: { depth: 3, names: ["a"] }, seed: "table:1:seeded" } });
+  // A new generation (a reset that recreates the module) gives a new seed.
+  epoch = 2;
+  await w.reload(new Map());
+  expect(await view()).toEqual({ module: "seeded", view: "init", data: { how: "create", options: { depth: 3, names: ["a"] }, seed: "table:2:seeded" } });
+  // No options in the manifest: `{}`.
+  const bare = worker(["seeded"]);
+  expect((await bare.render([{ who: ada, views: [{ module: "seeded", view: "init" }] }], ROOM)).viewers[0]?.views[0]).toMatchObject({ data: { options: {}, seed: ":seeded" } });
 });
 
 test("module dice are engine dice, replayed exactly from the call's seed", async () => {

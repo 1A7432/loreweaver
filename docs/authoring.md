@@ -74,6 +74,7 @@ export default defineModule({
   commands: {
     light: {
       title: "Light the lantern",
+      text: ["light"],
       run(_args, who, fx) {
         lit = true;
         fx.fact({ text: `${who.member?.name ?? "Someone"} lights the lantern.` });
@@ -132,20 +133,27 @@ bundles `src/lantern.ts` and everything it imports into one file, `modules/lante
   loreweaver packs                                 # lists the installed packs
   ```
 
+  `--force` replaces a pack already installed at the same id **and** version with this
+  archive (without it that is refused, `already_installed`): for rebuilding during
+  development without raising the version.
+
   Installing from the shell enables the pack nowhere, and a server that is running sees
   it only when it next starts. Then a room's admin enables it: `.pack enable lantern`.
 
 **Use it.** Any player types:
 
 ```
-.lantern/light
+.light
 ```
 
 The player gets the command's answer (*The lantern is lit.*), the table sees the fact
 (*Ada lights the lantern.*), and from the next turn on the Keeper's prompt says the
-lantern is lit. A module command's only text form is its full id, followed by a JSON
-object when it takes arguments: `.lantern/light {"hours": 2}`. Clients also list module
-commands in the `commands` view, so `.help` shows it.
+lantern is lit. `.light` is the text form the command declares (`text: ["light"]`); a form
+can also take arguments, such as `"light {hours}"` (one word) or `"say {text...}"` (the
+rest of the line) — the grammar is in [sdk/README.md](../sdk/README.md#text-forms). Every
+module command can also be typed as its full id followed by a JSON object:
+`.lantern/light {"hours": 2}`. Clients also list module commands in the `commands` view,
+so `.help` shows it.
 
 ## 2. Changing a pack and installing it again
 
@@ -159,8 +167,10 @@ The same version cannot be installed twice (`already_installed`). Two ways round
   `.pack install` it again from chat. The new version takes the old one's place on the
   running server, and every room that has the pack enabled reloads its worker and plays
   the new version from then on. Its modules start from their saved state (`load`).
-- **From the shell:** `loreweaver uninstall lantern`, then `loreweaver install … --yes`,
-  then restart the server. Uninstalling is the operator's, from the shell only.
+- **From the shell:** `loreweaver install … --yes --force` replaces the installed pack of
+  the same id and version with the new archive (or `loreweaver uninstall lantern`, then
+  `loreweaver install … --yes`); then restart the server. Replacing and uninstalling are
+  the operator's, from the shell only.
 
 ## 3. Testing a module
 
@@ -447,12 +457,31 @@ What a module can do, in short:
   `replyPhase` (after the reply).
 - **Commands**, named `<module>/<name>`, with a role: `player` (default), `admin`, or
   `keeper` — Keeper machinery players never see, run by the Keeper's `run_command` tool
-  and by the room's admin to repair what the Keeper got wrong.
-- **Views**, computed per viewer: how private information reaches one member.
+  and by the room's admin to repair what the Keeper got wrong. `keeper: false` marks a
+  member's own verb the Keeper never runs (it is left out of the Keeper's command list).
+  A command's arguments are checked against its declared `params` before the module is
+  called; its `text` forms (`"light {hours}"`) are what members type. A form whose word is
+  one of the room's own commands, or a word two enabled modules both claim, is not taken;
+  enabling the pack names such forms.
+- **Views**, computed per viewer, only for the viewers who asked for them: how private
+  information reaches one member.
 - **Effects** are requests the engine validates and applies: facts for the table or the
-  Keeper, variable writes, dice rolls, UI blocks. A module never calls the engine.
-- **Characters and the clock:** `characters(room)` offers seats; `clock(room)` claims the
-  room's clock.
+  Keeper (high-importance facts reach the Keeper first), variable writes, dice rolls, UI
+  blocks. A module never calls the engine.
+- **The room** comes with every call: the turn, the variables, the clock and every member
+  of the room. `create` and `load` get `init`: the module entry's `options` from
+  `pack.yaml` and a seed for this life of the room.
+- **Characters and the clock:** `characters(room)` is read and validated, but nothing
+  consumes it yet (seating a member on a module's character is designed separately and
+  not built); `clock(room)` claims the room's clock.
+
+A module entry in `pack.yaml` may carry `options`, a JSON object of at most 16 KiB that
+its `create` and `load` receive as `init.options` — one module, configured per pack:
+
+```yaml
+modules:
+  - { id: lantern, entry: src/lantern.ts, options: { oil: 5 } }
+```
 
 The module's `id` must equal the manifest entry's `id`. The builder bundles each entry
 and any npm packages it imports into one file; `loreweaver/module` stays an import, which
@@ -531,7 +560,8 @@ before anything is written. The ones authors meet most:
 | `kit_asset_missing`, `panel_asset_missing` | A picture or sound the kit or a panel names is not in the pack. |
 | `asset_type`, `asset_bad_signature`, `asset_too_large` | A file of an unknown extension, whose bytes do not match it, or too big. |
 | `undeclared_script` | A code file in an archive that is not a declared module entry (a hand-made archive; the builder never packs one). |
-| `already_installed` | That version is installed; raise the version. |
+| `already_installed` | That version is installed; raise the version (or, from the shell, `install --force`). |
+| `options_too_large` | A module entry's `options` is over 16 KiB as JSON text. |
 | `engine_too_old` | The server is older than the pack's `engine` minimum. |
 
 Some caps: 16 modules and 16 panels per pack; 64 entries per content kind; one
@@ -559,8 +589,9 @@ A 2.x pack does not install on 3.0. What changed for an author:
 - There is no forge (generating a skill, rule pack or module from a description), no
   live-reload dev room and no separate lint: build, install, look (§2).
 - A native card's `pregens` and AI companions are not in 3.0: a player imports a
-  `character` card, `genchar` makes a character from a description, and a module's
-  `characters()` can offer seats.
+  `character` card and `genchar` makes a character from a description. A module's
+  `characters()` is read and validated but nothing consumes it yet: seating on a module's
+  character is designed separately and not built.
 
 ## Where to look next
 

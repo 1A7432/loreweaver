@@ -12,7 +12,9 @@
 //   - a fact: a `table` fact's text becomes a `system` narrative event, after the output
 //     review the caller passes in (the gateway's `reviewFact`; this layer cannot import the
 //     gateway, so the review arrives as a function). A `keeper` fact, and every fact's data,
-//     go to the pending-facts list the Keeper's next prompt reads (`PENDING_FACTS`). A fact
+//     go to the pending-facts list the Keeper's next prompt reads (`PENDING_FACTS`). When
+//     that list is full, a new fact takes the place of the oldest pending fact of a strictly
+//     lower importance (`pending_displaced`), else it is dropped (`pending_full`). A fact
 //     marked `narrateNow` raises the narrate-now flag (see below);
 //   - blocks: each block is checked against the protocol's `Block` union and rebuilt from
 //     its named fields; an unknown kind or a malformed block is dropped and reported. A
@@ -58,7 +60,10 @@ import type { Applied, BlocksRequest, FactRequest } from "./modules.ts";
 
 // ---------------------------------------------------------------- caps
 
-/** Facts waiting for the Keeper's next prompt; past this a new one is refused and reported. */
+/**
+ * Facts waiting for the Keeper's next prompt. Past this a new fact displaces the oldest
+ * pending one of a strictly lower importance, or is refused; either way it is reported.
+ */
 export const MAX_PENDING_FACTS = 64;
 /** Turns whose prompt injections are kept (at least the undo window). */
 export const MAX_INJECTION_TURNS = 8;
@@ -125,8 +130,10 @@ export type EffectProblemCode =
   | "blocks_too_many"
   /** The output review blocked a fact's or a block's text. */
   | "review_blocked"
-  /** The pending-facts list is full. */
+  /** The pending-facts list is full and holds nothing less important: the new fact was dropped. */
   | "pending_full"
+  /** The pending-facts list is full: the new fact took the place of an older, less important one (`detail`: that fact's importance). */
+  | "pending_displaced"
   /** The injection record refused an injection over its cap. */
   | "injection_dropped";
 
@@ -672,6 +679,18 @@ function factFor(fact: FactRequest, turn: number, text: string | null): PendingF
   return { module: fact.module, turn, to: fact.to, importance: fact.importance, text, data: fact.data };
 }
 
+/** Importance as a rank: higher is more important. */
+export const IMPORTANCE_RANK: Readonly<Record<PendingFact["importance"], number>> = { low: 0, normal: 1, high: 2 };
+
+/**
+ * Where a new fact of `importance` may go in a FULL pending list (kept oldest first): the
+ * index of the oldest pending fact of a strictly lower importance, or -1 when there is none.
+ */
+export function displacedIndex(pending: readonly PendingFact[], importance: PendingFact["importance"]): number {
+  const rank = IMPORTANCE_RANK[importance];
+  return pending.findIndex((fact) => IMPORTANCE_RANK[fact.importance] < rank);
+}
+
 /**
  * Record this turn's prompt injections (turn start). Keeps the last `MAX_INJECTION_TURNS`
  * turns; an injection over the cap is left out and reported.
@@ -734,7 +753,7 @@ export function applyModuleEffects(
   }
 
   const pending = [...readPendingFacts(context.services.store, context.room)];
-  const before = pending.length;
+  let added = 0;
   let marked = false;
   for (const fact of outcome.facts) {
     if (fact.narrateNow) marked = true;
@@ -750,12 +769,18 @@ export function applyModuleEffects(
     }
     if (keeperText === null && fact.data === null) continue;
     if (pending.length >= MAX_PENDING_FACTS) {
-      problems.push({ code: "pending_full", module: fact.module });
-      continue;
+      const at = displacedIndex(pending, fact.importance);
+      if (at < 0) {
+        problems.push({ code: "pending_full", module: fact.module });
+        continue;
+      }
+      const [displaced] = pending.splice(at, 1);
+      problems.push({ code: "pending_displaced", module: fact.module, detail: `${displaced?.module ?? ""} ${displaced?.importance ?? ""}` });
     }
     pending.push(factFor(fact, context.turn, keeperText));
+    added += 1;
   }
-  if (pending.length > before) context.writer.statePut(PENDING_FACTS, pending);
+  if (added > 0) context.writer.statePut(PENDING_FACTS, pending);
 
   events.push(...blockEvents(outcome.blocks, options.review, problems));
 
@@ -771,5 +796,5 @@ export function applyModuleEffects(
     }
   }
 
-  return { stale: false, writes, pendingAdded: pending.length - before, narrateNow, events, problems };
+  return { stale: false, writes, pendingAdded: added, narrateNow, events, problems };
 }

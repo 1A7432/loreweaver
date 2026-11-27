@@ -58,9 +58,19 @@ another module its call, and never costs the table its turn.
 
 | Function | When the engine calls it |
 | --- | --- |
-| `create()` | A fresh room: build the initial state. |
-| `load(snapshot)` | Restore from a value `save` returned earlier. |
+| `create(init)` | A fresh room: build the initial state. |
+| `load(snapshot, init)` | Restore from a value `save` returned earlier. |
 | `save()` | After every successful **mutating** call; also right after `create`. |
+
+Both `create` and `load` are given `init: { options, seed }`, the same at every load of
+one life of the room:
+
+- `options` is the module entry's `options` in the pack's `pack.yaml` (a JSON object of at
+  most 16 KiB; `{}` when the manifest gives none): one module, configured per pack.
+- `seed` is derived from the room, its generation and the module id. It stays the same
+  through every restart and restore of this life of the room, and is a different one after
+  a reset (or an undo, or an import) starts a new generation — so a module that builds a
+  world from it in `create` builds the same world on every load until then.
 
 The value `save()` returns, passed through `JSON.stringify` and back, becomes the
 module's **checkpoint**. It is stored with the room. Every rollback, every restore after
@@ -81,9 +91,15 @@ a read-only call and every restart `load`s the checkpoint, so:
    applied and its `save()` kept. A call that throws loses its effects *and* the module
    is `load`-ed back from its last checkpoint: memory and the room cannot disagree.
 2. **Read-only calls leave no trace.** `on.toolUse`, every command's `available`, every
-   view's `for`, `characters` and `clock` are read-only. After each of them the module is
-   restored from its last checkpoint, whatever the handler did, and no checkpoint is
-   taken. Do not count, cache or learn anything in them: it is thrown away.
+   view's `for`, `characters` and `clock` are read-only. After them the module is restored
+   from its last checkpoint, whatever the handler did, and no checkpoint is taken: after
+   each of them, except that the views read for **one viewer** in one render share one
+   restore, made after that viewer's last view. A view that changes state can therefore
+   colour the same viewer's next views in that render — never another viewer's, and
+   nothing survives the render. Do not count, cache or learn anything in them: it is
+   thrown away. The engine checks once per render (one `save()` after the first viewer's
+   views, compared with the checkpoint) and tells the operator, once, when reading changed
+   the state (`read_changed_state`).
 3. **A call that never returns ends the whole worker.** Each call has a time limit. Past
    it, the engine terminates the room's thread; the next call starts a new worker and
    loads every module from its checkpoint. Calls queued behind the hung one are not lost.
@@ -106,9 +122,8 @@ interface Who {
 ```
 
 `member` is null when the call concerns nobody in particular (the Keeper, the engine). A
-member with no `character` is a spectator. A module never keeps its own seating: it
-lists the characters that can be played (`characters()`), and the engine maps members to
-them.
+member with no `character` is a spectator. Seating is the engine's: a module never keeps
+its own.
 
 ## The room snapshot
 
@@ -119,14 +134,19 @@ interface RoomSnapshot {
   turn: number;                 // the current turn, from 1
   variables: JsonObject;        // the room's variables
   clock: ClockReading | null;   // the room's clock, or null when it keeps none
+  members: { id: string; name: string; role: "player" | "admin" | "observer" }[];
 }
 ```
+
+`members` is every member of the room — one per access key of the room, whether or not
+its holder is connected — sorted by member id, so the same keys always give the same list.
+It carries at most 256; a room with more sends the first 256 and tells the operator.
 
 It is the room as it is when the call starts. Every event *is* a snapshot (`turn`,
 `variables` and `clock` are fields of all three events), and every other handler gets
 one as its **last** parameter: `available(who, room)`, `for(who, room)`,
 `characters(room)`, `clock(room)` — and a command's `run(args, who, fx, room, call)`, where
-only `call` (who is running it, see [Commands](#commands)) comes after it. A handler that
+only `call` (who is running it and the call's seed, see [Commands](#commands)) comes after it. A handler that
 does not need it simply leaves the parameter out.
 
 The snapshot is a **copy, made for each module and each call**: writing to it changes
@@ -139,8 +159,8 @@ that sends `{}` and tells the operator.
 ```ts
 defineModule({
   id: "taixu",                          // [a-z][a-z0-9_]*, at most 64 characters
-  create() {},
-  load(snapshot) {},
+  create(init) {},                      // init: { options, seed }
+  load(snapshot, init) {},
   save() { return snapshot; },
 
   characters(room) { return [{ id, name, blurb?, resources?: [{ id, label, value, max? }] }]; },
@@ -152,7 +172,7 @@ defineModule({
     replyPhase(event, fx) {},
   },
 
-  commands: { attack: { title, description?, params?, text?, role?, available?(who, room), run(args, who, fx, room, call) } },
+  commands: { attack: { title, description?, params?, text?, role?, keeper?, danger?, available?(who, room), run(args, who, fx, room, call) } },
   views: { status: { title?, schema, for(who, room) } },
 });
 ```
@@ -213,7 +233,10 @@ commands: {
 ```
 
 - `params` is a JSON Schema object schema for the arguments (default `{ type: "object" }`).
-- `text` lists text forms the engine's parser can match; it is data, nothing more.
+  The engine checks the arguments against it **before** your code runs, whoever runs the
+  command (see [Arguments](#arguments)); arguments that do not fit never reach `run`.
+- `text` lists the command's text forms: what a member types to run it (see
+  [Text forms](#text-forms)).
 - `role`: who may run it. The engine checks it before your code runs.
   - `player` (default): players and admins, and the Keeper.
   - `admin`: admins only. The Keeper never runs it, whoever is speaking: admin commands
@@ -226,22 +249,87 @@ commands: {
     too far, a reveal triggered early. Then `call.by` is `"member"` and `who` is the admin.
 
   Observers use no command.
+- `keeper: false` marks a member's own verb — an action a player takes for their own
+  character, which the Keeper must not take for them. The Keeper never runs it: it is left
+  out of the command list in the Keeper's prompt, and its `lookup_command` and
+  `run_command` tools describe and refuse it as they do an `admin` command. Members run it
+  as its `role` allows. Default `true`; a `role: "keeper"` command cannot say `false` (it is
+  left out at load and reported).
 - `danger: true` marks a command that is destructive or hard to take back (it wipes a
   tracker, ends a scene). A client asks the person before running it, and a pack's own page
   cannot answer for them. It changes nothing about who may run the command.
 - `available(who, room)` (read-only) narrows it further: `true`, or a reason shown to that
-  member. It is asked from a member's point of view: when the engine renders what each
-  member can do, and again at the moment of use (when the Keeper runs the command, `who`
-  is the member whose turn it is).
+  member. It is asked **at the moment of use only** — never when views are rendered or a
+  command list is shown — from the point of view of the member the action belongs to (when
+  the Keeper runs the command, `who` is the member whose turn it is). The `commands` view
+  lists every command a member's role allows as available.
 - `run(args, who, fx, room, call)` is mutating. `call.by` is `"keeper"` when the Keeper runs
   it (its `run_command` tool, during a turn) and `"member"` when a member does (typed text,
-  a panel, `command.run`). `who` is the member the action belongs to either way: when the
+  a panel, `command.run`). `call.seed` is derived from persisted inputs only, as an event's
+  seed is: the same call replayed over the same room state gets the same seed (`fx.roll`
+  already derives its dice from it). `who` is the member the action belongs to either way: when the
   Keeper runs it, the member who spoke this turn, or `member: null` when nobody did. What
   `run` returns (`{ text?, data? }`) answers whoever ran it and nobody else: the member, or
   the Keeper as its tool result. To tell the table, use `fx.fact`. Effects are applied the
   same way whoever ran the command.
 
-Commands are addressed as `<module id>/<command name>`.
+Commands are addressed as `<module id>/<command name>`, and every command can be typed as
+that id followed by a JSON object: `.duel/attack {"target": "Bo"}`.
+
+#### Text forms
+
+A text form is what a member types, after the `.` prefix (`。` and `/` work too). Its
+grammar: words separated by single spaces.
+
+- The **first word is the command word**: letters, digits and `_`, 1 to 32 characters, in
+  any script (`攻击` is a word); never `/`. It is matched case-folded.
+- Each later token is a **literal word** (matched case-folded), `{name}` — one
+  whitespace-delimited word of the input — or, as the **last** token only, `{name...}` —
+  the rest of the line, trimmed (left out of the arguments when empty).
+- Every `name` must be a property of the command's `params`, used once.
+
+A form that breaks a rule is left out at load and reported to the operator; the command
+stays (and can still be run by its id). A captured word is converted by its property's
+declared `type`: `integer` and `number` are parsed strictly (`3`, `-2`, `1.5`), `boolean`
+takes `true` or `false`; anything else — or a word that does not parse — stays the text as
+typed, and the arguments are then checked against `params` like any others.
+
+```ts
+params: {
+  type: "object",
+  properties: { target: { type: "string" }, times: { type: "integer" }, line: { type: "string" } },
+},
+text: ["attack {target}", "attack {target} {times}", "attack at {target}", "say {line...}"],
+```
+
+| Typed | Arguments |
+| --- | --- |
+| `.attack Bo` | `{ target: "Bo" }` |
+| `.attack Bo 3` | `{ target: "Bo", times: 3 }` |
+| `.ATTACK at Bo` | `{ target: "Bo" }` — `attack at {target}` and `attack {target} {times}` both fit; the form with more literal words wins |
+| `.say Run,   now!` | `{ line: "Run,   now!" }` |
+| `.say` | `{}` |
+| `.attack Bo many` | refused: `invalid_arg` at `times` |
+| `.attack` | refused: `usage`, with the forms of `attack` |
+
+When several forms of one word fit a line, the one with the most literal words wins, then
+the first declared. **The room's own words win**: a form whose command word is one of the
+engine's command words or of the room's rule system is dropped, and so is a word that two
+enabled modules both claim — dropped for both. Each drop is told to the operator, and named
+in the admin's answer when a pack is enabled. The `commands` view lists, for each module
+command, the words that run it now and its forms as typed.
+
+#### Arguments
+
+Before `run` is called, the arguments are checked against `params` with a subset of JSON
+Schema, applied recursively: `type` (`object`, `string`, `number`, `integer`, `boolean`,
+`array`, `null`, or a list of them), `properties`, `required`, `additionalProperties: false`,
+`enum`, `const`, `minimum`/`maximum`, `minLength`/`maxLength` (in characters, i.e. code
+points), `minItems`/`maxItems` and `items`. Every other keyword is ignored. A misfit is
+refused with the engine's own codes and the argument's path — `unknown_arg` (a name an
+`additionalProperties: false` object does not list), `missing_arg`, `invalid_arg` — to a
+member as for an engine command, to the Keeper as its tool result. A command without
+`params` takes any JSON object.
 
 A command that only the Keeper should run — a clock it advances, a reveal it triggers —
 declares `role: "keeper"`. A command both may run can say more to the Keeper than to a
@@ -284,12 +372,17 @@ views: {
 ```
 
 `for(who, room)` is read-only and computed **per viewer**: it is how private information
-reaches one member. Return what that viewer may see and nothing more.
+reaches one member. Return what that viewer may see and nothing more. A view is computed
+only for the viewers who asked for it (subscribed to it, or asked for it once); a module
+none of whose views anyone asked for is not read for views at all. Listing a room's views
+(their names, titles and schemas) reads nothing: it comes from the module's description.
 
 ### Characters and the clock
 
-`characters(room)` (read-only) lists the characters members can be seated as, with optional
-resources (`{ id, label, value, max? }`) for the client to show.
+`characters(room)` (read-only) lists characters with optional resources
+(`{ id, label, value, max? }`). The engine reads and validates the list on every render,
+but nothing consumes it yet: seating a member on a module's character is designed
+separately and not built.
 
 `clock(room)` (read-only) returns the room's current time (`room.clock` is the last
 reading the engine has). Defining it **claims the room's
@@ -315,8 +408,13 @@ and reported to the operator.
 - **`fx.fact({ text?, data? }, { to?, importance?, narrateNow? })`** — the narration feed.
   `to: "table"` (default): a fact with `text` is shown to everyone as mechanical output.
   `to: "keeper"`: it reaches only the Keeper's prompt. `importance` is `low`, `normal`
-  (default) or `high`. `narrateNow: true` asks the engine to open a Keeper turn over the
-  pending facts. There are no facts for one member: private information goes in a view.
+  (default) or `high`: the Keeper's prompt lists pending facts high first, then normal,
+  then low (in arrival order within a level), and when the pending list is full (64) a new
+  fact takes the place of the oldest pending fact of a strictly lower importance, or is
+  dropped when there is none (the operator is told either way). `narrateNow: true` asks
+  the engine to open a Keeper turn over the pending facts. There are no facts for one
+  member: private information goes in a view; a module's output is for the whole table or
+  for the Keeper only.
 - **`fx.inject(text)`** — a section for this turn's Keeper prompt.
 - **`fx.setVar(path, value)`** — a request to write a room variable.
 - **`fx.blocks(blocks, { id? })`** — declarative blocks set into the story; a later
@@ -348,10 +446,15 @@ are per module per call unless noted.
 | Command arguments | 64 KB |
 | A view's data | 512 KB |
 | Commands / views per module | 64 / 32 |
-| Titles / descriptions | 200 / 2,000 characters; text forms 16 of 200 characters; schemas 64 KB |
+| Titles / descriptions | 200 / 2,000 characters; text forms 16 of 200 characters (a command word at most 32); schemas 64 KB |
 | Characters | 64 per module; id and name 200 characters; blurb 2,000; 16 resources each |
 | Clock reading | `time` 200 characters |
 | Variables snapshot sent to modules | 1 MB (larger: `{}` is sent instead) |
+| Members sent to modules | 256 (more: the first 256) |
+| Pending facts waiting for the Keeper | 64 (see `importance`) |
+| A module's `options` in `pack.yaml` | 16 KiB as JSON text (more: the pack is refused) |
+
+These limits are fixed: nothing adjusts them per server or per room.
 
 ## Testing a module
 
@@ -386,8 +489,9 @@ test("shouting raises the alarm, and the alarm survives a restart", async () => 
 | `dice` | A list of totals handed out in order (`[17, 4]`; `text` is `"<notation> = <total>"`), or a function `(notation, seed) => ({ total, text })`. Without it, a module that rolls fails its call. |
 | `snapshot` | Start from this checkpoint (as `load`) instead of `create`. |
 | `who` | Who calls are made as when a call names nobody (default: a player with no character). |
-| `seed` | Prefix of the seeds the host derives (default `test`). |
-| `variables`, `clock` | The room snapshot for calls that set none (default `{}` and null). |
+| `seed` | Prefix of the seeds the host derives (default `test`); `init.seed` is `<seed>:<module id>`. |
+| `options` | The module's `init.options`, as a manifest would give them (default `{}`). |
+| `variables`, `clock`, `members` | The room snapshot for calls that set none (default `{}`, null and none). |
 | `fresh` | Returns a new instance of the module, for `restart()`. Import the entry file with a changing query string, as above: without it `restart()` reuses the same object, and state that `load` forgets to assign would wrongly survive. |
 
 The host:
@@ -397,10 +501,10 @@ The host:
 | `turnStart({ text, who?, turn?, seed?, variables?, clock? })` | Fires the event. `turn` defaults to one past the last. |
 | `toolUse(calls, who?, room?)` | `calls` are `{ id?, name, args? }`; returns `verdicts` in call order: `true` or the first denial's reason. |
 | `replyPhase({ reply, who?, turn?, seed?, variables?, clock?, rolls?, clockAdvances?, variableWrites? })` | Fires the event. |
-| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. |
+| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. The arguments are passed as given: the host does not check them against `params` or match text forms (that is the engine's half). |
 | `view(name, who?, room?)` | The view's data for `who`; throws if it failed. |
-| `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones are refused with `reason: "role"`. |
-| `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (a `keeper` command: for everyone but an admin), else what `available` answers. |
+| `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones and those declaring `keeper: false` are refused with `reason: "role"`. |
+| `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (a `keeper` command: for everyone but an admin), else what `available` answers — the question the engine asks at the moment of use. |
 | `characters(room?)`, `clock(room?)` | The read-only answers. |
 | `checkpoint` | The current checkpoint: what a restart would load. |
 | `description` | The static description the engine reads at load. |
@@ -411,8 +515,8 @@ Every call returns what it did: `effects` (in order; empty when the call failed)
 `checkpoint` (after the call), and shortcuts `injected`, `facts`, `writes`, `blocks`,
 `rolls`, `logs`. `who(name, { id?, role?, character? })` builds a `Who`.
 
-`room` is `{ turn?, variables?, clock? }`: what you leave out comes from the options, and
-`turn` from the last turn started (1 before any).
+`room` is `{ turn?, variables?, clock?, members? }`: what you leave out comes from the
+options, and `turn` from the last turn started (1 before any).
 
 The test host does not apply effects and does not enforce the engine's limits above;
 check them in your own tests if you come near them.

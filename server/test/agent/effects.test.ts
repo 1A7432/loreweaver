@@ -19,6 +19,7 @@ import {
   type TextReview,
 } from "../../src/agent/effects.ts";
 import type { Applied, FactRequest } from "../../src/agent/modules.ts";
+import { renderPendingFacts } from "../../src/agent/turn/reader.ts";
 import {
   MODULE_VARIABLES_ID,
   MODULE_VARIABLES_TYPE,
@@ -151,6 +152,42 @@ describe("facts", () => {
     expect(result.pendingAdded).toBe(MAX_PENDING_FACTS);
     expect(result.problems.filter((problem) => problem.code === "pending_full")).toHaveLength(2);
     expect(readPendingFacts(store, ROOM)).toHaveLength(MAX_PENDING_FACTS);
+  });
+
+  test("a full pending list: a new fact displaces the oldest of a strictly lower importance, else it is dropped", () => {
+    const { store, context } = room();
+    const filler = Array.from({ length: MAX_PENDING_FACTS - 2 }, (_, i) => fact({ to: "keeper", text: `normal ${i}` }));
+    applyModuleEffects(context, { ...NONE, facts: [fact({ to: "keeper", text: "old normal" }), fact({ to: "keeper", text: "old low", importance: "low" }), ...filler] }, options());
+    expect(readPendingFacts(store, ROOM)).toHaveLength(MAX_PENDING_FACTS);
+    // A high fact takes the oldest place of anything lower: "old normal" (older than "old low").
+    const high = applyModuleEffects(context, { ...NONE, facts: [fact({ to: "keeper", text: "urgent", importance: "high" })] }, options());
+    expect(high.pendingAdded).toBe(1);
+    expect(high.problems).toEqual([{ code: "pending_displaced", module: "clock", detail: "clock normal" }]);
+    let texts = readPendingFacts(store, ROOM).map((pending) => pending.text);
+    expect(texts).not.toContain("old normal");
+    expect(texts.at(-1)).toBe("urgent");
+    // A normal fact can only displace a low one.
+    const normal = applyModuleEffects(context, { ...NONE, facts: [fact({ to: "keeper", text: "news" })] }, options());
+    expect(normal.problems).toEqual([{ code: "pending_displaced", module: "clock", detail: "clock low" }]);
+    texts = readPendingFacts(store, ROOM).map((pending) => pending.text);
+    expect(texts).not.toContain("old low");
+    // Nothing lower left for a normal or a low fact: dropped as before.
+    const dropped = applyModuleEffects(context, { ...NONE, facts: [fact({ to: "keeper", text: "more" }), fact({ to: "keeper", text: "less", importance: "low" })] }, options());
+    expect(dropped.pendingAdded).toBe(0);
+    expect(dropped.problems.map((problem) => problem.code)).toEqual(["pending_full", "pending_full"]);
+    expect(readPendingFacts(store, ROOM)).toHaveLength(MAX_PENDING_FACTS);
+  });
+
+  test("pending facts reach the prompt high first, then normal, then low, in arrival order within a level", () => {
+    const at = (text: string, importance: "low" | "normal" | "high") => ({ module: "m", turn: 1, to: "keeper" as const, importance, text, data: null });
+    expect(renderPendingFacts([at("a", "low"), at("b", "normal"), at("c", "high"), at("d", "normal"), at("e", "high"), at("f", "low")])).toEqual([
+      "- [m] c",
+      "- [m] e",
+      "- [m] b",
+      "- [m] d",
+      "- [m] a",
+      "- [m] f",
+    ]);
   });
 });
 

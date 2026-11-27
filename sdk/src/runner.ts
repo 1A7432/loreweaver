@@ -8,7 +8,9 @@
 //   and back, so what is kept is exactly what a restart would load;
 // - a mutating call that throws is followed by a reload from the last checkpoint;
 // - every READ-ONLY call is followed by a reload from the last checkpoint, whatever its
-//   handler did, and takes no checkpoint;
+//   handler did, and takes no checkpoint — in a render, once per viewer, after all of that
+//   viewer's views were read (a read that changes state can colour that viewer's next
+//   views, never another viewer's; nothing survives the render);
 // - one module's failure never touches another module's call.
 // It does not guard against a module that never returns: the host ends the whole thread.
 //
@@ -30,6 +32,7 @@ import type {
   Json,
   JsonObject,
   ModuleDefinition,
+  ModuleInit,
   ReplyPhaseEvent,
   RoomSnapshot,
   RollResult,
@@ -104,6 +107,8 @@ export interface CommandDescription {
   readonly role: Json;
   /** Whether it declared `danger: true`. */
   readonly danger: boolean;
+  /** False when it declared `keeper: false`: a member's verb the Keeper never runs. */
+  readonly keeper: Json;
   /** Whether it defines `available`. */
   readonly available: boolean;
 }
@@ -166,6 +171,7 @@ export interface CommandRequest {
   readonly who: Who;
   /** Who is running it: the Keeper, or the member in `who`. The role is checked against this. */
   readonly by: CommandOrigin["by"];
+  /** Derived from persisted inputs only; handed to `run` as `call.seed`, and the dice derive from it. */
   readonly seed: string;
   /** The room when the command is used: the same copy for `available` and `run`. */
   readonly room: RoomSnapshot;
@@ -181,8 +187,21 @@ export interface CommandValue extends CallValue {
   readonly outcome: CommandOutcome;
 }
 
+/** One module view, by module id and view name. */
+export interface ViewRef {
+  readonly module: string;
+  readonly view: string;
+}
+
+/** One viewer of a render and the module views that viewer asked for. */
+export interface ViewerRequest {
+  readonly who: Who;
+  /** Only these are computed for this viewer; a view named twice is computed once. */
+  readonly views: readonly ViewRef[];
+}
+
 export interface RenderRequest {
-  readonly viewers: readonly Who[];
+  readonly viewers: readonly ViewerRequest[];
   /** The room, once for every viewer. */
   readonly room: RoomSnapshot;
 }
@@ -191,14 +210,20 @@ export type ViewRender =
   | { readonly module: string; readonly view: string; readonly data: Json }
   | { readonly module: string; readonly view: string; readonly error: string };
 
-export type AvailabilityRender =
-  | { readonly module: string; readonly command: string; readonly verdict: Json }
-  | { readonly module: string; readonly command: string; readonly error: string };
-
 export interface ViewerRender {
+  /** The views asked for this viewer, in module order, then in the order the module declares them. */
   readonly views: readonly ViewRender[];
-  /** Only commands that define `available`; the others depend on role alone. */
-  readonly available: readonly AvailabilityRender[];
+}
+
+/**
+ * Something the operator should know of a module that is no failure of the call.
+ * `read_changed_state`: reading views changed the module's state (its `save()` differed from
+ * its checkpoint after a viewer's views); the render's results were used. Said once per
+ * module for the life of the runner.
+ */
+export interface Notice {
+  readonly module: string;
+  readonly code: "read_changed_state";
 }
 
 export interface RenderValue {
@@ -212,6 +237,23 @@ export interface RenderValue {
   /** Restores that failed. */
   readonly failures: readonly Failure[];
   readonly broken: readonly string[];
+  readonly notices: readonly Notice[];
+}
+
+/** What a module entry brings to a load besides its definition. */
+export interface LoadEntry {
+  readonly path: string;
+  readonly definition: unknown;
+  /** The manifest's `options` for this module; `{}` when absent. */
+  readonly options?: JsonObject;
+}
+
+/** A one-off `available` read, as the test host asks it. */
+export interface AvailableRequest {
+  readonly module: string;
+  readonly command: string;
+  readonly who: Who;
+  readonly room: RoomSnapshot;
 }
 
 /** Module ids, command names and view names. */
@@ -238,12 +280,19 @@ export function mayUse(role: unknown, who: Who): boolean {
 }
 
 /**
- * Whether a command declared with `role` may be run by `by`. The Keeper may run `player`
- * and `keeper` commands, whoever spoke; never an `admin` one. A member is `mayUse` (so an
- * admin runs anything, and then `by` is `"member"`).
+ * Whether the Keeper may run a command declared with `role` and `keeper`: `player` and
+ * `keeper` commands, whoever spoke; never an `admin` one, nor one that declared `keeper: false`.
  */
-export function mayRun(role: unknown, by: CommandOrigin["by"], who: Who): boolean {
-  if (by === "keeper") return role === undefined || role === "player" || role === "keeper";
+export function keeperMayRun(role: unknown, keeper: unknown): boolean {
+  return keeper !== false && (role === undefined || role === "player" || role === "keeper");
+}
+
+/**
+ * Whether a command declared with `role` (and `keeper`) may be run by `by`. The Keeper:
+ * `keeperMayRun`. A member is `mayUse` (so an admin runs anything, and then `by` is `"member"`).
+ */
+export function mayRun(role: unknown, by: CommandOrigin["by"], who: Who, keeper?: unknown): boolean {
+  if (by === "keeper") return keeperMayRun(role, keeper);
   return by === "member" && mayUse(role, who);
 }
 
@@ -261,6 +310,8 @@ interface Instance {
   readonly id: string;
   readonly path: string;
   readonly definition: ModuleDefinition;
+  /** What every `create` and `load` of this module is given. */
+  readonly init: ModuleInit;
   /** The last checkpoint as JSON text; null when there is none (fresh, or no `save`). */
   checkpoint: string | null;
   broken: boolean;
@@ -413,6 +464,7 @@ function describe(instance: Instance): ModuleDescription {
       text: toJson(own(spec, "text") ?? []) ?? null,
       role: toJson(own(spec, "role") ?? "player") ?? null,
       danger: own(spec, "danger") === true,
+      keeper: toJson(own(spec, "keeper") ?? true) ?? null,
       available: typeof available === "function",
     } satisfies CommandDescription;
   });
@@ -462,6 +514,8 @@ function isClockReading(value: Json): value is { time: string; round?: number } 
 export class ModuleRunner {
   readonly #dice: DiceRoller;
   #modules: Instance[] = [];
+  /** Modules already reported as `read_changed_state`: once for the life of this runner. */
+  readonly #noticed = new Set<string>();
 
   constructor(options: { readonly dice: DiceRoller }) {
     this.#dice = options.dice;
@@ -471,18 +525,22 @@ export class ModuleRunner {
    * Take the room's modules, in dispatch order, and bring each to its last checkpoint
    * (`load`) or to a fresh start (`create`). Throws — the whole load fails — on a value
    * that is not a definition, an unusable or repeated id, two modules claiming the clock,
-   * a malformed command or view table, or a `create`/`load` that throws.
+   * a malformed command or view table, or a `create`/`load` that throws. `seed` is the
+   * room's (its id and generation); each module's `init.seed` is derived from it and the
+   * module id.
    */
-  load(entries: readonly { readonly path: string; readonly definition: unknown }[], snapshots: Readonly<Record<string, Json>>): LoadValue {
+  load(entries: readonly LoadEntry[], snapshots: Readonly<Record<string, Json>>, seed = ""): LoadValue {
     const next: Instance[] = [];
-    for (const { path, definition } of entries) {
+    for (const { path, definition, options } of entries) {
       if (!isObject(definition) || typeof definition.id !== "string") {
         throw new Error(`${path}: the default export is not a module definition (use defineModule)`);
       }
       const id = definition.id;
       if (!isValidName(id)) throw new Error(`${path}: module id "${id}" is not a usable name`);
       if (next.some((other) => other.id === id)) throw new Error(`two modules share the id "${id}"`);
-      next.push({ id, path, definition: definition as unknown as ModuleDefinition, checkpoint: null, broken: false });
+      // Through JSON text and back: the module holds its own copy of its options.
+      const init: ModuleInit = { options: isObject(options) ? (JSON.parse(JSON.stringify(options)) as JsonObject) : {}, seed: `${seed}:${id}` };
+      next.push({ id, path, definition: definition as unknown as ModuleDefinition, init, checkpoint: null, broken: false });
     }
     const claimers = next.filter((instance) => typeof instance.definition.clock === "function");
     if (claimers.length > 1) {
@@ -495,9 +553,9 @@ export class ModuleRunner {
       try {
         if (snapshot !== undefined) {
           instance.checkpoint = JSON.stringify(snapshot);
-          instance.definition.load?.(JSON.parse(instance.checkpoint) as Json);
+          instance.definition.load?.(JSON.parse(instance.checkpoint) as Json, structuredClone(instance.init));
         } else {
-          instance.definition.create?.();
+          instance.definition.create?.(structuredClone(instance.init));
           // Keep the fresh state at once: a `create` that draws on anything outside the
           // module would otherwise give a different room after every restart.
           this.#checkpoint(instance, checkpoints);
@@ -518,7 +576,7 @@ export class ModuleRunner {
     const claimer = this.#modules.find((instance) => typeof instance.definition.clock === "function");
     // The clock is read inside the same exchange, so turn start stays one round trip.
     if (claimer && !claimer.broken && handlers.length > 0) {
-      const room: RoomSnapshot = { turn: event.turn, variables: event.variables, clock: event.clock };
+      const room: RoomSnapshot = { turn: event.turn, variables: event.variables, clock: event.clock, members: event.members };
       const read = await this.#read(claimer, out, () => claimer.definition.clock?.(structuredClone(room)));
       if ("value" in read) {
         clock = { module: claimer.id, reading: read.value };
@@ -578,7 +636,7 @@ export class ModuleRunner {
     const instance = this.#modules.find((candidate) => candidate.id === request.module);
     const spec = instance ? lookup<CommandSpec>(instance.definition.commands, request.command) : undefined;
     if (!instance || !spec || typeof spec.run !== "function") return { ...out, outcome: { status: "refused", reason: "unknown" } };
-    if (!mayRun(spec.role, request.by, request.who)) return { ...out, outcome: { status: "refused", reason: "role" } };
+    if (!mayRun(spec.role, request.by, request.who, spec.keeper)) return { ...out, outcome: { status: "refused", reason: "role" } };
     if (this.#skipBroken(instance, out)) return { ...out, outcome: { status: "failed", error: "module is broken" } };
     if (typeof spec.available === "function") {
       const verdict = await this.#read(instance, out, () => spec.available?.(structuredClone(request.who), structuredClone(request.room)));
@@ -587,7 +645,7 @@ export class ModuleRunner {
     }
     let result: Json = {};
     const done = await this.#mutate(instance, "command", request.seed, out, async (fx) => {
-      const call: CommandOrigin = { by: request.by };
+      const call: CommandOrigin = { by: request.by, seed: request.seed };
       const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(request.who), fx, structuredClone(request.room), call);
       if (value === undefined) return;
       const json = toJson(value);
@@ -598,10 +656,17 @@ export class ModuleRunner {
     return { ...out, outcome: done.ok ? { status: "ok", result } : { status: "failed", error: done.error } };
   }
 
-  /** Every read-only output, for each viewer. Each call is followed by a restore. */
+  /**
+   * The read-only outputs: for each viewer, the module views that viewer asked for (and only
+   * those: a module none of whose views was asked for is not read for views at all); then
+   * every module's characters and the clock. The views of one viewer share one restore,
+   * made after that viewer's last view; `characters` and `clock` are restored after each.
+   * A command's `available` is not asked here: it is asked at the moment of use.
+   */
   async render(request: RenderRequest): Promise<RenderValue> {
     const out = accumulator();
-    const viewers: ViewerRender[] = request.viewers.map(() => ({ views: [], available: [] }));
+    const notices: Notice[] = [];
+    const viewers: ViewerRender[] = request.viewers.map(() => ({ views: [] }));
     const characters: RenderValue["characters"][number][] = [];
     let clock: RenderValue["clock"] = null;
     for (const instance of this.#modules) {
@@ -611,27 +676,30 @@ export class ModuleRunner {
       }
       const definition = instance.definition;
       const viewNames = isObject(definition.views) ? Object.keys(definition.views) : [];
-      const commandNames = isObject(definition.commands) ? Object.keys(definition.commands) : [];
-      for (const [index, who] of request.viewers.entries()) {
+      let compared = false;
+      for (const [index, viewer] of request.viewers.entries()) {
         const target = viewers[index];
-        if (!target) continue;
+        if (!target || instance.broken) continue;
+        const asked = new Set(viewer.views.filter((ref) => ref.module === instance.id).map((ref) => ref.view));
+        const names = viewNames.filter((name) => asked.has(name));
+        if (names.length === 0) continue;
         const views = target.views as ViewRender[];
-        const available = target.available as AvailabilityRender[];
-        for (const name of viewNames) {
+        for (const name of names) {
           const spec = lookup<ViewSpec>(definition.views, name);
           if (!spec || typeof spec.for !== "function") continue;
-          const read = await this.#read(instance, out, () => spec.for(structuredClone(who), structuredClone(request.room)));
+          const read = await this.#value(() => spec.for(structuredClone(viewer.who), structuredClone(request.room)));
           views.push("value" in read ? { module: instance.id, view: name, data: read.value } : { module: instance.id, view: name, error: read.error });
         }
-        for (const name of commandNames) {
-          const spec = lookup<CommandSpec>(definition.commands, name);
-          // A `keeper` command is offered to no member but an admin.
-          if (!spec || typeof spec.available !== "function" || (spec.role === "keeper" && who.member?.role !== "admin")) continue;
-          const read = await this.#read(instance, out, () => spec.available?.(structuredClone(who), structuredClone(request.room)));
-          available.push(
-            "value" in read ? { module: instance.id, command: name, verdict: read.value } : { module: instance.id, command: name, error: read.error },
-          );
+        // Once per render, on its first viewer: one `save()` to see whether reading changed
+        // the state. Not per read: that would cost what sharing the restore saves.
+        if (!compared) {
+          compared = true;
+          if (!this.#noticed.has(instance.id) && this.#changedSinceCheckpoint(instance)) {
+            this.#noticed.add(instance.id);
+            notices.push({ module: instance.id, code: "read_changed_state" });
+          }
         }
+        this.#restore(instance, out);
       }
       if (typeof definition.characters === "function") {
         const read = await this.#read(instance, out, () => definition.characters?.(structuredClone(request.room)));
@@ -642,7 +710,34 @@ export class ModuleRunner {
         clock = "value" in read ? { module: instance.id, reading: read.value } : { module: instance.id, error: read.error };
       }
     }
-    return { viewers, characters, clock, failures: out.failures, broken: out.broken };
+    return { viewers, characters, clock, failures: out.failures, broken: out.broken, notices };
+  }
+
+  /**
+   * One command's `available`, read-only, for the member `who`: what it answers (`true` when
+   * the command defines none), or the error it threw. The test host's question; the engine
+   * asks `available` only inside `command`, at the moment of use.
+   */
+  async available(request: AvailableRequest): Promise<{ readonly value: Json } | { readonly error: string }> {
+    const out = accumulator();
+    const instance = this.#modules.find((candidate) => candidate.id === request.module);
+    const spec = instance ? lookup<CommandSpec>(instance.definition.commands, request.command) : undefined;
+    if (!instance || !spec) return { error: "unknown command" };
+    if (instance.broken) return { error: "module is broken" };
+    if (typeof spec.available !== "function") return { value: true };
+    return this.#read(instance, out, () => spec.available?.(structuredClone(request.who), structuredClone(request.room)));
+  }
+
+  /** Whether the module's `save()` now differs, as JSON text, from its checkpoint. A `save` that throws counts as no difference. */
+  #changedSinceCheckpoint(instance: Instance): boolean {
+    if (typeof instance.definition.save !== "function") return false;
+    try {
+      const saved: unknown = instance.definition.save();
+      const text = saved === undefined ? undefined : JSON.stringify(saved);
+      return text !== undefined && text !== instance.checkpoint;
+    } catch {
+      return false;
+    }
   }
 
   /** The current checkpoint of a module as JSON text; null when it has none. */
@@ -688,15 +783,19 @@ export class ModuleRunner {
 
   /** A read-only call: its value made JSON, then the module restored, whatever happened. */
   async #read(instance: Instance, out: Accumulator, body: () => unknown): Promise<{ value: Json } | { error: string }> {
-    let result: { value: Json } | { error: string };
-    try {
-      const value = toJson(await body());
-      result = value === undefined ? { error: "returned a value that is not JSON" } : { value };
-    } catch (error) {
-      result = { error: errorText(error) };
-    }
+    const result = await this.#value(body);
     this.#restore(instance, out);
     return result;
+  }
+
+  /** A read's value made JSON, or its error; the caller restores. */
+  async #value(body: () => unknown): Promise<{ value: Json } | { error: string }> {
+    try {
+      const value = toJson(await body());
+      return value === undefined ? { error: "returned a value that is not JSON" } : { value };
+    } catch (error) {
+      return { error: errorText(error) };
+    }
   }
 
   /** Throws when `save` throws or returns nothing JSON can hold: the call then fails. */
@@ -712,8 +811,8 @@ export class ModuleRunner {
 
   #restore(instance: Instance, out: Accumulator): void {
     try {
-      if (instance.checkpoint === null) instance.definition.create?.();
-      else instance.definition.load?.(JSON.parse(instance.checkpoint) as Json);
+      if (instance.checkpoint === null) instance.definition.create?.(structuredClone(instance.init));
+      else instance.definition.load?.(JSON.parse(instance.checkpoint) as Json, structuredClone(instance.init));
     } catch (error) {
       instance.broken = true;
       out.failures.push({ module: instance.id, error: `restore failed — ${errorText(error)}` });

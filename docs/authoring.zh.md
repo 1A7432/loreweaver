@@ -59,6 +59,7 @@ export default defineModule({
   commands: {
     light: {
       title: "Light the lantern",
+      text: ["light"],
       run(_args, who, fx) {
         lit = true;
         fx.fact({ text: `${who.member?.name ?? "Someone"} lights the lantern.` });
@@ -109,15 +110,17 @@ loreweaver pack lantern
   loreweaver packs                                 # 列出已安装的扩展包
   ```
 
+  加 `--force` 会用这个压缩包替换掉 id **和**版本都相同的已装扩展包（不加就会被拒，`already_installed`）：开发时重新构建不必每次升版本号。
+
   从命令行安装不会在任何房间启用，正在运行的服务器要等下次启动才看得到它。之后由房间管理员启用：`.pack enable lantern`（中文写法 `.扩展包 启用 lantern`）。
 
 **用起来。** 任何玩家输入：
 
 ```
-.lantern/light
+.light
 ```
 
-这位玩家收到命令的回答（*The lantern is lit.*），整桌看到这条事实（*Ada lights the lantern.*），从下一回合起守秘人的提示词里写着灯是亮的。模组命令只有一种文字写法：完整的 id，要带参数时后面跟一个 JSON 对象：`.lantern/light {"hours": 2}`。客户端也会在 `commands` 视图里列出模组命令，所以 `.help` 能看到它。
+这位玩家收到命令的回答（*The lantern is lit.*），整桌看到这条事实（*Ada lights the lantern.*），从下一回合起守秘人的提示词里写着灯是亮的。`.light` 是这条命令声明的文字写法（`text: ["light"]`）；写法也可以带参数，比如 `"light {hours}"`（一个词）或 `"say {text...}"`（这一行剩下的全部）——规则见 [sdk/README.md](../sdk/README.md#text-forms)（英文）。每条模组命令也都能用完整 id 加一个 JSON 对象来打：`.lantern/light {"hours": 2}`。客户端也会在 `commands` 视图里列出模组命令，所以 `.help` 能看到它。
 
 ## 2. 改了之后重新安装
 
@@ -126,7 +129,7 @@ loreweaver pack lantern
 同一个版本不能装两次（`already_installed`）。两种办法：
 
 - **升版本号**（`0.1.1`，或者预发布版本 `0.1.0-dev.2`），构建，然后在聊天里再 `.pack install` 一次。新版本在运行中的服务器上替掉旧版本，每个启用了它的房间都会重载自己的工作线程，从此跑新版本。模组从保存的状态开始（`load`）。
-- **在命令行里：** `loreweaver uninstall lantern`，再 `loreweaver install … --yes`，然后重启服务器。卸载只能由运营者在命令行里做。
+- **在命令行里：** `loreweaver install … --yes --force` 用新压缩包替换 id 和版本都相同的已装扩展包（或者先 `loreweaver uninstall lantern`，再 `loreweaver install … --yes`），然后重启服务器。替换和卸载只能由运营者在命令行里做。
 
 ## 3. 测试模组
 
@@ -350,10 +353,18 @@ export default defineModule({
 模组能做的事，简单说：
 
 - **事件：** `turnStart`（守秘人开始之前；`fx.inject` 往本回合提示词里加内容）、`toolUse`（守秘人要调用工具了；`fx.deny` 拒掉其中一个）、`replyPhase`（回复之后）。
-- **命令**，名字是 `<模组>/<命令>`，带一个角色：`player`（默认）、`admin`，或者 `keeper`——玩家永远看不到的守秘人机关，由守秘人的 `run_command` 工具运行，房间管理员也能运行，用来纠正守秘人弄错的地方。
-- **视图**，逐人计算：私密信息就是这样只送到一个人手上。
-- **效果**是请求，由引擎校验后执行：给整桌或给守秘人的事实、变量写入、掷骰、界面区块。模组从不直接调用引擎。
-- **角色和时钟：** `characters(room)` 提供可以入座的角色；`clock(room)` 接管房间的时钟。
+- **命令**，名字是 `<模组>/<命令>`，带一个角色：`player`（默认）、`admin`，或者 `keeper`——玩家永远看不到的守秘人机关，由守秘人的 `run_command` 工具运行，房间管理员也能运行，用来纠正守秘人弄错的地方。`keeper: false` 表示这是成员自己的动作，守秘人从不运行（它不会出现在守秘人的命令清单里）。命令的参数在调用模组之前先按它声明的 `params` 检查；它的 `text` 写法（`"light {hours}"`）就是成员要打的字。写法的命令词如果是房间自带的命令，或者两个已启用的模组都用了同一个词，这个写法就不生效；启用扩展包时会列出这些写法。
+- **视图**，逐人计算，只给要看它的人算：私密信息就是这样只送到一个人手上。
+- **效果**是请求，由引擎校验后执行：给整桌或给守秘人的事实（重要程度高的先送到守秘人面前）、变量写入、掷骰、界面区块。模组从不直接调用引擎。
+- **房间**随每次调用一起带来：回合、变量、时钟，还有房间里的每一位成员。`create` 和 `load` 会拿到 `init`：`pack.yaml` 里这个模组条目的 `options`，以及这一轮房间生命的种子。
+- **角色和时钟：** `characters(room)` 会被读取和校验，但目前还没有任何地方用它（让成员坐到模组提供的角色上是另行设计的，还没做）；`clock(room)` 接管房间的时钟。
+
+`pack.yaml` 里的模组条目可以带 `options`：一个最多 16 KiB 的 JSON 对象，模组的 `create` 和 `load` 以 `init.options` 收到它——同一个模组，每个扩展包各自配置：
+
+```yaml
+modules:
+  - { id: lantern, entry: src/lantern.ts, options: { oil: 5 } }
+```
 
 模组的 `id` 必须和清单条目的 `id` 一致。构建器把每个入口和它导入的 npm 包打成一个文件；`loreweaver/module` 保留为导入，由服务器用自己的 SDK 来接。完整的约定、效果表和各项上限在 [sdk/README.md](../sdk/README.md)（英文）——写模组之前先读它。
 
@@ -406,7 +417,8 @@ Its world card: .import world lantern cards/old-quarter.lorecard.json
 | `kit_asset_missing`、`panel_asset_missing` | 演出包或面板点名的图片、声音不在扩展包里。 |
 | `asset_type`、`asset_bad_signature`、`asset_too_large` | 文件扩展名不认识、内容和扩展名不符，或者太大。 |
 | `undeclared_script` | 压缩包里有不是已声明模组入口的代码文件（手工打的包才会有，构建器从不打进去）。 |
-| `already_installed` | 这个版本已经装了；升版本号。 |
+| `already_installed` | 这个版本已经装了；升版本号（或者在命令行里用 `install --force`）。 |
+| `options_too_large` | 模组条目的 `options` 写成 JSON 文本超过 16 KiB。 |
 | `engine_too_old` | 服务器比扩展包的 `engine` 最低版本旧。 |
 
 一些上限：每个扩展包最多 16 个模组、16 个面板；每种内容最多 64 条；演出包最多一个；资源最多 512 个；`pack.yaml` 最大 256 KiB，规则包 512 KiB，演出包 128 KiB，页面 2 MiB，卡 32 MiB，打包后的模组 16 MiB；整个压缩包最大 512 MiB。超过上限就拒收，绝不截断。完整的表见 [pack.md](lwf/formats/pack.md) §2–§6 和 [panels.md](lwf/formats/panels.md) §8。
@@ -421,7 +433,7 @@ Its world card: .import world lantern cards/old-quarter.lorecard.json
 - **面板**改为面板 3.0：绑定读视图，选项运行命令，页面是一个自包含的 HTML 文件（[panels.md](lwf/formats/panels.md) §9 逐个字段对照了 1.0）。
 - 带规则脚本的**规则包**加载不了。
 - 没有锻造（从一段描述生成技能、规则包或模组），没有热重载开发房间，也没有单独的检查命令：构建、安装、看效果（§2）。
-- 原生卡的 `pregens` 和 AI 同伴都不在 3.0 里：玩家导入一张 `character` 卡，或者用 `genchar` 从描述生成角色；模组的 `characters()` 也可以提供座位。
+- 原生卡的 `pregens` 和 AI 同伴都不在 3.0 里：玩家导入一张 `character` 卡，或者用 `genchar` 从描述生成角色；模组的 `characters()` 会被读取和校验，但还没有地方用它：让成员坐到模组的角色上是另行设计的，还没做。
 
 ## 接着看哪份
 

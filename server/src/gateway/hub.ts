@@ -6,7 +6,7 @@
 // modules, or one whose lore asks — `workerForLore`), and writes each module checkpoint
 // through the writer of the work whose call produced it (see `keeper.ts` `Work`): a
 // checkpoint of a past generation is dropped and the worker starts over from the store.
-import type { Json } from "loreweaver/module";
+import type { Json, JsonObject } from "loreweaver/module";
 
 import type { Services } from "../agent/context.ts";
 import type { DirectorImageDeps } from "../agent/lanes/director.ts";
@@ -76,6 +76,8 @@ export interface HubDeps {
   readonly spawnWorker: () => WorkerHandle;
   /** The module entry files enabled in a room. */
   readonly modulesFor: (room: string) => readonly string[];
+  /** Each of those entry files' manifest `options` (`init.options`); default: the installed packs'. */
+  readonly moduleOptions?: (room: string) => ReadonlyMap<string, JsonObject>;
   /** How long one call into a room's worker may take before the worker is ended. */
   readonly workerTimeoutMs: number;
   /**
@@ -107,6 +109,7 @@ export class Hub {
         actionOf: (context) => this.room(context.room).actionOf(context),
         reviewFact: (context) => this.room(context.room).reviewFactFor(context),
         moduleClock: (room) => this.room(room).moduleClock,
+        members: (room) => this.room(room).members(),
       }),
       deps.keys === undefined ? null : { book: deps.keys, online: (room) => this.online(room) },
     );
@@ -208,6 +211,11 @@ export class Hub {
       coldStart: this.#deps.workerColdStart?.(id) ?? false,
       now: () => this.#deps.services.clock.now(),
       checkpoints: store.moduleStates(id) as Map<string, Json>,
+      // Read at each load, so a reset (a new generation) gives a module created again a new seed.
+      init: () => ({
+        seed: `${id}:${store.room(id).epoch}`,
+        options: this.#deps.moduleOptions?.(id) ?? this.#packs.moduleOptionsFor(store, id),
+      }),
       token: () => currentWork(),
       onCheckpoint: (module, snapshot, token) => {
         // Outside any work (a render, a description): the call changed nothing the store

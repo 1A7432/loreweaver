@@ -31,6 +31,10 @@ export const MAX_AUTHORS = 32;
 export const MAX_AUTHOR_CHARS = 200;
 export const MAX_LICENSE_CHARS = 200;
 export const MAX_MODULES = 16;
+/** A module entry's `options`, as the bytes of its JSON text. */
+export const MAX_MODULE_OPTIONS_BYTES = 16 * 1024;
+/** How deep a module's `options` may nest. */
+const MAX_OPTIONS_DEPTH = 32;
 /** Entries per content kind (skills, rule packs, cards). */
 export const MAX_KIND_ENTRIES = 64;
 export const MAX_ASSETS = 512;
@@ -59,7 +63,13 @@ export interface ManifestModule {
   readonly id: string;
   /** The entry file: the author's source in a source tree, the bundled `.js` in an archive. */
   readonly entry: string;
+  /** What the module's `create` and `load` get as `init.options`; `{}` when the manifest gives none. */
+  readonly options: ModuleOptions;
 }
+
+/** A JSON object: a module's `options`. */
+export type ModuleOptions = { readonly [key: string]: OptionValue };
+type OptionValue = null | boolean | number | string | readonly OptionValue[] | ModuleOptions;
 
 export interface ManifestCard {
   readonly path: string;
@@ -129,6 +139,8 @@ export type ManifestCode =
   | "too_many"
   /** The same entry, id or file twice. */
   | "duplicate"
+  /** A module's `options` over `MAX_MODULE_OPTIONS_BYTES` as JSON text. */
+  | "options_too_large"
   /** A key a closed block does not define. */
   | "unknown_key"
   /** A content kind of 2.x packs that 3.0 does not carry. */
@@ -272,7 +284,7 @@ function readModules(r: Reader, raw: unknown): ManifestModule[] {
       r.fail("not_a_mapping", path);
       return;
     }
-    r.closed(item, path, ["id", "entry"]);
+    r.closed(item, path, ["id", "entry", "options"]);
     const id = field(item, "id");
     if (typeof id !== "string" || !MODULE_ID.test(id)) {
       r.fail(id === undefined ? "missing_field" : "bad_id", join(path, "id"));
@@ -280,9 +292,34 @@ function readModules(r: Reader, raw: unknown): ManifestModule[] {
     }
     if (out.some((module) => module.id === id)) r.fail("duplicate", join(path, "id"));
     const entry = r.path(field(item, "entry"), join(path, "entry"), MODULE_SOURCE_EXTENSIONS);
-    if (entry !== "") out.push({ id, entry });
+    const options = readOptions(r, field(item, "options"), join(path, "options"));
+    if (entry !== "") out.push({ id, entry, options });
   });
   return out;
+}
+
+/** Whether a YAML value is JSON data: no dates or other non-JSON scalars, finite numbers, not too deep. */
+function isOptionValue(value: unknown, depth: number): value is OptionValue {
+  if (depth > MAX_OPTIONS_DEPTH) return false;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every((item) => isOptionValue(item, depth + 1));
+  if (typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Object.values(value).every((item) => isOptionValue(item, depth + 1));
+}
+
+/** A module's `options`: a JSON object of at most `MAX_MODULE_OPTIONS_BYTES` as JSON text; absent is `{}`. */
+function readOptions(r: Reader, raw: unknown, path: string): ModuleOptions {
+  if (raw === undefined || raw === null) return {};
+  if (!isRecord(raw) || !isOptionValue(raw, 0)) {
+    r.fail("bad_field", path);
+    return {};
+  }
+  if (new TextEncoder().encode(JSON.stringify(raw)).length > MAX_MODULE_OPTIONS_BYTES) {
+    r.fail("options_too_large", path);
+    return {};
+  }
+  return raw as ModuleOptions;
 }
 
 function readCards(r: Reader, raw: unknown): ManifestCard[] {

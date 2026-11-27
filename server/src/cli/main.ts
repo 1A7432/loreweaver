@@ -4,8 +4,10 @@
 //   loreweaver key <room> <role> <name>           hand out an access key (admin | player | observer)
 //   loreweaver import-world <room> <card-file>    bring a SillyTavern card into a room as its world
 //   loreweaver pack <source-dir> [--out <file>]   build a source tree into a .lwpack
-//   loreweaver install <path|https-url|gh:owner/repo[@tag]> [--yes]
-//                                                 show a pack's trust card; with --yes, install it
+//   loreweaver install <path|https-url|gh:owner/repo[@tag]> [--yes] [--force]
+//                                                 show a pack's trust card; with --yes, install it;
+//                                                 --force replaces an installed pack of the same
+//                                                 id AND version (refused without it)
 //   loreweaver packs                              list the installed packs
 //   loreweaver uninstall <id>                     remove an installed pack
 //   loreweaver selftest                           prove this build can run a turn end to end
@@ -24,7 +26,7 @@ import { buildPack, installPack, listPacks, uninstallPack } from "./packs.ts";
 import { selftest } from "./selftest.ts";
 
 const USAGE =
-  "usage: loreweaver serve [--local] [--until-stdin-closes] | key <room> <admin|player|observer> <name> | import-world <room> <card-file> | pack <source-dir> [--out <file>] | install <path|https-url|gh:owner/repo[@tag]> [--yes] | packs | uninstall <id> | selftest | --version";
+  "usage: loreweaver serve [--local] [--until-stdin-closes] | key <room> <admin|player|observer> <name> | import-world <room> <card-file> | pack <source-dir> [--out <file>] | install <path|https-url|gh:owner/repo[@tag]> [--yes] [--force] | packs | uninstall <id> | selftest | --version";
 
 export interface Outcome {
   readonly code: number;
@@ -113,10 +115,11 @@ export async function run(argv: readonly string[], env: Environment = {}): Promi
     const built = await buildPack(rest[0] as string, rest.length === 3 ? { out: rest[2] as string } : {});
     return { code: built.ok ? 0 : 1, out: JSON.stringify(built) };
   }
-  if (command === "install" && (rest.length === 1 || (rest.length === 2 && rest[1] === "--yes"))) {
+  const installFlags = rest.slice(1);
+  if (command === "install" && rest.length >= 1 && installFlags.every((flag) => flag === "--yes" || flag === "--force") && new Set(installFlags).size === installFlags.length) {
     const settings = settingsFrom(env);
     if ("code" in settings) return settings;
-    const installed = await installPack(settings.dataDir, rest[0] as string, { yes: rest.length === 2, fetch: (url, init) => fetch(url, init) });
+    const installed = await installPack(settings.dataDir, rest[0] as string, { yes: installFlags.includes("--yes"), force: installFlags.includes("--force"), fetch: (url, init) => fetch(url, init) });
     return { code: installed.ok ? 0 : 1, out: JSON.stringify(installed) };
   }
   if (command === "packs" && rest.length === 0) {

@@ -3,7 +3,7 @@
 // same runner the authors' test host uses). A call that makes the worker spin is ended
 // by the main thread terminating the whole thread, which then rebuilds it from the last
 // checkpoints.
-import type { Json } from "loreweaver/module";
+import type { Json, JsonObject } from "loreweaver/module";
 import { errorText, ModuleRunner } from "loreweaver/runner";
 
 import { renderRoll, rollDice } from "../core/dice/index.ts";
@@ -30,20 +30,23 @@ const runner = new ModuleRunner({
  */
 async function load(request: Extract<WorkerRequest, { op: "load" }>): Promise<WorkerValues["load"]> {
   const snapshots = request.snapshots as Readonly<Record<string, Json>>;
+  const options = new Map(request.options);
   const entries = [];
   const failed: string[] = [];
   for (const path of request.paths) {
     try {
-      entries.push({ path, definition: await importModule(path) });
+      const given = options.get(path);
+      const entry = { path, definition: await importModule(path) };
+      entries.push(typeof given === "object" && given !== null && !Array.isArray(given) ? { ...entry, options: given as JsonObject } : entry);
     } catch (error) {
       failed.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   try {
-    return { ...runner.load(entries, snapshots), failed };
+    return { ...runner.load(entries, snapshots, request.seed), failed };
   } catch (error) {
     failed.push(error instanceof Error ? error.message : String(error));
-    return { ...runner.load([], snapshots), failed };
+    return { ...runner.load([], snapshots, request.seed), failed };
   }
 }
 

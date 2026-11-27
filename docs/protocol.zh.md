@@ -269,7 +269,8 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 - 没有前缀、没有命令词，或命令词不是任何命令的行，是**发言**，原样在桌上说出。所以打错的命令会作为发言到达守秘人。
 - 例外：某个已安装规则系统声明了、但本房间规则系统没有的命令词，以 `not_in_system` 拒绝，而不是变成发言。
 - 引擎的形式优先于规则包的形式。每个命令都有一张英文别名表和一张中文别名表；两张总是都查，调用者的语言优先。
-- 模组命令唯一的文本入口是完整 id 加一个 JSON 对象：`.duel/strike {"target":"Bo"}`（没有参数字符串即 `{}`；不是 JSON 对象的一律以 `module_args` 拒绝）。
+- 模组命令按它的模组声明的文字写法来打，写法以 `commands` 视图列出的为准（[6.5](#65-发现命令commands-视图)）：`.strike Bo`。引擎和规则包的命令词优先于模组的；本房间两个模组都用了的词，哪个都不运行；同一个词有两个写法都对得上一行时，字面词多的那个胜出。命令词归某个模组写法所有、但一个写法都对不上的行，以 `usage` 拒绝。打出来的词按对应参数声明的类型转换（整数、数、`true`/`false`，其余是文本），然后像任何参数一样校验。
+- 每条模组命令也都能用完整 id 加一个 JSON 对象来打：`.duel/strike {"target":"Bo"}`（没有参数字符串即 `{}`；不是 JSON 对象的一律以 `module_args` 拒绝）。
 
 **内联掷骰。** 发言里最多可以带 8 个写成 `[[expr]]` 的内联掷骰，如 `I swing the lantern [[1d6]]`。每个都会掷出，并紧跟在这一行的 `narrative` 事件之后作为 `dice` 事件发布。解析失败的掷骰被跳过，并在结果的 `text` 里写出；超过 8 个则一个都不掷。
 
@@ -315,7 +316,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 - 管理员命令根本不会列给非管理员。
 - 有些玩家命令的某些参数需要管理员（`bot` 带 `on`，`rule` 带 `variant` 或 `system`，`uploads` 带 `on`，`init` 带 `name`，`lore` 的 `list` 以外的任何用法以及带 `disabled` 的 `list`，`import` 带 `as: "world"`，`model` 除不带 `provider` 和 `lane` 的 `list` 以外的任何用法，`report` 带 `reveal`）。条目写的是 `role: "player"`；仅限管理员的参数以 `forbidden` 拒绝。见 [6.8](#68-引擎的命令) 的表。
 - `text.forms` 列出查看者语言的那张表（那张为空时列另一张）。服务器两张表的形式都接受。
-- 模组命令的 `text.forms` 是模组声明的模板（如 `strike {target}`），给人看的；它的 `available` 对任何玩家都是 `true`：模组在使用的那一刻回答。
+- 模组命令的 `text.forms` 是此刻在本房间能运行它的词（模组声明的写法，去掉命令词是引擎或规则包的词、或者被本房间另一个模组也用了的那些），`text.usage` 是每个这样的写法打出来的样子（`.strike {target} | .strike at {target}`）；一个都没有时没有 `text`，这条命令就用 id 来打。它的 `available` 对任何玩家都是 `true`：模组在使用的那一刻回答。
 
 ### 6.6 参数 schema
 
@@ -330,7 +331,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 | `minimum`、`maximum` | 整数和数 |
 | `items`、`maxItems` | 数组（默认上限 64 项） |
 
-schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小数部分的 JSON 数，数必须是有限的 JSON 数，都不能是文本 `"5"`；以 `null` 给出的参数只在类型允许 `null` 时有效；嵌套超过 8 层被拒绝。模组命令的 `params` 是模组声明的 schema。
+schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小数部分的 JSON 数，数必须是有限的 JSON 数，都不能是文本 `"5"`；以 `null` 给出的参数只在类型允许 `null` 时有效；嵌套超过 8 层被拒绝。模组命令的 `params` 是模组声明的 schema；调用模组之前，参数先按它检查，用的是模组约定里的关键字（`type`、`properties`、`required`、`additionalProperties: false`、`enum`、`const`、`minimum`/`maximum`、`minLength`/`maxLength`、`minItems`/`maxItems`、`items`），不符合时以同样的错误码拒绝。
 
 ### 6.7 房间生命周期命令（客户端视角）
 

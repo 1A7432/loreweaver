@@ -5,7 +5,8 @@ import { describe, expect, test } from "bun:test";
 import { CHARACTER_TYPE, type CharacterFullView, SEATING_ID, SEATING_TYPE, type SeatingView } from "../../../src/core/characters/index.ts";
 import { INITIATIVE_ID, INITIATIVE_TYPE, type InitiativeView } from "../../../src/core/clock/index.ts";
 import { VARIABLE_TREE_ID, VARIABLE_TREE_TYPE, type VariableTreeView } from "../../../src/core/variables/index.ts";
-import { KEEPER_MUTED, ROOM_LOCALE, ROOM_RULE_VARIANT, type ModuleCommands } from "../../../src/gateway/commands/index.ts";
+import { parseForm, type TextForm } from "../../../src/agent/module_forms.ts";
+import { KEEPER_MUTED, type ModuleCommandEntry, ROOM_LOCALE, ROOM_RULE_VARIANT, type ModuleCommands } from "../../../src/gateway/commands/index.ts";
 import { ADA, ADMIN, BAO, bench, code, EVE, ok, ROOM } from "./bench.ts";
 import { seedRoster, seedVariables } from "./seed.ts";
 
@@ -156,18 +157,37 @@ describe("the commands view", () => {
   });
 });
 
-describe("module commands", () => {
-  const calls: unknown[] = [];
-  const modules: ModuleCommands = {
-    list: async () => [
-      { id: "demo/attack", title: "Attack", description: "Hit something.", params: { type: "object" }, forms: ["attack"], role: "player", available: true },
-      { id: "demo/rig", title: "Rig", description: "Admin only.", params: { type: "object" }, role: "admin", available: true },
-    ],
+/** Forms read against `params`, as the load does. */
+function forms(params: unknown, ...sources: string[]): TextForm[] {
+  return sources.map((source) => {
+    const read = parseForm(source, params);
+    if (!read.ok) throw new Error(`bad form in the test: ${source}`);
+    return read.form;
+  });
+}
+
+/** A module seam over a fixed table that records what it is asked to run. */
+function stubModules(entries: readonly ModuleCommandEntry[], calls: unknown[], listed: { now: boolean } = { now: true }): ModuleCommands {
+  return {
+    list: async () => entries,
+    listNow: () => (listed.now ? entries : null),
     run: async (_context, id, args, locale) => {
       calls.push({ id, args, locale });
       return { ok: true, text: "done", events: [], signals: [] };
     },
   };
+}
+
+describe("module commands", () => {
+  const calls: unknown[] = [];
+  const attackParams = { type: "object", properties: { target: { type: "string" } } };
+  const modules = stubModules(
+    [
+      { id: "demo/attack", module: "demo", title: "Attack", description: "Hit something.", params: attackParams, forms: forms(attackParams, "strike {target}"), role: "player", available: true },
+      { id: "demo/rig", module: "demo", title: "Rig", description: "Admin only.", params: { type: "object" }, forms: [], role: "admin", available: true },
+    ],
+    calls,
+  );
 
   test("are listed in the view by role and routed to the dispatcher from both entrances", async () => {
     const b = bench({ modules });
@@ -181,6 +201,105 @@ describe("module commands", () => {
       { id: "demo/attack", args: { target: "door" }, locale: "en" },
     ]);
     expect(code(await b.run(EVE, "demo/attack", {}))).toBe("forbidden");
+    const view = playerView.commands.find((entry) => entry.id === "demo/attack");
+    expect(view?.text).toEqual({ forms: ["strike"], usage: ".strike {target}" });
+    // Typed by its form, coerced and routed like the JSON form.
+    await b.input(ADA, ".strike door");
+    expect(calls.at(-1)).toEqual({ id: "demo/attack", args: { target: "door" }, locale: "en" });
+  });
+});
+
+describe("module text forms", () => {
+  const sayParams = { type: "object", properties: { text: { type: "string" }, loud: { type: "boolean" } } };
+  const moveParams = { type: "object", properties: { steps: { type: "integer" }, pace: { type: "number" }, where: { type: "string" } } };
+  const entries = (calls: unknown[]) =>
+    stubModules(
+      [
+        { id: "talk/say", module: "talk", title: "Say", description: "", params: sayParams, forms: forms(sayParams, "say {text...}", "shout {loud} {text...}"), role: "player", available: true },
+        {
+          id: "walk/move",
+          module: "walk",
+          title: "Move",
+          description: "",
+          params: moveParams,
+          // `go north {steps}` has more literal words than `go {where} {steps}`: it wins.
+          forms: forms(moveParams, "go {where} {steps}", "go north {steps}", "pace {pace}", "前进 {steps}"),
+          role: "player",
+          available: true,
+        },
+        // `roll` is an engine word: the room's own command wins and the form is dropped.
+        { id: "walk/tumble", module: "walk", title: "Tumble", description: "", params: { type: "object" }, forms: forms({}, "roll"), role: "player", available: true },
+        // Two modules both claim `wave`: dropped for both.
+        { id: "talk/wave", module: "talk", title: "Wave", description: "", params: { type: "object" }, forms: forms({}, "wave"), role: "player", available: true },
+        { id: "walk/wave", module: "walk", title: "Wave", description: "", params: { type: "object" }, forms: forms({}, "wave"), role: "player", available: true },
+      ],
+      calls,
+    );
+
+  test("one word, the rest of the line, coercion by type, literal precedence", async () => {
+    const calls: unknown[] = [];
+    const b = bench({ modules: entries(calls) });
+    expect((await b.input(ADA, ".say   hello there,  friend ")).kind).toBe("command");
+    await b.input(ADA, ".SAY");
+    await b.input(ADA, ".shout true Hey!");
+    await b.input(ADA, ".go north 3");
+    await b.input(ADA, ".go west 2");
+    await b.input(ADA, ".pace 1.5");
+    await b.input(ADA, "。前进 4", "zh");
+    expect(calls).toEqual([
+      { id: "talk/say", args: { text: "hello there,  friend" }, locale: "en" },
+      { id: "talk/say", args: {}, locale: "en" },
+      { id: "talk/say", args: { loud: true, text: "Hey!" }, locale: "en" },
+      { id: "walk/move", args: { steps: 3 }, locale: "en" },
+      { id: "walk/move", args: { where: "west", steps: 2 }, locale: "en" },
+      { id: "walk/move", args: { pace: 1.5 }, locale: "en" },
+      { id: "walk/move", args: { steps: 4 }, locale: "zh" },
+    ]);
+  });
+
+  test("a word the forms take that no form fits is refused with the usage; a word they do not take is speech", async () => {
+    const calls: unknown[] = [];
+    const b = bench({ modules: entries(calls) });
+    const wrong = await b.input(ADA, ".go");
+    expect(wrong.kind === "command" ? code(wrong.outcome) : "speech").toBe("usage");
+    expect(wrong.kind === "command" && !wrong.outcome.ok ? wrong.outcome.message : "").toContain(".go {where} {steps} | .go north {steps}");
+    expect((await b.input(ADA, ".dance wildly")).kind).toBe("speech");
+    expect(calls).toEqual([]);
+  });
+
+  test("the room's own words win, a word two modules claim is dropped for both, each reported once", async () => {
+    const calls: unknown[] = [];
+    const b = bench({ modules: entries(calls) });
+    const rolled = await b.input(ADA, ".roll 1d6");
+    expect(rolled.kind === "command" ? rolled.id : null).toBe("roll");
+    expect((await b.input(ADA, ".wave")).kind).toBe("speech");
+    expect(calls).toEqual([]);
+    const drops = await b.registry.moduleFormDrops(b.context(ADA));
+    expect(drops.map((drop) => [drop.code, drop.command, drop.form])).toEqual([
+      ["word_taken", "walk/tumble", "roll"],
+      ["word_shared", "talk/wave", "wave"],
+      ["word_shared", "walk/wave", "wave"],
+    ]);
+    const said = b.reports.filter((line) => line.includes("text form"));
+    expect(said).toHaveLength(3);
+    await b.registry.view(b.context(ADA), "en");
+    expect(b.reports.filter((line) => line.includes("text form"))).toHaveLength(3);
+    // The view shows each command as it is really typed now.
+    const view = await b.registry.view(b.context(ADA), "en");
+    expect(view.commands.find((entry) => entry.id === "walk/move")?.text).toEqual({ forms: ["go", "pace", "前进"], usage: ".go {where} {steps} | .go north {steps} | .pace {pace} | .前进 {steps}" });
+    expect(view.commands.find((entry) => entry.id === "walk/tumble")?.text).toBeUndefined();
+    expect(view.commands.find((entry) => entry.id === "talk/wave")?.text).toBeUndefined();
+  });
+
+  test("a line may be a module's before the modules were ever loaded; known words only after", () => {
+    const listed = { now: false };
+    const b = bench({ modules: stubModules([{ id: "talk/say", module: "talk", title: "Say", description: "", params: sayParams, forms: forms(sayParams, "say {text...}"), role: "player", available: true }], [], listed) });
+    expect(b.registry.mayBeModuleText(b.context(ADA), ".anything")).toBe(true);
+    listed.now = true;
+    expect(b.registry.mayBeModuleText(b.context(ADA), ".say hi")).toBe(true);
+    expect(b.registry.mayBeModuleText(b.context(ADA), ".anything")).toBe(false);
+    expect(b.registry.mayBeModuleText(b.context(ADA), ".talk/say {}")).toBe(true);
+    expect(b.registry.mayBeModuleText(b.context(ADA), "plain speech")).toBe(false);
   });
 });
 

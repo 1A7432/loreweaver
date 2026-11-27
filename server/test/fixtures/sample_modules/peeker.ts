@@ -19,6 +19,7 @@ export default defineModule({
         turn: room.turn,
         variables: room.variables,
         clock: room.clock === null ? null : { time: room.clock.time, round: room.clock.round ?? null },
+        members: room.members.map((member) => ({ ...member })),
       }),
     },
   },

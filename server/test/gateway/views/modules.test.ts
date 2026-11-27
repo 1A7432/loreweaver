@@ -17,7 +17,7 @@ function info(id: string, views: readonly string[]): ModuleInfo {
 }
 
 function outcome(perViewer: readonly (readonly { module: string; view: string; data: never }[])[]): RenderOutcome {
-  return { viewers: perViewer.map((views) => ({ views, commands: [] })), characters: [], clock: null, problems: [] };
+  return { viewers: perViewer.map((views) => ({ views })), characters: [], clock: null, problems: [] };
 }
 
 describe("mergeModuleViews", () => {
@@ -83,8 +83,13 @@ describe("module views through RoomViews", () => {
     await views.subscribe("bao", ["heist/plan", "scene"], { ...room.inputs(1), modules: listedModuleViews(modules) });
     await views.subscribe("eve", ["scene"], room.inputs(1));
 
-    const renderFor = views.moduleViewers();
-    expect(renderFor.map((viewer) => viewer.member.id)).toEqual([ADA.id, BAO.id]);
+    const requests = views.moduleRequests();
+    // Each subscriber with the module views they subscribed to, and nobody else.
+    expect(requests.map((request) => [request.viewer.member.id, request.views])).toEqual([
+      [ADA.id, ["heist/plan"]],
+      [BAO.id, ["heist/plan"]],
+    ]);
+    const renderFor = requests.map((request) => request.viewer);
     const merged = mergeModuleViews(
       outcome(renderFor.map((viewer) => [{ module: "heist", view: "plan", data: { for: viewer.member.id } as never }])),
       renderFor,

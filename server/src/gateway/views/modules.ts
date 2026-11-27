@@ -1,10 +1,12 @@
 // Module views (`<module>/<name>`), merged in beside the built-ins.
 //
-// A module computes each of its views for each viewer, and the engine forwards the value
-// UNFILTERED to that viewer alone (decision 29: a module view is authorial output). The
-// worker exchange and its validation are `dispatchRender`'s (`agent/modules.ts`); this
-// file takes its validated outcome and files each value under the viewer it was computed
+// A module computes a view for each viewer who subscribed to it (or asked for it with
+// `view.get`), and the engine forwards the value UNFILTERED to that viewer alone (decision
+// 29: a module view is authorial output). The worker exchange and its validation are
+// `dispatchRender`'s (`agent/modules.ts`); this file names what to compute (`viewRefs`),
+// then takes the validated outcome and files each value under the viewer it was computed
 // for, so that no value can be handed to another viewer.
+import type { ViewRef } from "loreweaver/runner";
 import { isAdminViewName, type ViewSchema } from "loreweaver-protocol/v3";
 
 import { DEFAULT_CAPS, type ModuleInfo, type RenderOutcome } from "../../agent/modules.ts";
@@ -33,6 +35,17 @@ export interface ModuleViewSet {
 
 export function moduleViewName(module: string, view: string): string {
   return `${module}/${view}`;
+}
+
+/** Module view names (`<module>/<name>`) as a render request names them; anything else is left out. */
+export function viewRefs(names: readonly string[]): ViewRef[] {
+  const refs: ViewRef[] = [];
+  for (const name of names) {
+    const at = name.indexOf("/");
+    if (at <= 0 || at === name.length - 1) continue;
+    refs.push({ module: name.slice(0, at), view: name.slice(at + 1) });
+  }
+  return refs;
 }
 
 /** The module views the loaded modules declare, without the names no module may take. */

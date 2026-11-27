@@ -42,6 +42,11 @@ export type InstallOutcome =
 
 export interface ArchiveOptions {
   readonly yes: boolean;
+  /**
+   * Replace an installed pack of the same id AND version with this archive (the operator's
+   * `install --force`). Without it the same version is refused as `already_installed`.
+   */
+  readonly force?: boolean;
   readonly now?: () => number;
 }
 
@@ -68,7 +73,7 @@ export function installArchive(dataDir: string, archive: Uint8Array, options: Ar
   const index = directory.index();
   if (!index.ok) return { ok: false, code: index.code };
   const previous = index.entries.find((entry) => entry.id === id) ?? null;
-  if (previous !== null && previous.version === version) return { ok: false, code: "already_installed", detail: `${id}@${version}` };
+  if (previous !== null && previous.version === version && options.force !== true) return { ok: false, code: "already_installed", detail: `${id}@${version}` };
 
   // First claim wins: the built-ins, then the packs installed before this one.
   const earlier = index.entries.filter((entry) => entry.id !== id).map((entry) => claimsOf(directory, entry));

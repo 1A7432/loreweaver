@@ -34,6 +34,10 @@ export type WorkerRequest =
       readonly paths: readonly string[];
       /** Last checkpoints by module id; a module with none starts fresh. */
       readonly snapshots: Readonly<Record<string, unknown>>;
+      /** The room's id and generation: each module's `init.seed` derives from it and the module id. */
+      readonly seed: string;
+      /** Each entry file's manifest `options`, as (path, options) pairs; an entry not named gets `{}`. */
+      readonly options: readonly (readonly [string, unknown])[];
     }
   | { readonly id: number; readonly op: "turnStart"; readonly event: TurnStartEvent }
   | { readonly id: number; readonly op: "toolUse"; readonly event: ToolUseEvent }

@@ -10,7 +10,13 @@ import type { ViewFrame, ViewListing } from "loreweaver-protocol/v3";
 import { BUILT_IN_VIEWS, type BuiltInView, mayView, type ViewSource } from "./builtins.ts";
 import { type ModuleViewSet, NO_MODULE_VIEWS } from "./modules.ts";
 import { type Delivery, type ViewCatalog, type ViewCatalogEntry, type ViewProblem, ViewSubscriptions } from "./subscriptions.ts";
-import { distinctViewers, type ViewerContext, viewerKey } from "./viewer.ts";
+import { type ViewerContext, viewerKey } from "./viewer.ts";
+
+/** One viewer and the module views (`<module>/<name>`) to compute for them. */
+export interface ModuleViewRequest {
+  readonly viewer: ViewerContext;
+  readonly views: readonly string[];
+}
 
 /** A view the engine computes: a built-in, or a test's stand-in for one. */
 export type ComputedView = Pick<BuiltInView, "name" | "schema" | "admin" | "compute">;
@@ -120,20 +126,27 @@ export class RoomViews {
   }
 
   /**
-   * The distinct viewers subscribed to at least one module view: the room asks the worker
-   * to render for these alone (`dispatchRender`), then merges with `mergeModuleViews`.
-   * Empty when nobody subscribed to one — then no render is needed for views at all. The
-   * listings for the catalog come from the load-time description (`moduleViewListings`),
-   * so a subscription can be taken before any render.
+   * The distinct viewers subscribed to at least one module view, each with the module views
+   * they subscribed to (over all their connections): the room asks the worker to compute
+   * these alone (`dispatchRender`), then merges with `mergeModuleViews`. Empty when nobody
+   * subscribed to one — then no view is read at all. The listings for the catalog come from
+   * the load-time description (`moduleViewListings`), so a subscription can be taken before
+   * any render.
    */
-  moduleViewers(): ViewerContext[] {
-    const viewers: ViewerContext[] = [];
+  moduleRequests(): ModuleViewRequest[] {
+    const byViewer = new Map<string, { viewer: ViewerContext; views: Set<string> }>();
     for (const connection of this.subscriptions.connections()) {
       const viewer = this.subscriptions.viewer(connection);
+      if (viewer === null) continue;
       // Every name that is not the engine's is a module's: subscriptions only take listed names.
-      if (viewer !== null && this.subscriptions.subscribed(connection).some((name) => !this.#builtIns.has(name))) viewers.push(viewer);
+      const names = this.subscriptions.subscribed(connection).filter((name) => !this.#builtIns.has(name));
+      if (names.length === 0) continue;
+      const key = viewerKey(viewer);
+      const entry = byViewer.get(key) ?? { viewer, views: new Set<string>() };
+      byViewer.set(key, entry);
+      for (const name of names) entry.views.add(name);
     }
-    return distinctViewers(viewers);
+    return [...byViewer.values()].map((entry) => ({ viewer: entry.viewer, views: [...entry.views] }));
   }
 
   /** `view.subscribe`: the newly subscribed views' current values, as frames, and what was refused. */

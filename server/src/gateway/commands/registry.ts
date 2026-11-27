@@ -5,7 +5,12 @@
 // subsystem words; its check and creation words join the engine's `check` and
 // `new_character`), plus the module commands an injected dispatcher lists. Two entrances
 // reach the same handler: `input` (a line a player typed: a text command, or speech with
-// its inline rolls) and `run` (`command.run {id, args}`). Either way the caller's role is
+// its inline rolls) and `run` (`command.run {id, args}`).
+//
+// A module command's text forms are matched here (`#moduleForms`): the engine's words and
+// the room's rule-system words always win — a module form with such a word is dropped — and
+// a word two modules both claim is dropped for both. Each drop is reported to the operator
+// once per room, and named in the admin's answer to `pack enable`. Either way the caller's role is
 // checked, the arguments are validated against the command's schema — a text form's
 // arguments are parsed into the very object a structured call passes — and the handler
 // runs in one store transaction: a refusal rolls back whatever it wrote, so a failure
@@ -15,6 +20,7 @@ import { ResolutionError } from "../../core/resolution/index.ts";
 import { commandWord, type RulePack } from "../../core/rulepacks/index.ts";
 import { foldCase } from "../../core/sheets/text.ts";
 import type { RoomContext } from "../../agent/context.ts";
+import { formArgs, matchForm, type TextForm } from "../../agent/module_forms.ts";
 import type { RecallDeps } from "../../agent/recall.ts";
 import { translate } from "../../infra/i18n.ts";
 import { LifecycleError, StaleGeneration } from "../../infra/lifecycle/errors.ts";
@@ -51,6 +57,7 @@ import {
   type Done,
   isRefused,
   type LifecycleNotice,
+  type ModuleCommandEntry,
   type ModuleCommands,
   refuse,
   type Refused,
@@ -106,10 +113,34 @@ function isZh(locale: string): boolean {
   return locale.toLowerCase().startsWith("zh");
 }
 
+/** Why a module's text form is not taken in a room: its word is the engine's or the rule system's, or two modules claim it. */
+export type FormDropCode = "word_taken" | "word_shared";
+
+/** A module text form a room does not take. */
+export interface FormDrop {
+  readonly code: FormDropCode;
+  /** The command word, case-folded. */
+  readonly word: string;
+  readonly command: string;
+  readonly form: string;
+}
+
+/** The module text forms a room takes: by command word, in declaration order; and what it drops. */
+interface FormTable {
+  readonly byWord: ReadonlyMap<string, readonly { readonly entry: ModuleCommandEntry; readonly form: TextForm }[]>;
+  readonly kept: ReadonlyMap<string, readonly TextForm[]>;
+  readonly dropped: readonly FormDrop[];
+}
+
+/** The most (room, problem) pairs the registry remembers having reported, so a drop is said once. */
+export const MAX_REPORTED_FORM_DROPS = 4096;
+
 export class CommandRegistry {
   readonly #engine: readonly CommandSpec[];
   readonly #modules: ModuleCommands | null;
   readonly #packSpecs = new WeakMap<RulePack, readonly CommandSpec[]>();
+  /** Form drops already reported, by room and line. Past the cap, nothing more is remembered and a drop may be said again. */
+  readonly #reportedDrops = new Set<string>();
 
   constructor(options: RegistryOptions = {}) {
     this.#modules = options.modules ?? null;
@@ -142,7 +173,7 @@ export class CommandRegistry {
       saveCommand(options.uploads ?? null),
       uploadsCommand(options.uploads ?? null),
       importCommand(options.uploads ?? null, options.recall ?? null, packs, authoring),
-      packCommand(packs),
+      packCommand(packs, (context) => this.moduleFormDrops(context)),
       skillCommand(packs),
       panelsCommand(packs),
       audioCommand(options.uploads ?? null, packs),
@@ -188,7 +219,7 @@ export class CommandRegistry {
         const outcome = await this.#execute(context, spec, locale, split.word, (call) => spec.parseText(split.rest, call));
         return { kind: "command", id: spec.id, outcome };
       }
-      const module = await this.#moduleText(context, split.word, split.rest, locale);
+      const module = await this.#moduleText(context, split, locale);
       if (module !== null) return module;
       // A word some loaded pack declares but this room's system does not: a command in the
       // wrong room, not a line of speech.
@@ -203,17 +234,45 @@ export class CommandRegistry {
    * What a typed line would run, without running it: the command and the argument object
    * its text form parses to (exactly what `command.run` would be given), a refusal of the
    * text, or null for speech. Engine and pack commands only; module text is the
-   * dispatcher's.
+   * dispatcher's (`mayBeModuleText`): a word a module may take is never refused here as
+   * another rule system's, since `input` gives a module's form precedence over that refusal.
    */
   textCommand(context: RoomContext, line: string, locale: string): { readonly id: string; readonly args: Args } | CommandRefusal | null {
     const split = splitCommand(line);
     if (split === null) return null;
     const spec = this.#lookup(context, split.word, locale);
-    if (spec === null) return this.#packWord(context, split.word) ? this.#refusal(locale, "not_in_system", { word: split.word }) : null;
+    if (spec === null) {
+      return this.#packWord(context, split.word) && !this.mayBeModuleText(context, line) ? this.#refusal(locale, "not_in_system", { word: split.word }) : null;
+    }
     if (argumentTooLong(split.rest)) return this.#refusal(locale, "too_long", { limit: MAX_COMMAND_ARG_CHARS });
     const call = this.#call(context, locale, split.word);
     const parsed = spec.parseText(split.rest, call);
     return isRefused(parsed) ? this.#refuse(call, spec, parsed) : { id: spec.id, args: compact(parsed) };
+  }
+
+  /**
+   * Whether a typed line that `textCommand` did not take may still be a module command: a
+   * `<module>/<name>` word, a word one of the room's module forms takes, or any word while
+   * the room's modules have never been loaded (they are known only once the worker loaded
+   * them). Such a line goes through `input`, under the room's lock, and is speech after all
+   * when no module takes it.
+   */
+  mayBeModuleText(context: RoomContext, line: string): boolean {
+    const split = splitCommand(line);
+    if (split === null || this.#modules === null) return false;
+    if (split.word.includes("/")) return true;
+    const entries = this.#modules.listNow(context);
+    if (entries === null) return true;
+    return this.#moduleForms(context, entries).byWord.has(split.word);
+  }
+
+  /**
+   * The module text forms the context's room drops (a word that is the engine's or the rule
+   * system's, a word two modules claim), each reported to the operator once.
+   */
+  async moduleFormDrops(context: RoomContext): Promise<readonly FormDrop[]> {
+    if (this.#modules === null) return [];
+    return this.#moduleForms(context, await this.#modules.list(context)).dropped;
   }
 
   /** `command.run {id, args}`: the structured entrance. */
@@ -386,18 +445,95 @@ export class CommandRegistry {
 
   // --- modules -------------------------------------------------------------------------
 
-  async #moduleText(context: RoomContext, word: string, rest: string, locale: string): Promise<InputOutcome | null> {
-    if (this.#modules === null || !word.includes("/")) return null;
-    let args: unknown = {};
-    if (rest !== "") {
-      if (argumentTooLong(rest)) return { kind: "command", id: word, outcome: this.#refusal(locale, "too_long", { limit: MAX_COMMAND_ARG_CHARS }) };
-      try {
-        args = JSON.parse(rest) as unknown;
-      } catch {
-        return { kind: "command", id: word, outcome: this.#refusal(locale, "module_args") };
+  /**
+   * A typed module command: `<module>/<name> <JSON>`, or a line one of the room's module
+   * forms matches — of several matching forms of the word, the one with the most literal
+   * words, then the first declared. A word the forms take that no form matches is refused
+   * with the forms as its usage. Null when no module takes the word.
+   */
+  async #moduleText(context: RoomContext, split: { readonly word: string; readonly rest: string }, locale: string): Promise<InputOutcome | null> {
+    const { word, rest } = split;
+    if (this.#modules === null) return null;
+    if (word.includes("/")) {
+      let args: unknown = {};
+      if (rest !== "") {
+        if (argumentTooLong(rest)) return { kind: "command", id: word, outcome: this.#refusal(locale, "too_long", { limit: MAX_COMMAND_ARG_CHARS }) };
+        try {
+          args = JSON.parse(rest) as unknown;
+        } catch {
+          return { kind: "command", id: word, outcome: this.#refusal(locale, "module_args") };
+        }
+      }
+      return { kind: "command", id: word, outcome: await this.#runModule(context, word, args, locale) };
+    }
+    const candidates = this.#moduleForms(context, await this.#modules.list(context)).byWord.get(word);
+    if (candidates === undefined) return null;
+    const first = candidates[0] as { readonly entry: ModuleCommandEntry; readonly form: TextForm };
+    if (argumentTooLong(rest)) return { kind: "command", id: first.entry.id, outcome: this.#refusal(locale, "too_long", { limit: MAX_COMMAND_ARG_CHARS }) };
+    let best: { entry: ModuleCommandEntry; captured: ReadonlyMap<string, string>; literals: number } | null = null;
+    for (const { entry, form } of candidates) {
+      const captured = matchForm(form, rest);
+      if (captured !== null && (best === null || form.literals > best.literals)) best = { entry, captured, literals: form.literals };
+    }
+    if (best === null) {
+      const usage = candidates.map(({ form }) => `.${form.source}`).join(" | ");
+      return { kind: "command", id: first.entry.id, outcome: { ok: false, code: "usage", message: translate(COMMANDS_CATALOG, locale, "error.usage", { usage }) } };
+    }
+    return { kind: "command", id: best.entry.id, outcome: await this.#runModule(context, best.entry.id, formArgs(best.captured, best.entry.params), locale) };
+  }
+
+  /** The words the room itself answers to: the engine's forms and its rule system's, both tables, case-folded. */
+  #roomWords(context: RoomContext): ReadonlySet<string> {
+    const words = new Set<string>();
+    for (const spec of this.specs(context)) {
+      const forms = this.#forms(spec, context);
+      for (const form of [...forms.en, ...forms.zh]) words.add(foldCase(form));
+    }
+    return words;
+  }
+
+  /**
+   * Which module text forms this room takes. A form whose word the room itself answers to is
+   * dropped (`word_taken`); a word forms of two modules claim is dropped for both
+   * (`word_shared`). Every drop is reported to the operator once per room.
+   */
+  #moduleForms(context: RoomContext, entries: readonly ModuleCommandEntry[]): FormTable {
+    const taken = this.#roomWords(context);
+    const claimants = new Map<string, Set<string>>();
+    for (const entry of entries) {
+      for (const form of entry.forms) {
+        if (taken.has(form.word)) continue;
+        const modules = claimants.get(form.word) ?? new Set<string>();
+        modules.add(entry.module);
+        claimants.set(form.word, modules);
       }
     }
-    return { kind: "command", id: word, outcome: await this.#runModule(context, word, args, locale) };
+    const byWord = new Map<string, { entry: ModuleCommandEntry; form: TextForm }[]>();
+    const kept = new Map<string, TextForm[]>();
+    const dropped: FormDrop[] = [];
+    for (const entry of entries) {
+      const own: TextForm[] = [];
+      for (const form of entry.forms) {
+        const code: FormDropCode | null = taken.has(form.word) ? "word_taken" : (claimants.get(form.word)?.size ?? 0) > 1 ? "word_shared" : null;
+        if (code !== null) {
+          dropped.push({ code, word: form.word, command: entry.id, form: form.source });
+          continue;
+        }
+        own.push(form);
+        const forWord = byWord.get(form.word) ?? [];
+        forWord.push({ entry, form });
+        byWord.set(form.word, forWord);
+      }
+      kept.set(entry.id, own);
+    }
+    for (const drop of dropped) {
+      const line = `module command ${drop.command}: text form ${JSON.stringify(drop.form)} left out (${drop.code}: ${drop.code === "word_taken" ? "the room's own command word" : "a word two modules claim"})`;
+      const key = `${context.room}\u0000${line}`;
+      if (this.#reportedDrops.has(key)) continue;
+      if (this.#reportedDrops.size < MAX_REPORTED_FORM_DROPS) this.#reportedDrops.add(key);
+      context.services.report(context.room, line);
+    }
+    return { byWord, kept, dropped };
   }
 
   async #runModule(context: RoomContext, id: string, args: unknown, locale: string): Promise<CommandOutcome> {
@@ -438,7 +574,9 @@ export class CommandRegistry {
       entries.push(entry);
     }
     if (this.#modules !== null) {
-      for (const module of await this.#modules.list(context)) {
+      const listed = await this.#modules.list(context);
+      const table = this.#moduleForms(context, listed);
+      for (const module of listed) {
         if (module.role === "admin" && role !== "admin") continue;
         const available = role === "observer" ? "observer" : module.available;
         const entry: { -readonly [K in keyof CommandViewEntry]: CommandViewEntry[K] } = {
@@ -450,7 +588,13 @@ export class CommandRegistry {
           role: module.role,
           available: available === true,
         };
-        if (module.forms !== undefined && module.forms.length > 0) entry.text = { forms: module.forms, usage: module.forms.join(" | ") };
+        // The words that run it now (the room's own words and shared words taken out), and every
+        // form as it is typed.
+        const forms = table.kept.get(module.id) ?? [];
+        if (forms.length > 0) {
+          const words = [...new Set(forms.map((form) => form.source.split(" ")[0] as string))];
+          entry.text = { forms: words, usage: forms.map((form) => `.${form.source}`).join(" | ") };
+        }
         if (module.danger === true) entry.danger = true;
         if (available !== true) entry.reason = available;
         entries.push(entry);

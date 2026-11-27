@@ -8,6 +8,7 @@
 import type { EventKind, EventPayloads, SignalKind, SignalPayloads } from "loreweaver-protocol/v3";
 
 import type { RoomContext } from "../../agent/context.ts";
+import type { TextForm } from "../../agent/module_forms.ts";
 import type { ResetScope } from "../../infra/lifecycle/declarations.ts";
 import type { ObjectSchema } from "./schema.ts";
 
@@ -195,15 +196,19 @@ export interface CommandsView {
 
 /**
  * Module commands (`<module>/<name>`) are dispatched by another layer, through the room's
- * worker. The registry only lists them in the view and routes a call to this seam.
+ * worker. The registry lists them in the view, matches their text forms against the room's
+ * own words, and routes a call to this seam.
  */
 export interface ModuleCommandEntry {
   readonly id: string;
+  /** The module's id: two modules claiming one command word lose it both. */
+  readonly module: string;
   readonly title: string;
   readonly description: string;
   /** JSON Schema of the arguments, as the module declared it. */
   readonly params: unknown;
-  readonly forms?: readonly string[];
+  /** The text forms that read at load, in declaration order (before the room's own words are taken out). */
+  readonly forms: readonly TextForm[];
   readonly role: CommandRole;
   /** The module marked it destructive. */
   readonly danger?: boolean;
@@ -213,6 +218,8 @@ export interface ModuleCommandEntry {
 export interface ModuleCommands {
   /** The module commands of the context's room, as its member sees them. */
   list(context: RoomContext): Promise<readonly ModuleCommandEntry[]>;
+  /** The same without waiting: null while the room's modules have never been loaded. */
+  listNow(context: RoomContext): readonly ModuleCommandEntry[] | null;
   /** Run one; the dispatcher validates and applies the module's effects. */
   run(context: RoomContext, id: string, args: Args, locale: string): Promise<CommandOutcome>;
 }

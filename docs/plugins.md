@@ -69,7 +69,8 @@ never another module. Installing a pack with modules is the decision to run its 
 So:
 
 - **Only an operator or a room admin installs.** The operator installs from the shell
-  (`loreweaver install <ref>` shows the trust card; `--yes` installs). A room's admin
+  (`loreweaver install <ref>` shows the trust card; `--yes` installs; `--force` replaces an
+  installed pack of the same id and version, which is otherwise refused). A room's admin
   installs from chat (`pack install <ref>`), which also enables the pack in that room.
   One installer, the same checks. A room admin who installs a pack decides what code the
   server runs: give admin keys only to people you would trust with the server.

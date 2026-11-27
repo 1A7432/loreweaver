@@ -10,11 +10,20 @@
 // every drop is reported in `problems` for the operator's log (never shown at the table).
 import { charCount } from "loreweaver-protocol/v3";
 import type { CommandOrigin, CommandRole, Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
-import { isValidName, mayRun, mayUse } from "loreweaver/runner";
+import { isValidName, mayRun, type ViewerRequest } from "loreweaver/runner";
 
 import type { RoomWorker } from "../infra/room_worker.ts";
+import { type ArgsProblem, checkModuleArgs } from "./module_args.ts";
+import { parseForm, type TextForm } from "./module_forms.ts";
 
-/** Guard rails, not format rules: adjustable. Characters are code points; sizes are UTF-8 bytes of the JSON text. */
+/** The most room members a module call carries; past it, the first ones and a problem for the operator. */
+export const MAX_ROOM_MEMBERS = 256;
+
+/**
+ * Guard rails, not format rules, and fixed: nothing adjusts them, on purpose — a module is
+ * written against the limits the README states. Characters are code points; sizes are
+ * UTF-8 bytes of the JSON text.
+ */
 export interface ModuleCaps {
   /** Injections per turn, over all modules. */
   readonly injections: number;
@@ -96,11 +105,14 @@ export interface CommandInfo {
   readonly name: string;
   readonly title: string;
   readonly description: string;
-  /** JSON Schema object for the arguments. */
+  /** JSON Schema object for the arguments; the arguments are checked against it before the module is called. */
   readonly params: JsonObject;
-  readonly text: readonly string[];
+  /** The text forms that read (`module_forms.ts`), in declaration order; a form that did not is left out and reported. */
+  readonly forms: readonly TextForm[];
   /** `keeper`: the Keeper's alone, never shown to a member; `admin`: never the Keeper's. */
   readonly role: CommandRole;
+  /** False when the module declared `keeper: false`: a member's verb the Keeper never runs. */
+  readonly keeper: boolean;
   /** The module marked it destructive: a client asks before running it. */
   readonly danger: boolean;
   /** Whether availability depends on more than the role. */
@@ -203,24 +215,22 @@ export type CommandOutcome =
     })
   | {
       readonly status: "refused";
-      /** `invalid`: the arguments are not a JSON object within the size cap. */
-      readonly reason: "unknown" | "role" | "invalid" | "unavailable";
+      /**
+       * `invalid`: the arguments are not a JSON object within the size cap; `args`: they do not
+       * fit the command's `params` (`problem` says how and where).
+       */
+      readonly reason: "unknown" | "role" | "invalid" | "args" | "unavailable";
       /** The module's reason, shown to that member, for `unavailable`. */
       readonly text: string | null;
+      /** For `args`: the engine's refusal code and the argument's path. */
+      readonly problem?: ArgsProblem;
       readonly problems: readonly string[];
     }
   | { readonly status: "failed"; readonly problems: readonly string[] };
 
-export type Availability =
-  | { readonly available: true }
-  /** `role`: the role forbids it; `module`: the module's `available` said no; `error`: it failed. */
-  | { readonly available: false; readonly reason: "role" | "module" | "error"; readonly text: string | null };
-
 export interface ViewerOutcome {
-  /** The views this viewer may see, as computed for them; a failed view is absent. */
+  /** The views asked for this viewer, as computed for them; a failed view is absent. */
   readonly views: readonly { readonly module: string; readonly view: string; readonly data: Json }[];
-  /** Every command of every module but the Keeper's own (`keeper`), with whether this viewer may use it. */
-  readonly commands: readonly { readonly module: string; readonly command: string; readonly availability: Availability }[];
 }
 
 export interface Resource {
@@ -552,6 +562,7 @@ function validateCommands(module: string, raw: unknown, caps: ModuleCaps, proble
     const params = schemaObject(get(entry, "params"), caps);
     const text = get(entry, "text");
     const role = get(entry, "role");
+    const keeper = get(entry, "keeper");
     if (title === null) drop(`its title is not 1 to ${caps.titleChars} characters`);
     else if (description !== null && description !== undefined && (typeof description !== "string" || charCount(description) > caps.descriptionChars)) {
       drop(`its description is not up to ${caps.descriptionChars} characters`);
@@ -563,14 +574,23 @@ function validateCommands(module: string, raw: unknown, caps: ModuleCaps, proble
     ) {
       drop(`its text forms are not up to ${caps.textForms} strings of 1 to ${caps.textFormChars} characters`);
     } else if (role !== "player" && role !== "admin" && role !== "keeper") drop("its role is not player, admin or keeper");
+    else if (keeper !== true && keeper !== false) drop("its keeper flag is not true or false");
+    else if (keeper === false && role === "keeper") drop("a keeper command cannot say keeper: false");
     else {
+      const forms: TextForm[] = [];
+      for (const source of text as string[]) {
+        const read = parseForm(source, params);
+        if (read.ok) forms.push(read.form);
+        else problems.push(`module ${module}: command ${name}: text form ${JSON.stringify(source)} left out (${read.problem})`);
+      }
       commands.push({
         name,
         title,
         description: typeof description === "string" ? description : "",
         params,
-        text: text as string[],
+        forms,
         role,
+        keeper,
         // Strictly `true`: anything else a module sent is not a flag.
         danger: get(entry, "danger") === true,
         checksAvailability: get(entry, "available") === true,
@@ -693,31 +713,35 @@ export function validateCommand(raw: unknown, caps: ModuleCaps = DEFAULT_CAPS): 
 }
 
 /**
- * Everything read-only, for each viewer. `modules` (from `validateLoad`) decides what is
- * rendered at all: a view or command the engine left out at load is never shown. The
- * role rule is applied here; a module's `available` can only narrow it.
+ * The read-only outputs, for each viewer. `modules` (from `validateLoad`) decides what is
+ * rendered at all: a view the engine left out at load is never shown, nor one the viewer
+ * did not ask for.
  */
-export function validateRender(raw: unknown, viewers: readonly Who[], modules: readonly ModuleInfo[], caps: ModuleCaps = DEFAULT_CAPS): RenderOutcome {
+export function validateRender(raw: unknown, viewers: readonly ViewerRequest[], modules: readonly ModuleInfo[], caps: ModuleCaps = DEFAULT_CAPS): RenderOutcome {
   const problems: string[] = [];
   const answer = isRecord(raw) ? raw : {};
   if (!isRecord(raw)) problems.push("the worker's render answer is not an object");
   reportCall(answer, problems);
+  for (const notice of list(get(answer, "notices"))) {
+    if (!isRecord(notice) || get(notice, "code") !== "read_changed_state") continue;
+    problems.push(`module ${String(moduleOf(notice))}: read_changed_state — reading its views changed its state (save() differed from its checkpoint); the render was used, and reads must not change state`);
+  }
   const rawViewers = list(get(answer, "viewers"));
   if (rawViewers.length !== viewers.length) problems.push(`the worker rendered ${rawViewers.length} viewers, not ${viewers.length}`);
 
-  const outcomes = viewers.map((who, index): ViewerOutcome => {
+  const outcomes = viewers.map((viewer, index): ViewerOutcome => {
     const rendered = rawViewers[index];
     const rawViews = isRecord(rendered) ? list(get(rendered, "views")) : [];
-    const rawAvailable = isRecord(rendered) ? list(get(rendered, "available")) : [];
-    const find = (entries: readonly unknown[], module: string, key: string, name: string): Rec | null => {
-      for (const entry of entries) if (isRecord(entry) && get(entry, "module") === module && get(entry, key) === name) return entry;
+    const find = (module: string, name: string): Rec | null => {
+      for (const entry of rawViews) if (isRecord(entry) && get(entry, "module") === module && get(entry, "view") === name) return entry;
       return null;
     };
+    const asked = (module: string, name: string): boolean => viewer.views.some((ref) => ref.module === module && ref.view === name);
     const views: { module: string; view: string; data: Json }[] = [];
-    const commands: { module: string; command: string; availability: Availability }[] = [];
     for (const module of modules) {
       for (const view of module.views) {
-        const entry = find(rawViews, module.id, "view", view.name);
+        if (!asked(module.id, view.name)) continue;
+        const entry = find(module.id, view.name);
         if (entry === null) continue;
         const error = get(entry, "error");
         const data = get(entry, "data");
@@ -726,14 +750,8 @@ export function validateRender(raw: unknown, viewers: readonly Who[], modules: r
         else if (jsonBytes(data) > caps.viewBytes) problems.push(`module ${module.id}: view ${view.name} dropped, over ${caps.viewBytes} bytes`);
         else views.push({ module: module.id, view: view.name, data });
       }
-      for (const command of module.commands) {
-        // The Keeper's own commands are no part of what a member is shown — except an admin,
-        // who may run them (to repair what the Keeper got wrong).
-        if (command.role === "keeper" && who.member?.role !== "admin") continue;
-        commands.push({ module: module.id, command: command.name, availability: availability(module.id, command, who, rawAvailable, find, caps, problems) });
-      }
     }
-    return { views, commands };
+    return { views };
   });
 
   const characters: CharacterInfo[] = [];
@@ -750,31 +768,6 @@ export function validateRender(raw: unknown, viewers: readonly Who[], modules: r
   }
   const claimer = modules.find((module) => module.clock)?.id ?? "";
   return { viewers: outcomes, characters, clock: clockInfo(get(answer, "clock"), caps, problems, claimer), problems };
-}
-
-function availability(
-  module: string,
-  command: CommandInfo,
-  who: Who,
-  rawAvailable: readonly unknown[],
-  find: (entries: readonly unknown[], module: string, key: string, name: string) => Rec | null,
-  caps: ModuleCaps,
-  problems: string[],
-): Availability {
-  if (!mayUse(command.role, who)) return { available: false, reason: "role", text: null };
-  if (!command.checksAvailability) return { available: true };
-  const entry = find(rawAvailable, module, "command", command.name);
-  const error = entry === null ? "no verdict" : get(entry, "error");
-  if (entry === null || typeof error === "string") {
-    // Fail closed: a command whose own check did not answer is not offered.
-    problems.push(`module ${module}: available() of ${command.name} failed — ${String(error)}`);
-    return { available: false, reason: "error", text: null };
-  }
-  const verdict = get(entry, "verdict");
-  if (verdict === true) return { available: true };
-  const text = shortText(verdict, caps.unavailableReasonChars);
-  if (text === null) problems.push(`module ${module}: available() of ${command.name} answered neither true nor a reason of 1 to ${caps.unavailableReasonChars} characters`);
-  return { available: false, reason: "module", text };
 }
 
 function validateCharacters(module: string, raw: unknown, caps: ModuleCaps, problems: string[]): CharacterInfo[] {
@@ -831,10 +824,15 @@ function message(error: unknown): string {
  * and every call, so its size must stay bounded whatever the room has grown into.
  */
 export function boundedSnapshot<T extends RoomSnapshot>(room: T, caps: ModuleCaps, problems: string[]): T {
+  let bounded = room;
+  if (room.members.length > MAX_ROOM_MEMBERS) {
+    problems.push(`the room has ${room.members.length} members; the modules were sent the first ${MAX_ROOM_MEMBERS}`);
+    bounded = { ...bounded, members: room.members.slice(0, MAX_ROOM_MEMBERS) };
+  }
   const variables: unknown = room.variables;
-  if (isRecord(variables) && isJson(variables) && jsonBytes(variables) <= caps.variablesBytes) return room;
+  if (isRecord(variables) && isJson(variables) && jsonBytes(variables) <= caps.variablesBytes) return bounded;
   problems.push(`the room's variables were not sent to the modules: not a JSON object of up to ${caps.variablesBytes} bytes`);
-  return { ...room, variables: {} };
+  return { ...bounded, variables: {} };
 }
 
 // The validated descriptions per worker, redone only when the worker reports new ones,
@@ -850,6 +848,16 @@ function acceptedModules(worker: RoomWorker, caps: ModuleCaps): { modules: Modul
   // Reported with the load they belong to, once: a module that cannot be loaded stays
   // unloadable on every later turn, and saying so each time buries the operator's log.
   return { modules: validated.modules, problems: [...(worker.loadProblems ?? []).map((line) => `a module was not loaded — ${line}`), ...validated.problems] };
+}
+
+/**
+ * The loaded modules as the engine accepts them when the worker has ever loaded them, without
+ * waiting: null before the first load. `problems` as `describeModules`'.
+ */
+export function describedModules(worker: RoomWorker | null, caps: ModuleCaps = DEFAULT_CAPS): { modules: ModuleInfo[]; problems: string[] } | null {
+  if (worker === null) return { modules: [], problems: [] };
+  if (worker.descriptions === null) return null;
+  return acceptedModules(worker, caps);
 }
 
 /**
@@ -919,20 +927,23 @@ export interface CommandCall {
 
 /**
  * One command. Refused here, without a round trip, when the engine does not know the
- * command (including one left out at load), the role forbids it, or the arguments are
- * not a JSON object; the worker then checks `available` at the moment of use. The role
- * rule (`mayRun`): a member may run what their role allows, never a `keeper` command; the
- * Keeper may run `player` and `keeper` commands whoever spoke, never an `admin` one.
+ * command (including one left out at load), the role forbids it, the arguments are not a
+ * JSON object, or they do not fit the command's `params`; the worker then checks `available`
+ * at the moment of use. The role rule (`mayRun`): a member may run what their role allows,
+ * never a `keeper` command but as an admin; the Keeper may run `player` and `keeper` commands
+ * whoever spoke, never an `admin` one nor one that declared `keeper: false`.
  */
 export async function dispatchCommand(worker: RoomWorker | null, call: CommandCall, caps: ModuleCaps = DEFAULT_CAPS): Promise<CommandOutcome> {
   const described = await describeModules(worker, caps);
   const problems = described.problems;
   const command = described.modules.find((module) => module.id === call.module)?.commands.find((candidate) => candidate.name === call.command);
   if (worker === null || command === undefined) return { status: "refused", reason: "unknown", text: null, problems };
-  if (!mayRun(command.role, call.by, call.who)) return { status: "refused", reason: "role", text: null, problems };
+  if (!mayRun(command.role, call.by, call.who, command.keeper)) return { status: "refused", reason: "role", text: null, problems };
   if (!isRecord(call.args) || !isJson(call.args) || jsonBytes(call.args) > caps.argsBytes) {
     return { status: "refused", reason: "invalid", text: null, problems };
   }
+  const problem = checkModuleArgs(command.params, call.args);
+  if (problem !== null) return { status: "refused", reason: "args", text: null, problem, problems };
   try {
     const room = boundedSnapshot(call.room, caps, problems);
     const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, by: call.by, seed: call.seed, room });
@@ -943,14 +954,14 @@ export async function dispatchCommand(worker: RoomWorker | null, call: CommandCa
   }
 }
 
-/** Everything read-only for these viewers, all seeing the same `room`. */
+/** The read-only outputs for these viewers (each with the views they asked for), all seeing the same `room`. */
 export async function dispatchRender(
   worker: RoomWorker | null,
-  viewers: readonly Who[],
+  viewers: readonly ViewerRequest[],
   room: RoomSnapshot,
   caps: ModuleCaps = DEFAULT_CAPS,
 ): Promise<RenderOutcome> {
-  const empty = (problems: string[]): RenderOutcome => ({ viewers: viewers.map(() => ({ views: [], commands: [] })), characters: [], clock: null, problems });
+  const empty = (problems: string[]): RenderOutcome => ({ viewers: viewers.map(() => ({ views: [] })), characters: [], clock: null, problems });
   if (worker === null) return empty([]);
   const described = await describeModules(worker, caps);
   try {

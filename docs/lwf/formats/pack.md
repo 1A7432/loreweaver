@@ -115,6 +115,7 @@ thread of a runtime that enabled its pack. Each entry is:
 |---|---|---|
 | `id` | yes | `^[a-z][a-z0-9_]{0,63}$`, unique in the pack. It MUST equal the `id` the module passes to `defineModule`: the module's commands and views are named `<id>/<name>`. |
 | `entry` | yes | In a source tree: the module's source file, `.ts`, `.mts`, `.tsx`, `.js`, `.mjs` or `.jsx`. In an archive: the bundled `.js` file. |
+| `options` | no | A JSON object, at most 16 KiB as the UTF-8 bytes of its JSON text: what the module's `create` and `load` receive as `init.options` (absent: `{}`). It lets one module be configured per pack. Over the cap the pack is refused (`options_too_large`); a value that is not a JSON object, or holds a value JSON cannot (a YAML date, a non-finite number), is `bad_field`. A builder keeps it as written. |
 
 **Bundled at build time.** A builder bundles each entry and everything it imports —
 the author's other files and any npm packages — into **one** JavaScript file, written as
@@ -273,8 +274,10 @@ what the pack ships.
 the same checks — who may install is the caller's question, what a pack may contain is not:
 
 - **The operator, from the shell.** `loreweaver install <ref>` prints the trust card (as
-  JSON) and writes nothing; `loreweaver install <ref> --yes` installs. Installing from the
-  shell enables nothing anywhere. It works with the server stopped; a server that is
+  JSON) and writes nothing; `loreweaver install <ref> --yes` installs. `--force` replaces
+  an installed pack of the same id **and** version with the given archive (without it that
+  version is refused); only the shell offers it. Installing from the shell enables nothing
+  anywhere. It works with the server stopped; a server that is
   running sees a pack installed (or `loreweaver uninstall`ed) from the shell only when it
   next starts.
 - **A room's admin, from chat** (`pack install <ref>`, text form `.pack install <ref>`).
@@ -302,7 +305,8 @@ readable by the server's user only, staged in a sibling directory and renamed in
 It lists the pack in `<data>/packs/index.json` in install order. One version of a pack is
 installed at a time: a new version takes the old one's place in the index, and the old
 files are removed after; installing the version already installed is refused
-(`already_installed`). Installed packs are validated again when the server starts, and a
+(`already_installed`) unless the operator forces it from the shell, and then the new files
+take the old ones' place under the same version. Installed packs are validated again when the server starts, and a
 pack that no longer validates is skipped with a note.
 
 **Names a pack shares.** A pack's rule systems join the runtime's rule systems for the

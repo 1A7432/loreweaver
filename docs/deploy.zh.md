@@ -29,7 +29,7 @@ bun server/src/cli/main.ts serve
 bun server/src/cli/main.ts key <room> <admin|player|observer> <name>   # 新签一把钥匙；它的值只打印这一次
 bun server/src/cli/main.ts import-world <room> <card-file>             # 把一张酒馆卡导入成房间的世界
 bun server/src/cli/main.ts packs                                       # 已安装的内容包
-bun server/src/cli/main.ts install <path|https-url|gh:owner/repo[@tag]> [--yes]
+bun server/src/cli/main.ts install <path|https-url|gh:owner/repo[@tag]> [--yes] [--force]   # --force：替换 id 和版本都相同的已装内容包
 bun server/src/cli/main.ts uninstall <id>
 bun server/src/cli/main.ts selftest                                    # 这个构建能不能把一个回合完整跑通
 bun server/src/cli/main.ts --version

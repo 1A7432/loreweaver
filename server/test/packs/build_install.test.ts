@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { run } from "../../src/cli/main.ts";
 import { buildPack, installPack, listPacks, loadInstalledPacks, uninstallPack } from "../../src/cli/packs.ts";
 import { openServer } from "../../src/cli/compose.ts";
 import { assemblePacks } from "../../src/gateway/packs.ts";
@@ -15,7 +16,7 @@ import { PackDirectory } from "../../src/infra/packs/files.ts";
 import { readZip, writeZip } from "../../src/infra/zip.ts";
 import { jsonFile, worldCard } from "../gateway/card_files.ts";
 import { WORKER_ENTRY } from "../helpers.ts";
-import { manifestYaml, packEntries, text, writeSourceTree } from "./fixture.ts";
+import { manifestYaml, packEntries, SKILL_MD, text, writeSourceTree } from "./fixture.ts";
 
 const root = mkdtempSync(join(tmpdir(), "loreweaver-packs-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -119,6 +120,30 @@ describe("install", () => {
     const index = JSON.parse(readFileSync(join(dataDir, "packs", "index.json"), "utf8")) as unknown;
     expect(index).toEqual({ version: 1, packs: [{ id: "harbor", version: "1.0.0", sha256: outcome.sha256, installed_at: 1234 }] });
     expect(listPacks(dataDir)).toEqual({ ok: true, packs: [{ id: "harbor", version: "1.0.0", name: { en: "Harbor", zh: "港口" }, sha256: outcome.sha256, installedAt: 1234 }] });
+  });
+
+  test("install --force replaces the installed pack of the same id and version; without it the same version is refused", async () => {
+    const dataDir = fresh("data");
+    const env = { TRPG_DATA_DIR: dataDir };
+    const first = archiveFile();
+    expect((await run(["install", first, "--yes"], env)).code).toBe(0);
+    const changed = archiveFile({ "skills/harbor-guide/SKILL.md": text(SKILL_MD.replace("Speak of the tides.", "Revised.")) });
+    const refused = await run(["install", changed, "--yes"], env);
+    expect([refused.code, JSON.parse(refused.out) as unknown]).toEqual([1, { ok: false, code: "already_installed", detail: "harbor@1.0.0" }]);
+    // Without --yes, --force discloses and writes nothing.
+    const shown = JSON.parse((await run(["install", changed, "--force"], env)).out) as { installed: boolean; replaced: string | null };
+    expect([shown.installed, shown.replaced]).toEqual([false, "1.0.0"]);
+    const home = join(dataDir, "packs", "harbor", "1.0.0");
+    expect(readFileSync(join(home, "skills", "harbor-guide", "SKILL.md"), "utf8")).not.toContain("Revised.");
+    const forced = await run(["install", changed, "--force", "--yes"], env);
+    expect(forced.code).toBe(0);
+    expect(JSON.parse(forced.out)).toMatchObject({ ok: true, installed: true, id: "harbor", version: "1.0.0", replaced: "1.0.0" });
+    expect(readFileSync(join(home, "skills", "harbor-guide", "SKILL.md"), "utf8")).toContain("Revised.");
+    const listed = listPacks(dataDir);
+    expect(listed.ok && listed.packs.map((pack) => [pack.id, pack.version])).toEqual([["harbor", "1.0.0"]]);
+    // A flag the command does not know, or one given twice, is a usage error.
+    expect((await run(["install", changed, "--yes", "--yes"], env)).code).toBe(2);
+    expect((await run(["install", changed, "--overwrite"], env)).code).toBe(2);
   });
 
   test("refusals: http, a pack already installed at that version, an invalid pack, an engine too old, not a zip", async () => {

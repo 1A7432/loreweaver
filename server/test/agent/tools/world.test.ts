@@ -203,7 +203,7 @@ describe("generate_image (gated)", () => {
 });
 
 describe("module commands", () => {
-  const rest: CommandInfo = { name: "rest", title: "Rest", description: "Take a long rest.", params: { type: "object", properties: { hours: { type: "integer" } } }, text: [], role: "player", danger: false, checksAvailability: true };
+  const rest: CommandInfo = { name: "rest", title: "Rest", description: "Take a long rest.", params: { type: "object", properties: { hours: { type: "integer" } } }, forms: [], role: "player", keeper: true, danger: false, checksAvailability: true };
   const ok: CommandOutcome = { status: "ok", result: { text: "You rest for 8 hours.", data: null }, problems: [], facts: [], writes: [], blocks: [], rolls: [], logs: [] };
 
   test("lookup_command describes a command; run_command runs it through the injected worker call", async () => {
@@ -225,6 +225,42 @@ describe("module commands", () => {
     expect(ran.text).toBe("camp/rest: You rest for 8 hours.");
     expect(calls).toEqual([{ module: "camp", command: "rest", args: { hours: 8 } }]);
     expect(ran.bookkeeping.moduleCommand).toEqual({ module: "camp", command: "rest", outcome: ok });
+  });
+
+  test("an admin command and a member's own verb are not the Keeper's: lookup says so, run refuses before the worker", async () => {
+    const room = bench();
+    const calls: RunCommandRequest[] = [];
+    const wave: CommandInfo = { ...rest, name: "wave", title: "Wave", keeper: false, checksAvailability: false };
+    const wipe: CommandInfo = { ...rest, name: "wipe", title: "Wipe", role: "admin", checksAvailability: false };
+    const catalog = room.catalog({
+      commands: [
+        { module: "camp", info: wave },
+        { module: "camp", info: wipe },
+      ],
+      deps: {
+        runCommand: async (request) => {
+          calls.push(request);
+          return ok;
+        },
+      },
+    });
+    expect((await room.call(catalog, "lookup_command", { id: "camp/wave" })).text).toContain("Who may run it: the players themselves (it is a player's own action); you cannot run it");
+    expect((await room.call(catalog, "lookup_command", { id: "camp/wipe" })).text).toContain("Who may run it: the room admin only; you cannot run it");
+    const waved = await room.call(catalog, "run_command", { id: "camp/wave" });
+    expect([waved.status, waved.code, waved.text]).toEqual(["refused", "command_role", "camp/wave refused: it is a player's own action; you cannot run it."]);
+    const wiped = await room.call(catalog, "run_command", { id: "camp/wipe" });
+    expect([wiped.status, wiped.code, wiped.text]).toEqual(["refused", "command_role", "camp/wipe refused: it is reserved for the room admin; you cannot run it."]);
+    expect(calls).toEqual([]);
+  });
+
+  test("arguments that do not fit the schema come back with the code and path", async () => {
+    const room = bench();
+    const catalog = room.catalog({
+      commands: [{ module: "camp", info: rest }],
+      deps: { runCommand: async () => ({ status: "refused", reason: "args", text: null, problem: { code: "invalid_arg", path: "hours" }, problems: [] }) },
+    });
+    const refused = await room.call(catalog, "run_command", { id: "camp/rest", args: { hours: "eight" } });
+    expect([refused.code, refused.text]).toEqual(["command_args", "camp/rest refused: the arguments do not fit its schema (invalid_arg at hours); call lookup_command for the schema."]);
   });
 
   test("an unknown command, a refusal and a failure come back as text", async () => {
