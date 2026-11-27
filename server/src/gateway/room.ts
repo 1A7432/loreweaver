@@ -167,8 +167,16 @@ export function tableText(events: readonly CommandEvent[]): string {
   for (const event of events) {
     if (event.kind === "narrative") lines.push(event.data.text);
     else if (event.kind === "dice") {
-      const label = event.data.outcome === undefined ? "" : ` (${event.data.outcome.label})`;
-      lines.push(`${event.data.actor}: ${event.data.expr} = ${event.data.total}${label}`);
+      // What the table saw, whole: the Keeper must know WHAT a player rolled for and how it
+      // came out (who won a contest, what a sanity roll cost), or it narrates past the dice.
+      const dice = event.data;
+      if (dice.text !== undefined && dice.text !== "") lines.push(`${dice.actor}: ${dice.text}`);
+      else {
+        const what = dice.label === undefined || dice.label === "" ? "" : `${dice.label} `;
+        const against = dice.target === undefined ? "" : ` vs ${dice.effectiveTarget ?? dice.target}`;
+        const outcome = dice.outcome === undefined ? "" : ` (${dice.outcome.label})`;
+        lines.push(`${dice.actor}: ${what}${dice.expr} = ${dice.total}${against}${outcome}`);
+      }
     } else if (event.kind === "media") lines.push(event.data.name);
   }
   return lines.join("\n");
