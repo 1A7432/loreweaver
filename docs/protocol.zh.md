@@ -290,7 +290,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 | `module_args`、`module_unavailable` | 模组命令的参数不是 JSON 对象；模组拒绝了（原样显示它自己的理由）。 |
 | `command_failed` | 服务器出错；什么都没改。 |
 
-命令还有自己的错误码（`bad_dice`、`no_character`、`name_taken`、`reset_not_armed`、`undo_out_of_range`、`undo_beyond_depth`、`not_uploaded`、`not_a_card`、`last_admin`……）。没有专属文字的错误码，用一条包含该错误码的通用消息表述。不认识的错误码当作普通拒绝处理，显示 `message`。
+命令还有自己的错误码（`bad_dice`、`no_character`、`name_taken`、`reset_not_armed`、`undo_out_of_range`、`undo_beyond_depth`、`not_uploaded`、`save_not_uploaded`、`not_a_card`、`last_admin`……）。没有专属文字的错误码，用一条包含该错误码的通用消息表述。不认识的错误码当作普通拒绝处理，显示 `message`。
 
 ### 6.5 发现命令：`commands` 视图
 
@@ -336,7 +336,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 
 - **`undo`**（管理员）：把房间回退 `turns` 个回合（默认 1，最多 64，且不能超过服务器的撤销窗口，`undo_beyond_depth`）。桌面收到一个 `rewind` 事件（[8.5](#85-rewind)）；调用者的结果带 `data {turn, epoch, removedTurns}`。撤销一个回合，也会撤回该回合开始之后运行的每个命令。
 - **`reset`**（管理员）：分两步。`{"scope":"story"}`（或 `chars`、`all`；默认 `story`）为这个成员、这个房间*预备*一次重置，有效 60 秒，回答 `data {armed: <scope>}`；此时什么都没变。在窗口内发 `{"confirm":true}` 才执行：桌面收到一个 `reset` 事件（[8.6](#86-reset)），调用者得到 `data {scope, epoch}`。没有预备就确认是 `reset_not_armed`；确认时指定了另一个范围是 `reset_scope_mismatch`。
-- **`save`**（管理员）：`{"op":"export"}` 把整个房间作为一个存档包放在 `data` 里回答，只给调用者（里面有房间的所有秘密）。`{"op":"import","bundle":{…}}` 用一个存档包替换房间。导入会替换房间——换成另一份日志、另一套编号——所以没有事件宣布它：回答管理员之后，服务器**结束**房间里每个成员的连接（没有 `error` 帧；链路直接关闭）。每个客户端像任何一次断线后那样重新拨号；随后的 `welcome` 给出新的 `epoch`，客户端丢弃自己持有的日志，回放把房间现在的样子交给它。存档包里自带的 `rewind` 和 `reset` 事件不导入：它们是房间早先经历的标记。
+- **`save`**（管理员）：整个房间是一个文件（存档包，JSON），走字节通道（[11](#11-字节通道)），从不放进帧里——一个房间可能比一行大得多。`{"op":"export"}` 把存档包存成房间的一个*不公开*文件，只有管理员能获取（里面有房间的所有秘密），并且只回答调用者 `data {documents, events, media: {hash, mime: "application/json", size, name}}`；客户端按 `hash` 获取它（[11.3](#113-get)）。房间只保留最新一次导出：下一次导出会删掉它，全部重置或导入也会清掉它——给出时就去取。`{"op":"import","file":"<hash>"}` 用调用者以 `media.offer {purpose: "save"}` 上传的存档文件替换房间（[11.2](#112-申报文件)）；这个管理员没有上传（或申报）过的哈希回答 `save_not_uploaded`。改动任何东西之前，文件会先整个检查一遍（`bad_bundle` 带第一个问题的路径、`undeclared_document_type` 等），读过之后文件就删掉，不管导入成功还是被拒（房间自己最新一次导出被申报回来的话，它留着）——要重试就重新申报。存档里没有文件：导入会清掉房间原有的所有文件（分享过的图片、上传的声音、团报网页），所以载入的日志里某条 `media` 事件指向的文件可能已经不在了（`media_not_found`）。导入会替换房间——换成另一份日志、另一套编号——所以没有事件宣布它：回答管理员之后，服务器**结束**房间里每个成员的连接（没有 `error` 帧；链路直接关闭）。每个客户端像任何一次断线后那样重新拨号；随后的 `welcome` 给出新的 `epoch`，客户端丢弃自己持有的日志，回放把房间现在的样子交给它。存档包里自带的 `rewind` 和 `reset` 事件不导入：它们是房间早先经历的标记。存档包不带任何指向原房间文件的引用（最新一次导出、团报页面、音频库里上传的声音、正在播放的内容）：载入它的房间里没有这些文件，载入后也没有声音在播放。在不保存文件的服务器上，`save` 回答 `no_media`。
 
 ### 6.8 引擎的命令
 
@@ -365,7 +365,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 | `language` | admin | `language` / `language`, `语言`, `語言` | `locale`（`en`\|`zh`） | 设置房间的语言；以新语言的一个 `narrative` 事件宣布。 |
 | `undo` | admin, danger | `undo` / `undo`, `撤销`, `撤銷` | `turns?`（1–64） | 生命周期（[6.7](#67-房间生命周期命令客户端视角)）。 |
 | `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?`（`story`\|`chars`\|`all`）、`confirm?` | 生命周期；先预备，再确认：不带 `confirm` 时为调用者预备这次重置（`data {armed, expiresInMs}`，后者是确认的期限），同一成员在期限内发 `confirm: true` 才执行。 |
-| `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op`（`export`\|`import`）、`bundle?`（对象） | 生命周期。 |
+| `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op`（`export`\|`import`）、`file?`（64 位十六进制：上传过的存档） | 生命周期；见 [6.7](#67-房间生命周期命令客户端视角)。拒绝：`save_not_uploaded`、`save_not_stored`（导出没能存下；消息里写出媒体错误码）、`bad_bundle`、`no_media`。文本形式：`save [export]`、`save import <hash>`。 |
 | `uploads` | player, observer；`on`：admin | `uploads` / `uploads`, `上传` | `on?`（布尔） | 查看或设置房间的上传开关（`data {on}`，`text` 说明现在是开是关）。这个开关管房间的所有上传：成员分享的文件、带来导入的卡、管理员给音频库加的声音都一样。服务器保存文件时可用（`no_media`）。 |
 | `import` | player；`as: "world"`：admin | `import` / `import`, `导入` | `file?`（64 位十六进制内容哈希）、`pack?`（1–64）、`card?`（1–512）、`as`（`world`\|`character`）、`name?`（1–64） | 导入调用者以 `purpose: "import"` 上传的卡片文件（[11.6](#116-导入卡片)），或某个已启用扩展包自带的卡片（`pack` 和 `card`，即卡片在包里的路径；`pack_not_enabled`、`card_not_in_pack`）。没有媒体存储且没装任何扩展包时为 `no_media`。作为角色导入：按房间规则系统掷出一张角色卡，并像 `genchar` 那样偏向服务器的模型从卡片人设里读出的东西（与它共用每小时上限）；没有模型、超出上限或回答不能用时，角色卡就照常掷出，`text` 说明原因——`data.concept` 为 `applied`、`no_model`、`rate_limited`、`model_failed`、`unusable`、`aborted` 或 `none`。角色导入不排在房间的回合后面。 |
 | `pack` | player；`enable`、`disable`、`install`：admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op`（`list`\|`enable`\|`disable`\|`install`）、`id?`（1–64）、`ref?`（1–2000） | `list`：管理员看到所有已安装的扩展包，玩家按名字看到本房间的。`enable`/`disable` 在本房间开关一个已安装的扩展包（`unknown_pack`、`too_many_packs`、`module_id_taken`）；禁用时，正在播放它某个音频提示的层会停止（每层一个 `audio` `stop` 信号）。`install`（文本形式 `install <ref>`）：`ref` 是服务器上的路径、一个 `https://` URL 或 `gh:owner/repo[@tag]`；在服务器上安装扩展包并在这里启用它和它的技能；`data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`，`text` 是用文字写出的信任卡；一个 `narrative` 系统事件。它不排在房间的回合后面，下载和安装都完成时才给出它唯一的结果。拒绝：`not_https`、`bad_gh_ref`、`source_not_found`、`archive_too_large`、`fetch_failed`、`too_many_redirects`、`no_pack_asset`、`bad_release`、`bad_archive`、`invalid_pack`、`engine_too_old`、`already_installed`、`index_unreadable`、`install_failed`、`install_unavailable`。 |
@@ -864,18 +864,18 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 | `mime` | string | 文件类型（最多 128 个字符）。 |
 | `size` | integer | 字节数，大于 0。 |
 | `sha256` | string | 字节内容的小写十六进制 SHA-256。 |
-| `purpose` | `share`（默认）、`import` 或 `audio` | `share`：文件成为房间媒体，字节到齐后桌面看到一个 `media` 事件。`import`：给 `import` 命令用的卡片文件（[11.6](#116-导入卡片)），存在只有管理员能获取的地方，不通知任何人。`audio`（仅管理员，仅声音）：给房间音频库的声音，每个成员都能获取，没有事件宣布；它以去掉扩展名的文件名为标题加入 `audio` 视图的音频库（[10.4](#104-内置视图)）。 |
+| `purpose` | `share`（默认）、`import`、`audio` 或 `save` | `share`：文件成为房间媒体，字节到齐后桌面看到一个 `media` 事件。`import`：给 `import` 命令用的卡片文件（[11.6](#116-导入卡片)），存在只有管理员能获取的地方，不通知任何人。`audio`（仅管理员，仅声音）：给房间音频库的声音，每个成员都能获取，没有事件宣布；它以去掉扩展名的文件名为标题加入 `audio` 视图的音频库（[10.4](#104-内置视图)）。`save`（仅管理员）：给 `save import` 用的房间存档（[6.7](#67-房间生命周期命令客户端视角)），存在只有管理员能获取的地方，不通知任何人。 |
 
 成功时回答以下之一：
 
 - `{"upload_id":"…"}`：用 PUT 发送字节（[11.4](#114-put)）。这个 id 只能用一次，限这个成员，15 分钟内有效。
-- `{"existing":{hash, mime, size, name, from}}`：房间已经有这些字节了；什么都不用发。对 `share`，文件会再次向桌面宣布（一个新的 `media` 事件，`from` 是申报的成员）。对 `import`，文件已经可以给 `import` 命令用了。对 `audio`，声音已在音频库里（本来就在，或者房间原本就把这些字节作为每个成员都能获取的文件保存着）。
+- `{"existing":{hash, mime, size, name, from}}`：房间已经有这些字节了；什么都不用发。对 `share`，文件会再次向桌面宣布（一个新的 `media` 事件，`from` 是申报的成员）。对 `import`，文件已经可以给 `import` 命令用了。对 `audio`，声音已在音频库里（本来就在，或者房间原本就把这些字节作为每个成员都能获取的文件保存着）。对 `save`，这个文件（房间最新一次导出，或另一位管理员上传的存档）已经可以给 `save import` 用了。`existing` 回答从不给出申报者自己获取不到的文件。
 
-接受的类型：`image/png`、`image/jpeg`、`image/webp`、`image/gif`、`image/svg+xml`（一个受限的子集）、`audio/mpeg`、`audio/ogg`、`audio/wav`、`audio/flac`、`audio/mp4`、`audio/aac`。`purpose: "import"` 只接受 `image/png`（内嵌数据的卡片）和 `application/json`；`purpose: "audio"` 只接受 `audio/…` 类型。
+接受的类型：`image/png`、`image/jpeg`、`image/webp`、`image/gif`、`image/svg+xml`（一个受限的子集）、`audio/mpeg`、`audio/ogg`、`audio/wav`、`audio/flac`、`audio/mp4`、`audio/aac`。`purpose: "import"` 只接受 `image/png`（内嵌数据的卡片）和 `application/json`；`purpose: "audio"` 只接受 `audio/…` 类型；`purpose: "save"` 只接受 `application/json`（字节开头必须像一个 JSON 对象）。
 
-默认上限：单张图片最多 8 MiB，每个房间的图片共 512 MiB；单个声音最多 128 MiB，每个房间的声音共 2048 MiB（这两项由运营者设置）；每个成员在每个房间每分钟 10 次申报（被拒绝的申报也算一次）；一个房间的音频库最多 100 个上传的声音。
+默认上限：单张图片最多 8 MiB，每个房间的图片共 512 MiB；单个声音最多 128 MiB，每个房间的声音共 2048 MiB（这两项由运营者设置）；单个存档最多 256 MiB，每个房间的存档共 512 MiB（最新一次导出加一次上传）；每个成员在每个房间每分钟 10 次申报（被拒绝的申报也算一次）；一个房间的音频库最多 100 个上传的声音。卡片文件算在图片的额度里；存档不管是上传的还是导出的，都算在自己的额度里。超过上限就拒绝（`media_too_large`、`media_quota_exceeded`），从不截断。
 
-拒绝：`invalid_params`（某个字段形状不对）、`media_unavailable`（服务器不保存文件）、`observer_upload`、`forbidden`（非管理员申报 `audio`）、`audio_library_full`、`media_disabled`（房间的上传开关关着）、`media_rate_limited`、`media_bad_mime`、`media_bad_offer`、`media_too_large`、`media_bad_hash`、`media_quota_exceeded`。
+拒绝：`invalid_params`（某个字段形状不对）、`media_unavailable`（服务器不保存文件）、`observer_upload`、`forbidden`（非管理员申报 `audio` 或 `save`）、`audio_library_full`、`media_disabled`（房间的上传开关关着）、`media_rate_limited`、`media_bad_mime`、`media_bad_offer`、`media_too_large`、`media_bad_hash`、`media_quota_exceeded`。
 
 ### 11.3 GET
 
@@ -884,7 +884,7 @@ client: {"op":"get","hash":"<64 hex>"}\n
 server: {"op":"get","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}\n  then exactly <n> bytes
 ```
 
-成员能获取房间在其身份可见的范围内保存的东西：房间媒体（共享的文件、演出图片）、音频库的声音和房间已启用扩展包的文件，所有人都能获取（只有仅限管理员的面板用到的，限管理员）；导入文件限管理员。别的房间里的哈希、这个身份不能看的哈希、谁都没有的哈希，回答都一样：`media_not_found`。
+成员能获取房间在其身份可见的范围内保存的东西：房间媒体（共享的文件、演出图片）、音频库的声音和房间已启用扩展包的文件，所有人都能获取（只有仅限管理员的面板用到的，限管理员）；导入文件、存档文件（房间的导出和上传的存档）和团报的复盘版只限管理员——看的是发出请求的这条连接在请求那一刻的身份。别的房间里的哈希、这个身份不能看的哈希、谁都没有的哈希，回答都一样：`media_not_found`。
 
 ### 11.4 PUT
 
@@ -960,6 +960,7 @@ server: {"ok":false,"code":"<stable code>","message":"<in the member's language>
 | 字节流停滞 | 30 秒 | `BYTE_STALL_MS` |
 | `upload_id` | 64 个字符 | `MAX_UPLOAD_ID_CHARS` |
 | 申报的文件名 | 255 个码点 | `MAX_OFFER_NAME_CHARS` |
+| 一个存档文件（导出或上传） | 256 MiB；每个房间的存档共 512 MiB | 服务器默认值 |
 | 申报 | 每个成员在每个房间每分钟 10 次 | 服务器默认值 |
 | 重置确认窗口 | 60 秒 | 服务器 |
 | `model list` 回答里的模型 id | 500 个，每个 ≤ 200 个码点 | 服务器 |

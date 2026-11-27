@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
-import { BUNDLE_FORMAT, exportedBundle, MAX_SAVE_BYTES, parseSaveFile, resolveSaveDir, SAVE_LIMIT_MB, saveFileName, savedBundle, sizeLabel, writeSave } from "./save"
-import { MAX_LINE_BYTES } from "./irohLink"
+import { looksLikeSave, MAX_SAVE_BYTES, resolveSaveDir, SAVE_LIMIT_MB, saveFileName, savedFile, sizeLabel, writeSave } from "./save"
+import { MAX_FETCH_BYTES } from "./irohLink"
 
 const AT = new Date(2026, 10, 27, 9, 5, 7)
 const bytes = (text: string) => new TextEncoder().encode(text)
 const ok = (data: unknown) => ({ ok: true as const, data })
+const HASH = "c".repeat(64)
 
 describe("save file names", () => {
   test("<room>-<YYYYMMDD-HHMMSS>.json, the room made safe exactly as a report page's name is", () => {
@@ -34,14 +35,13 @@ describe("save file names", () => {
 })
 
 describe("writeSave", () => {
-  test("writes the bundle as compact JSON, readable by this user alone, in a private folder", async () => {
+  test("writes the save's bytes as they are, readable by this user alone, in a private folder", async () => {
     const dir = join(await mkdtemp(join(tmpdir(), "lw-save-")), "saves")
-    const bundle = { format: BUNDLE_FORMAT, version: 1, turn: 3, documents: [{ id: "d1", data: "{\"secret\":\"the well\"}" }], events: [] }
-    const written = await writeSave(bundle, { room: "arkham", at: AT, dir })
+    const data = bytes(JSON.stringify({ format: "loreweaver-room", version: 1, turn: 3, documents: [{ id: "d1", data: "{\"secret\":\"the well\"}" }], events: [] }))
+    const written = await writeSave(data, { room: "arkham", at: AT, dir })
     expect(written.path).toBe(join(dir, "arkham-20261127-090507.json"))
-    expect(JSON.parse(await readFile(written.path, "utf8"))).toEqual(bundle)
-    expect(written.bytes).toBe((await readFile(written.path)).length)
-    expect(written.bytes).toBe(JSON.stringify(bundle).length)
+    expect(new Uint8Array(await readFile(written.path))).toEqual(data)
+    expect(written.bytes).toBe(data.length)
     if (process.platform !== "win32") {
       expect((await stat(written.path)).mode & 0o777).toBe(0o600)
       expect((await stat(dir)).mode & 0o777).toBe(0o700)
@@ -50,8 +50,8 @@ describe("writeSave", () => {
 
   test("a second save in the same second never replaces the first", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-save-"))
-    const first = await writeSave({ n: 1 }, { room: "arkham", at: AT, dir })
-    const second = await writeSave({ n: 2 }, { room: "arkham", at: AT, dir })
+    const first = await writeSave(bytes("{\"n\":1}"), { room: "arkham", at: AT, dir })
+    const second = await writeSave(bytes("{\"n\":2}"), { room: "arkham", at: AT, dir })
     expect(second.path).not.toBe(first.path)
     expect(JSON.parse(await readFile(first.path, "utf8"))).toEqual({ n: 1 })
     expect(JSON.parse(await readFile(second.path, "utf8"))).toEqual({ n: 2 })
@@ -60,48 +60,47 @@ describe("writeSave", () => {
 
   test("whatever the room is called, the file stays inside the folder", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lw-save-"))
-    const written = await writeSave({ n: 1 }, { room: "../../outside", at: AT, dir })
+    const written = await writeSave(bytes("{}"), { room: "../../outside", at: AT, dir })
     expect(dirname(written.path)).toBe(dir)
     expect(relative(dir, written.path).startsWith("..")).toBe(false)
   })
 })
 
 describe("what a save answer is", () => {
-  test("an export's data is the bundle: a plain object", () => {
-    const bundle = { format: BUNDLE_FORMAT, documents: [] }
-    expect(exportedBundle(ok(bundle))).toEqual(bundle)
-    expect(exportedBundle(ok([1]))).toBeNull()
-    expect(exportedBundle(ok(null))).toBeNull()
-    expect(exportedBundle(ok("text"))).toBeNull()
-    expect(exportedBundle({ ok: false, error: { code: "forbidden", message: "no" } })).toBeNull()
-    expect(exportedBundle(null)).toBeNull()
+  const media = { hash: HASH, mime: "application/json", size: 120, name: "save-arkham.json" }
+
+  test("an export answers with a file to fetch: counts and a JSON file's reference", () => {
+    expect(savedFile(ok({ documents: 3, events: 9, media }))).toEqual({ hash: HASH, size: 120, name: "save-arkham.json" })
+    expect(savedFile(ok({ documents: 3, events: 9, media: { ...media, name: 7 } }))).toEqual({ hash: HASH, size: 120, name: "" })
   })
 
-  test("a typed command's answer is a save's only when it carries a bundle's own marker", () => {
-    expect(savedBundle(ok({ format: BUNDLE_FORMAT, documents: [] }))).not.toBeNull()
-    // The answer to an import, to a roll, to a report: not a bundle.
-    expect(savedBundle(ok({ epoch: 2, turn: 4 }))).toBeNull()
-    expect(savedBundle(ok({ totals: [4] }))).toBeNull()
-    expect(savedBundle(ok({ format: "html", edition: "player" }))).toBeNull()
-    expect(savedBundle(ok(undefined))).toBeNull()
-    expect(savedBundle(null)).toBeNull()
+  test("anything else is not a save's answer: an import's, a roll's, a report page's, a bundle in the data", () => {
+    expect(savedFile(ok({ epoch: 2, turn: 4 }))).toBeNull()
+    expect(savedFile(ok({ totals: [4] }))).toBeNull()
+    expect(savedFile(ok({ format: "html", edition: "player", media: { ...media, mime: "text/html" } }))).toBeNull()
+    expect(savedFile(ok({ format: "loreweaver-room", documents: [], events: [] }))).toBeNull()
+    expect(savedFile(ok({ documents: 3, events: 9, media: { ...media, hash: "ABC" } }))).toBeNull()
+    expect(savedFile(ok({ documents: 3, events: 9, media: { ...media, size: -1 } }))).toBeNull()
+    expect(savedFile(ok({ documents: "3", events: 9, media }))).toBeNull()
+    expect(savedFile(ok(undefined))).toBeNull()
+    expect(savedFile({ ok: false, error: { code: "forbidden", message: "no" } })).toBeNull()
+    expect(savedFile(null)).toBeNull()
   })
 })
 
-describe("reading a save file", () => {
-  test("an object of JSON is taken; anything else says what it is", () => {
-    expect(parseSaveFile(bytes("{\"format\":\"loreweaver-room\"}"))).toEqual({ ok: true, bundle: { format: "loreweaver-room" } })
-    expect(parseSaveFile(bytes("﻿{\"a\":1}"))).toEqual({ ok: true, bundle: { a: 1 } })
-    for (const text of ["", "{", "not json", "{'a':1}", "{\"a\":1} trailing"]) expect(parseSaveFile(bytes(text))).toEqual({ ok: false, code: "not_json" })
-    expect(parseSaveFile(Uint8Array.from([0x7b, 0xff, 0xfe, 0x7d]))).toEqual({ ok: false, code: "not_json" })
-    for (const text of ["[]", "[{}]", "null", "42", "true", "\"a\""]) expect(parseSaveFile(bytes(text))).toEqual({ ok: false, code: "not_object" })
+describe("a file that may be a save", () => {
+  test("starts like one JSON object; the rest is the server's to judge", () => {
+    for (const text of ["{\"format\":\"loreweaver-room\"}", "\ufeff{\"a\":1}", "  \n\t{", "{not json"]) expect(looksLikeSave(bytes(text))).toBe(true)
+    for (const text of ["", "[]", "null", "42", "\"a\"", "x{"]) expect(looksLikeSave(bytes(text))).toBe(false)
+    expect(looksLikeSave(Uint8Array.from([0x89, 0x50, 0x4e, 0x47]))).toBe(false)
   })
 })
 
 describe("the limit", () => {
-  test("is the largest line this client takes from a server: a room it could save is a room it can restore", () => {
-    expect(MAX_SAVE_BYTES).toBe(MAX_LINE_BYTES)
-    expect(SAVE_LIMIT_MB).toBe(8)
+  test("is the server's default limit for one save file, beyond what this client fetches of any other file", () => {
+    expect(MAX_SAVE_BYTES).toBe(256 * 1024 * 1024)
+    expect(SAVE_LIMIT_MB).toBe(256)
+    expect(MAX_SAVE_BYTES).toBeGreaterThan(MAX_FETCH_BYTES)
   })
 
   test("sizes read as a person writes them", () => {

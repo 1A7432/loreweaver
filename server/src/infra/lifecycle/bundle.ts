@@ -4,7 +4,9 @@
 // visible event log, and the turn counter the log's turn numbers continue from. It is not
 // the undo journal (an imported room starts a new life with nothing to undo into), not the
 // room's generation or sequence numbers (those belong to the room it is loaded into), and
-// not media or vectors (other storages; see `storages.ts`). It holds nothing the room does
+// not media or vectors (other storages; see `storages.ts`), and not the room-state keys that
+// name a file of the room's media (`StateKey.outsideBundle`): an import clears the media, so
+// the file such a key names is not there in the loaded room. It holds nothing the room does
 // not already hold. Document payloads and module checkpoints travel as the stored text, so
 // a round trip is exact — including a payload the document layer could not read.
 //
@@ -152,10 +154,12 @@ export function parseBundle(value: unknown, catalog: DocumentCatalog): RoomBundl
     if (!isRecord(entry)) fail(path);
     const key = text(entry.key, `${path}.key`);
     const stored = text(entry.value, `${path}.value`, false);
-    if (stateKeyNamed(key) === undefined) throw new LifecycleError("undeclared_state_key", `${path}.key`);
+    const declared = stateKeyNamed(key);
+    if (declared === undefined) throw new LifecycleError("undeclared_state_key", `${path}.key`);
     if (seenKeys.has(key)) fail(`${path}.key`);
     seenKeys.add(key);
-    state.push({ key, value: stored });
+    // A key naming a file of the room it came from: that file is not in the loaded room.
+    if (declared.outsideBundle === undefined) state.push({ key, value: stored });
   });
 
   const modules: BundleModule[] = [];

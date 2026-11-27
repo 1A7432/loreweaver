@@ -73,6 +73,14 @@ export interface StateKey<T> {
    * story must not take back. Absent: an undo rewinds it like any other write.
    */
   readonly keptOnUndo?: string;
+  /**
+   * Present when the key names something a bundle does not carry, with the reason: a file in
+   * the room's media (`lifecycle/bundle.ts`: media is another storage, and an import clears
+   * it). `exportRoom` leaves such a key out, and `importRoom` drops it from a bundle that has
+   * it — a loaded room must not name a file that is not there, nor one that a later change
+   * would remove although it now belongs to something else. Absent: the key travels.
+   */
+  readonly outsideBundle?: string;
   encode(value: T): string;
   /** The stored text read back; null when it cannot be read as this key's value. */
   decode(text: string): T | null;
@@ -90,6 +98,8 @@ export interface StateKeySpec<T> {
   readonly lifecycle: Lifecycle;
   /** See `StateKey.keptOnUndo`: the reason an undo leaves this key alone. */
   readonly keptOnUndo?: string;
+  /** See `StateKey.outsideBundle`: the reason a bundle does not carry this key. */
+  readonly outsideBundle?: string;
   readonly encode: (value: T) => string;
   readonly decode: (text: string) => T | null;
 }
@@ -103,11 +113,13 @@ export function defineStateKey<T>(spec: StateKeySpec<T>): StateKey<T> {
   if (typeof spec.name !== "string" || spec.name === "") throw new LifecycleError("undeclared_state_key", "");
   checkLifecycle(spec.lifecycle, spec.name);
   if (spec.keptOnUndo !== undefined && (typeof spec.keptOnUndo !== "string" || spec.keptOnUndo.trim() === "")) throw new LifecycleError("invalid_lifecycle", spec.name);
+  if (spec.outsideBundle !== undefined && (typeof spec.outsideBundle !== "string" || spec.outsideBundle.trim() === "")) throw new LifecycleError("invalid_lifecycle", spec.name);
   if (byName.has(spec.name)) throw new LifecycleError("state_key_conflict", spec.name);
   const key: StateKey<T> = Object.freeze({
     name: spec.name,
     lifecycle: Object.freeze({ ...spec.lifecycle }),
     ...(spec.keptOnUndo === undefined ? {} : { keptOnUndo: spec.keptOnUndo }),
+    ...(spec.outsideBundle === undefined ? {} : { outsideBundle: spec.outsideBundle }),
     encode: spec.encode,
     decode: spec.decode,
   });
@@ -116,17 +128,30 @@ export function defineStateKey<T>(spec: StateKeySpec<T>): StateKey<T> {
   return key;
 }
 
-/** A key whose value is plain text. `keptOnUndo`: see `StateKey`. */
-export function textStateKey(name: string, lifecycle: Lifecycle, options: { readonly keptOnUndo?: string } = {}): StateKey<string> {
-  return defineStateKey({ name, lifecycle, ...(options.keptOnUndo === undefined ? {} : { keptOnUndo: options.keptOnUndo }), encode: (value) => value, decode: (text) => text });
+/** What a key may say besides its name and lifecycle: see `StateKey`. */
+export interface StateKeyOptions {
+  readonly keptOnUndo?: string;
+  readonly outsideBundle?: string;
 }
 
-/** A key whose value is JSON, checked by `guard` when read back. `keptOnUndo`: see `StateKey`. */
-export function jsonStateKey<T>(name: string, lifecycle: Lifecycle, guard: (value: unknown) => value is T, options: { readonly keptOnUndo?: string } = {}): StateKey<T> {
+function optionsOf(options: StateKeyOptions): StateKeyOptions {
+  return {
+    ...(options.keptOnUndo === undefined ? {} : { keptOnUndo: options.keptOnUndo }),
+    ...(options.outsideBundle === undefined ? {} : { outsideBundle: options.outsideBundle }),
+  };
+}
+
+/** A key whose value is plain text. `options`: see `StateKey`. */
+export function textStateKey(name: string, lifecycle: Lifecycle, options: StateKeyOptions = {}): StateKey<string> {
+  return defineStateKey({ name, lifecycle, ...optionsOf(options), encode: (value) => value, decode: (text) => text });
+}
+
+/** A key whose value is JSON, checked by `guard` when read back. `options`: see `StateKey`. */
+export function jsonStateKey<T>(name: string, lifecycle: Lifecycle, guard: (value: unknown) => value is T, options: StateKeyOptions = {}): StateKey<T> {
   return defineStateKey({
     name,
     lifecycle,
-    ...(options.keptOnUndo === undefined ? {} : { keptOnUndo: options.keptOnUndo }),
+    ...optionsOf(options),
     encode: (value) => JSON.stringify(value),
     decode: (text) => {
       try {

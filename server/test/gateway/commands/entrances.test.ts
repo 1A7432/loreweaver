@@ -61,7 +61,7 @@ const CASES: readonly Case[] = [
   { line: ".language zh", id: "language", args: { locale: "zh" }, member: ADMIN },
   { line: ".undo 1", id: "undo", args: { turns: 1 }, member: ADMIN, setup: withCharacter },
   { line: ".reset chars", id: "reset", args: { scope: "chars" }, member: ADMIN },
-  { line: ".save", id: "save", args: { op: "export" }, member: ADMIN, setup: withCharacter },
+  { line: ".save", id: "save", args: { op: "export" }, member: ADMIN, media: true, setup: withCharacter },
   { line: ".uploads off", id: "uploads", args: { on: false }, member: ADMIN, media: true },
   { line: `.import character ${sha256(CARD)} Mirabel`, id: "import", args: { file: sha256(CARD), as: "character", name: "Mirabel" }, media: true, setup: withCard },
   { line: ".pack", id: "pack", args: { op: "list" } },

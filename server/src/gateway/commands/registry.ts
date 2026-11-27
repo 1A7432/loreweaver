@@ -27,7 +27,8 @@ import { packCommand, panelsCommand, skillCommand } from "./engine/packs.ts";
 import { reportCommand } from "./engine/report.ts";
 import { imagegenCommand, type KeyAdmin, keyCommand, modelCommand } from "./engine/admin.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
-import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, saveCommand, undoCommand } from "./engine/room.ts";
+import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, undoCommand } from "./engine/room.ts";
+import { saveCommand } from "./engine/save.ts";
 import { pcCommand, renameCommand, sheetCommand } from "./engine/sheet.ts";
 import { chronicleCommand, habitsCommand, loreCommand, npcCommand, recapCommand, varCommand } from "./engine/world.ts";
 import { argumentTooLong, inlineRolls, MAX_COMMAND_ARG_CHARS, MAX_INLINE_ROLLS, splitCommand } from "./parse.ts";
@@ -138,7 +139,7 @@ export class CommandRegistry {
       languageCommand,
       undoCommand,
       resetCommand(gate),
-      saveCommand,
+      saveCommand(options.uploads ?? null),
       uploadsCommand(options.uploads ?? null),
       importCommand(options.uploads ?? null, options.recall ?? null, packs, authoring),
       packCommand(packs),

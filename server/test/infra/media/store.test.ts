@@ -113,12 +113,13 @@ test("an upload is checked, stored once under its hash, and readable by the room
       uploader: "m:ada",
       createdAt: 1_700_000_000_000,
       audience: "room",
+      family: "image",
     },
   });
   expect(media.find("table", sha(bytes))?.name).toBe("lower hall.png");
   expect((await media.read("table", sha(bytes), "player"))?.bytes).toEqual(bytes);
   expect(media.list("table").map((record) => record.hash)).toEqual([sha(bytes)]);
-  expect(media.usage("table")).toEqual({ image: bytes.length, audio: 0 });
+  expect(media.usage("table")).toEqual({ image: bytes.length, audio: 0, save: 0 });
   expect(tree(blobDir)).toEqual([sha(bytes)]);
   if (process.platform !== "win32") {
     expect(statSync(join(blobDir, sha(bytes))).mode & 0o777).toBe(0o600);
@@ -510,4 +511,67 @@ test("removing one blob takes its row, and its file only when no other room's ro
   expect(media.remove("table", sha(bytes))).toBe(false);
   expect(media.remove("table", "not a hash")).toBe(false);
   expect(media.usage("table").audio).toBe(kept.length);
+});
+
+test("a save has its own budget, is stored for admins only, and the same bytes are never both a save and a card file", async () => {
+  const { media } = bench({ save: { maxFileBytes: 64, roomQuotaBytes: 100 } });
+  const json = (tag: string, padding = 0): Uint8Array => new TextEncoder().encode(JSON.stringify({ tag, pad: "#".repeat(padding) }));
+  const asSave = { mime: "application/json", name: "room.json", audience: "admin" as const, save: true };
+
+  // Only under the `admin` audience, only as JSON, and within the save limit.
+  expect(code(media.beginUpload(offer(json("a"), { ...asSave, audience: "members" })))).toBe("media_bad_offer");
+  expect(code(media.beginUpload(offer(png("a"), { ...asSave, mime: "image/png" })))).toBe("media_bad_mime");
+  expect(code(media.beginUpload(offer(json("big", 80), asSave)))).toBe("media_too_large");
+  expect(code(await media.registerServerBlob({ room: "table", bytes: json("s"), mime: "application/json", name: "s.json", audience: "members", save: true }))).toBe("media_bad_offer");
+
+  const first = json("one", 30);
+  const stored = await upload(media, first, asSave);
+  expect(stored.ok && stored.record.family).toBe("save");
+  expect(media.usage("table")).toEqual({ image: 0, audio: 0, save: first.length });
+  // No player-grade reader finds it, by hash or in a listing.
+  expect(media.find("table", sha(first), "player")).toBeUndefined();
+  expect(media.find("table", sha(first), "observer")).toBeUndefined();
+  expect(media.find("table", sha(first), "admin")?.family).toBe("save");
+  expect(media.list("table")).toEqual([]);
+
+  // The save budget is the room's own: a second save that does not fit is refused, pictures are not affected.
+  const second = json("two", 30);
+  expect(first.length + second.length).toBeGreaterThan(100);
+  expect(code(media.beginUpload(offer(second, asSave)))).toBe("media_quota_exceeded");
+  expect(code(await upload(media, png("map")))).toBe("ok");
+
+  // The bytes of a save offered as a card file (and a card's as a save) are refused, not relabelled.
+  expect(code(await upload(media, first, { mime: "application/json", name: "card.json", audience: "admin" }))).toBe("media_bad_upload");
+  const card = json("card");
+  expect(code(await upload(media, card, { mime: "application/json", name: "card.json", audience: "admin" }))).toBe("ok");
+  expect(code(await upload(media, card, asSave))).toBe("media_bad_upload");
+});
+
+test("a media table made before saves had a budget is rebuilt once, keeping its rows", async () => {
+  const db = openDatabase(":memory:");
+  db.exec(`
+    CREATE TABLE media (
+      room TEXT NOT NULL, hash TEXT NOT NULL, mime TEXT NOT NULL,
+      family TEXT NOT NULL CHECK (family IN ('image', 'audio')),
+      size INTEGER NOT NULL CHECK (size > 0), name TEXT NOT NULL, uploader TEXT NOT NULL,
+      created_at INTEGER NOT NULL, audience TEXT NOT NULL CHECK (audience IN ('room', 'members', 'admin')),
+      PRIMARY KEY (room, hash)
+    ) STRICT;
+    CREATE INDEX media_by_hash ON media (hash);
+  `);
+  const old = "a".repeat(64);
+  db.prepare("INSERT INTO media (room, hash, mime, family, size, name, uploader, created_at, audience) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("table", old, "image/png", "image", 9, "map.png", "m:ada", 1, "room");
+
+  const open = (): MediaStore => new MediaStore(dataDir, db, { clock: clock(), limits: DEFAULT_MEDIA_LIMITS });
+  const media = open();
+  expect(media.find("table", old, "player")).toMatchObject({ hash: old, name: "map.png", family: "image", audience: "room", size: 9, createdAt: 1 });
+  const bytes = new TextEncoder().encode(JSON.stringify({ format: "loreweaver-room" }));
+  expect(code(await media.registerServerBlob({ room: "table", bytes, mime: "application/json", name: "room.json", audience: "admin", save: true }))).toBe("ok");
+
+  // Nothing is left of the rebuild, the index is back, and opening again changes nothing.
+  const names = (): string[] => db.prepare<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'media%' ORDER BY name").all().map((row) => row.name);
+  expect(names()).toEqual(["media", "media_by_hash", "media_uploads_off"]);
+  open();
+  expect(names()).toEqual(["media", "media_by_hash", "media_uploads_off"]);
+  expect(db.prepare<{ n: number }>("SELECT COUNT(*) AS n FROM media").get()?.n).toBe(2);
 });

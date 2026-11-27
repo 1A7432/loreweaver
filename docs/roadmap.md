@@ -52,17 +52,19 @@ What the rewrite has in place:
 
 ## Not in 3.0 yet
 
-- **A release.** There is no published 3.0 build: no install script, no downloadable bundle, no
-  self-update. Today you run it from a checkout with Bun. The `loreweaver-protocol` package on npm is
-  still 2.6; the 3.0 package is in this repository.
-- **The desktop client.** Loreweaver Studio is being moved to 3.0 in its own repository and cannot
-  connect to a 3.0 server yet.
-- **Running pages.** Panels that are HTML pages are listed and served, but no client runs one yet;
-  the terminal client draws their fallback. Panels a room publishes at run time are reserved, not
-  built. The protocol's `features` and `caps` lists are empty, and some signals (`turn.activity`,
+- **A release.** No 3.0 build has been published yet, so today you run it from a checkout with Bun.
+  What a release is made of exists — the server and the terminal client as one file each, the
+  installers, the workflow that builds them ([releasing.md](releasing.md)) — but none has been cut,
+  and there is no self-update. The `loreweaver-protocol` package on npm is still 2.6; the 3.0
+  package is in this repository.
+- **The desktop client.** Loreweaver Studio's 3.0 version is on the `v3` branch of its own
+  repository and has not been released; the released Studio cannot connect to a 3.0 server.
+- **Running pages.** Panels that are HTML pages are listed and served; Studio's 3.0 branch runs
+  them, the terminal client draws their fallback. Panels a room publishes at run time are reserved,
+  not built. The protocol's `features` and `caps` lists are empty, and some signals (`turn.activity`,
   `turn.round`, `notice.spinner`) are defined but not sent — [protocol.md §14](protocol.md#14-not-in-30-yet).
-- **Backups from the client.** `.save` exports a room as a bundle, but the terminal client does not
-  write it to a file yet; copying the data directory is the backup for now.
+- **A save with its files.** A room's save (`.save`) holds its documents, state and log, not its
+  pictures, sounds and report pages; copying the data directory is the backup that holds everything.
 - **A nightly live-model run.** The live-model play-test (`server/eval/playtest.ts`) is run by hand.
 - **From 2.x, not carried over:** the chat-platform bridges (the QQ bridge included); the WebSocket
   transport; Docker; `hooks.js` and the QuickJS sandbox, the rule packs' script lane with them (a

@@ -39,6 +39,7 @@ function isPages(value: unknown): value is { player?: string; reveal?: string } 
 /** The room's latest report page per edition, so that a new one replaces it instead of piling up beside it. */
 export const REPORT_PAGES: StateKey<{ player?: string; reveal?: string }> = jsonStateKey("report.pages", { reset: "all" }, isPages, {
   keptOnUndo: "a stored page is a file, not part of the story: an undo does not remove the file, so the entry naming it must stay",
+  outsideBundle: "it names files of this room's media, which an import clears: the loaded room does not hold them",
 });
 
 function readEvents(call: CommandCall): StoredEvent[] {
@@ -112,7 +113,8 @@ export function reportCommand(uploads: Uploads | null): CommandSpec {
         // Unlisted either way; the reveal edition for admins alone.
         audience: edition === "reveal" ? "admin" : "members",
       });
-      if (!stored.ok) return refuse("report_not_stored", { code: stored.code });
+      // `reason`, not `code`: the refusal's own code takes that name when the message is put into words.
+      if (!stored.ok) return refuse("report_not_stored", { reason: stored.code });
       const { hash, mime, size, name } = stored.record;
       return { edition, media: { hash, mime, size, name } };
     },

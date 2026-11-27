@@ -21,7 +21,7 @@ import {
   type Timers,
   type UploadPurpose,
 } from "loreweaver-protocol/v3"
-import { ByteError, type Dialer, type Transport } from "./irohLink"
+import { ByteError, type Dialer, type FetchedFile, type Transport } from "./irohLink"
 import { cachedMediaPath, readCachedMedia, sha256Hex, sniffImageMime, writeCachedMedia, type LocalFile } from "./media"
 
 /** Every built-in view the client shows. */
@@ -484,6 +484,26 @@ export class Connection {
       const failure = toByteError(error)
       if (hold) this.#setFetch(hash, { status: "failed", code: failure.code, message: failure.server ? failure.message : "" })
       throw failure
+    }
+  }
+
+  /**
+   * A file by its content hash over a byte stream, around the cache and held nowhere here: a
+   * room save, which holds every secret of the room and must land only where its caller writes
+   * it (the cache folder is not private). A body over `maxBytes` is refused; a failure rejects
+   * with a `ByteError`.
+   */
+  async fetchPrivate(hash: string, maxBytes: number): Promise<FetchedFile> {
+    if (!isContentHash(hash)) throw new ByteError("bad_hash")
+    const transport = this.#transport
+    if (transport === null || this.session.status !== "online") throw new ByteError("not_connected")
+    this.#set({ pending: this.#state.pending + 1 })
+    try {
+      return await transport.fetch(hash, maxBytes)
+    } catch (error) {
+      throw toByteError(error)
+    } finally {
+      this.#set({ pending: Math.max(0, this.#state.pending - 1) })
     }
   }
 

@@ -19,6 +19,13 @@ export const REPORT_MIME = "text/html";
  * read by the server, never shown to the table as room media.
  */
 export const CARD_JSON_MIME = "application/json";
+/**
+ * A room save (`save` export, and a save file an admin uploads to restore from): JSON, the
+ * same type as a card file. What tells the two apart is the budget a blob was stored under
+ * (`QuotaFamily` `save`), never the type: a save is stored only under the `admin` audience,
+ * and only by a store call that says it is one.
+ */
+export const SAVE_MIME = CARD_JSON_MIME;
 
 export type ImageMime = (typeof IMAGE_MIMES)[number];
 export type AudioMime = (typeof AUDIO_MIMES)[number];
@@ -28,10 +35,12 @@ export type MemberMime = UploadMime | typeof CARD_JSON_MIME;
 export type StoredMime = MemberMime | typeof REPORT_MIME;
 
 /**
- * The budget a blob counts against. Reports share the image budget: they are small
- * documents, and a third budget would be a setting nobody asked for.
+ * The budget a blob counts against. Reports and card files share the image budget: they are
+ * small documents. A room save is neither a picture nor a sound and is far larger than either
+ * document, so it has a budget of its own.
  */
-export type QuotaFamily = "image" | "audio";
+export type QuotaFamily = "image" | "audio" | "save";
+export const QUOTA_FAMILIES: readonly QuotaFamily[] = ["image", "audio", "save"];
 
 export function isImageMime(mime: string): mime is ImageMime {
   return (IMAGE_MIMES as readonly string[]).includes(mime);
@@ -41,7 +50,8 @@ export function isAudioMime(mime: string): mime is AudioMime {
   return (AUDIO_MIMES as readonly string[]).includes(mime);
 }
 
-export function quotaFamily(mime: StoredMime): QuotaFamily {
+/** The budget of a blob that is not a save (a save says so itself: it shares its type with a card file). */
+export function quotaFamily(mime: StoredMime): Exclude<QuotaFamily, "save"> {
   return isAudioMime(mime) ? "audio" : "image";
 }
 
@@ -69,6 +79,7 @@ export interface FamilyLimits {
 export interface MediaLimits {
   readonly image: FamilyLimits;
   readonly audio: FamilyLimits;
+  readonly save: FamilyLimits;
   /** Offers one member may make in one room per minute, as a refilling bucket. */
   readonly uploadsPerMinute: number;
   /** How long an accepted offer waits for its bytes before it is forgotten. */
@@ -77,9 +88,19 @@ export interface MediaLimits {
 
 const MIB = 1024 * 1024;
 
+/** The largest room save the server stores, exported or uploaded. */
+export const MAX_SAVE_FILE_BYTES = 256 * MIB;
+/**
+ * The save budget of one room: the room's latest export and one save upload in flight. A new
+ * export removes the previous one before it is stored, and an import (or a refused one)
+ * removes the upload it read, so two files is all a room ever needs at once.
+ */
+export const SAVE_ROOM_QUOTA_BYTES = 2 * MAX_SAVE_FILE_BYTES;
+
 export const DEFAULT_MEDIA_LIMITS: MediaLimits = {
   image: { maxFileBytes: 8 * MIB, roomQuotaBytes: 512 * MIB },
   audio: { maxFileBytes: 128 * MIB, roomQuotaBytes: 2048 * MIB },
+  save: { maxFileBytes: MAX_SAVE_FILE_BYTES, roomQuotaBytes: SAVE_ROOM_QUOTA_BYTES },
   uploadsPerMinute: 10,
   pendingUploadTtlMs: 15 * 60 * 1000,
 };
@@ -91,6 +112,8 @@ export function checkLimits(limits: MediaLimits): void {
     limits.image.roomQuotaBytes,
     limits.audio.maxFileBytes,
     limits.audio.roomQuotaBytes,
+    limits.save.maxFileBytes,
+    limits.save.roomQuotaBytes,
     limits.uploadsPerMinute,
     limits.pendingUploadTtlMs,
   ];

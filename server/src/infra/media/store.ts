@@ -27,9 +27,11 @@ import {
   ID_RE,
   isAudioMime,
   isImageMime,
+  QUOTA_FAMILIES,
   quotaFamily,
   REPORT_MIME,
   safeName,
+  SAVE_MIME,
   type Audience,
   type MediaCode,
   type MediaLimits,
@@ -52,6 +54,8 @@ export interface MediaRecord {
   readonly uploader: string;
   readonly createdAt: number;
   readonly audience: Audience;
+  /** The budget it counts against; `save` is what marks a room save (its type is a card file's). */
+  readonly family: QuotaFamily;
 }
 
 /** What a client declares before sending bytes. Only the store decides what it means. */
@@ -68,6 +72,11 @@ export interface MediaOffer {
    * blob from its hash), and only it may be a card file (`CARD_JSON_MIME`).
    */
   readonly audience?: Audience;
+  /**
+   * A room save an admin uploads to restore from: `SAVE_MIME` under the `admin` audience only,
+   * counted against the save budget and limits.
+   */
+  readonly save?: boolean;
 }
 
 export type Refusal = { readonly ok: false; readonly code: MediaCode };
@@ -89,6 +98,8 @@ export interface ServerBlob {
   readonly mime: string;
   readonly name: string;
   readonly audience: Audience;
+  /** A room save (`save` export): `SAVE_MIME` under the `admin` audience only, against the save budget. */
+  readonly save?: boolean;
 }
 
 export interface MediaStoreOptions {
@@ -104,6 +115,7 @@ interface Pending {
   readonly name: string;
   readonly mime: MemberMime;
   readonly audience: Audience;
+  readonly family: QuotaFamily;
   readonly size: number;
   readonly hash: string;
   readonly expiresAt: number;
@@ -120,6 +132,7 @@ interface Row {
   uploader: string;
   created_at: number;
   audience: string;
+  family: string;
 }
 
 interface Item {
@@ -129,6 +142,7 @@ interface Item {
   readonly name: string;
   readonly uploader: string;
   readonly audience: Audience;
+  readonly family: QuotaFamily;
   readonly bytes: Uint8Array;
   /** The room's clear count when the request began; a clear since voids it. */
   readonly generation: number;
@@ -141,7 +155,7 @@ CREATE TABLE IF NOT EXISTS media (
   room TEXT NOT NULL,
   hash TEXT NOT NULL,
   mime TEXT NOT NULL,
-  family TEXT NOT NULL CHECK (family IN ('image', 'audio')),
+  family TEXT NOT NULL CHECK (family IN ('image', 'audio', 'save')),
   size INTEGER NOT NULL CHECK (size > 0),
   name TEXT NOT NULL,
   uploader TEXT NOT NULL,
@@ -155,7 +169,23 @@ CREATE TABLE IF NOT EXISTS media_uploads_off (
 ) STRICT;
 `;
 
-const COLUMNS = "room, hash, mime, size, name, uploader, created_at, audience";
+const COLUMNS = "room, hash, mime, size, name, uploader, created_at, audience, family";
+
+/**
+ * A `media` table made before saves had a budget checks `family` against two names, and
+ * every save stored in it would be refused by the database. SQLite cannot change a check in
+ * place, so such a table is rebuilt once: same columns, same rows, the files untouched.
+ */
+function widenFamilyCheck(db: Database): void {
+  const made = db.prepare<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'media'").get();
+  if (made === null || made.sql.includes("'save'")) return;
+  db.transaction(() => {
+    // The index goes with the old table; `SCHEMA` makes it again on the new one.
+    db.exec("DROP INDEX IF EXISTS media_by_hash; ALTER TABLE media RENAME TO media_before_save;");
+    db.exec(SCHEMA);
+    db.exec(`INSERT INTO media (${COLUMNS}) SELECT ${COLUMNS} FROM media_before_save; DROP TABLE media_before_save;`);
+  });
+}
 
 function toRecord(row: Row): MediaRecord {
   return {
@@ -167,7 +197,14 @@ function toRecord(row: Row): MediaRecord {
     uploader: row.uploader,
     createdAt: row.created_at,
     audience: row.audience as Audience,
+    family: row.family as QuotaFamily,
   };
+}
+
+/** What a member may send: room media, a card file only unlisted, and a save only as one (`MediaOffer.save`). */
+function isMemberMime(mime: string, audience: Audience, save: boolean): mime is MemberMime {
+  if (save) return mime === SAVE_MIME;
+  return isImageMime(mime) || isAudioMime(mime) || (mime === CARD_JSON_MIME && audience !== "room");
 }
 
 function refuse(code: MediaCode): Refusal {
@@ -210,12 +247,13 @@ export class MediaStore {
     this.#limits = limits;
     this.#blobs = new BlobDir(dataDir);
     this.#rate = new RateLimiter(limits.uploadsPerMinute, () => this.#clock.now());
+    widenFamilyCheck(db);
     db.exec(SCHEMA);
     this.#get = db.prepare(`SELECT ${COLUMNS} FROM media WHERE room = ? AND hash = ?`);
     this.#listed = db.prepare(`SELECT ${COLUMNS} FROM media WHERE room = ? AND audience = 'room' ORDER BY created_at, hash`);
     this.#used = db.prepare("SELECT COALESCE(SUM(size), 0) AS total FROM media WHERE room = ? AND family = ?");
     this.#refs = db.prepare("SELECT COUNT(*) AS n FROM media WHERE hash = ?");
-    this.#insert = db.prepare(`INSERT INTO media (${COLUMNS}, family) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    this.#insert = db.prepare(`INSERT INTO media (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     this.#roomHashes = db.prepare("SELECT hash FROM media WHERE room = ?");
     this.#deleteRoom = db.prepare("DELETE FROM media WHERE room = ?");
     this.#deleteOne = db.prepare("DELETE FROM media WHERE room = ? AND hash = ?");
@@ -256,12 +294,12 @@ export class MediaStore {
     if (!AUDIENCES.includes(audience)) return refuse("media_bad_offer");
     if (!this.uploadsEnabled(room)) return refuse("media_disabled");
     if (!this.#rate.take(`${room}\u0000${uploader}`)) return refuse("media_rate_limited");
-    if (typeof mime !== "string" || !(isImageMime(mime) || isAudioMime(mime) || (mime === CARD_JSON_MIME && audience !== "room"))) {
-      return refuse("media_bad_mime");
-    }
+    const save = offer.save === true;
+    if (save && audience !== "admin") return refuse("media_bad_offer");
+    if (typeof mime !== "string" || !isMemberMime(mime, audience, save)) return refuse("media_bad_mime");
     if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) return refuse("media_bad_offer");
     if (typeof offer.name !== "string") return refuse("media_bad_offer");
-    const family = quotaFamily(mime);
+    const family: QuotaFamily = save ? "save" : quotaFamily(mime);
     if (size > this.#limits[family].maxFileBytes) return refuse("media_too_large");
     if (typeof hash !== "string" || !HASH_RE.test(hash)) return refuse("media_bad_hash");
 
@@ -285,6 +323,7 @@ export class MediaStore {
       name: safeName(offer.name),
       mime,
       audience,
+      family,
       size,
       hash,
       expiresAt: now + this.#limits.pendingUploadTtlMs,
@@ -313,6 +352,7 @@ export class MediaStore {
       name: pending.name,
       uploader: pending.uploader,
       audience: pending.audience,
+      family: pending.family,
       bytes,
       generation: pending.generation,
       byMember: true,
@@ -339,8 +379,9 @@ export class MediaStore {
   /**
    * Index bytes the server made or carries: a generated picture (an image, any audience),
    * a session report (`text/html`, unlisted audiences only — HTML never becomes listed
-   * room media), or an enabled pack's picture or sound (`gateway/packs.ts`). They count
-   * against their family's budget and limits. Not subject to the upload switch or the
+   * room media), a room save (`SAVE_MIME` with `save`, the `admin` audience only), or an
+   * enabled pack's picture or sound (`gateway/packs.ts`). They count against their family's
+   * budget and limits. Not subject to the upload switch or the
    * rate limit, which govern members.
    */
   async registerServerBlob(blob: ServerBlob): Promise<StoreResult> {
@@ -349,11 +390,17 @@ export class MediaStore {
       return refuse("media_bad_offer");
     }
     if (!(["room", "members", "admin"] as const).includes(audience)) return refuse("media_bad_offer");
+    const save = blob.save === true;
+    if (save && audience !== "admin") return refuse("media_bad_offer");
     let stored: StoredMime;
-    if (mime === REPORT_MIME && audience !== "room") stored = REPORT_MIME;
+    if (save) {
+      if (mime !== SAVE_MIME) return refuse("media_bad_mime");
+      stored = SAVE_MIME;
+    } else if (mime === REPORT_MIME && audience !== "room") stored = REPORT_MIME;
     else if (typeof mime === "string" && (isImageMime(mime) || isAudioMime(mime))) stored = mime;
     else return refuse("media_bad_mime");
-    if (bytes.length > this.#limits[quotaFamily(stored)].maxFileBytes) return refuse("media_too_large");
+    const family: QuotaFamily = save ? "save" : quotaFamily(stored);
+    if (bytes.length > this.#limits[family].maxFileBytes) return refuse("media_too_large");
     if (stored !== REPORT_MIME && !matchesSignature(stored, bytes)) {
       return refuse(stored === "image/svg+xml" ? "media_bad_svg" : "media_bad_signature");
     }
@@ -364,6 +411,7 @@ export class MediaStore {
       name: safeName(blob.name),
       uploader: SERVER_UPLOADER,
       audience,
+      family,
       bytes,
       generation: this.#generation(room),
       byMember: false,
@@ -394,7 +442,7 @@ export class MediaStore {
     try {
       if (item.generation !== this.#generation(item.room)) return refuse("media_unknown_upload");
       if (item.byMember && !this.uploadsEnabled(item.room)) return refuse("media_disabled");
-      const family = quotaFamily(item.mime);
+      const family = item.family;
       const size = item.bytes.length;
       let published = false;
       try {
@@ -417,6 +465,7 @@ export class MediaStore {
             uploader: item.uploader,
             createdAt,
             audience: item.audience,
+            family,
           };
           return { ok: true, record, created: true };
         });
@@ -440,8 +489,9 @@ export class MediaStore {
     if (row === null) return undefined;
     const existing = toRecord(row);
     // The same bytes under another audience: answering with that record would publish
-    // an unlisted blob as room media, or quietly change who may see it.
-    if (existing.audience !== item.audience) return refuse("media_bad_upload");
+    // an unlisted blob as room media, or quietly change who may see it. Under another budget
+    // (a card file's bytes offered as a save): it would be a save the save budget never counted.
+    if (existing.audience !== item.audience || existing.family !== item.family) return refuse("media_bad_upload");
     return { ok: true, record: existing, created: false };
   }
 
@@ -472,7 +522,9 @@ export class MediaStore {
 
   /** Bytes the room uses against each budget, unlisted blobs included. */
   usage(room: string): Record<QuotaFamily, number> {
-    return { image: this.#used.get(room, "image")!.total, audio: this.#used.get(room, "audio")!.total };
+    const used = { image: 0, audio: 0, save: 0 };
+    for (const family of QUOTA_FAMILIES) used[family] = this.#used.get(room, family)!.total;
+    return used;
   }
 
   #find(room: string, hash: string, audiences: readonly Audience[]): MediaRecord | undefined {

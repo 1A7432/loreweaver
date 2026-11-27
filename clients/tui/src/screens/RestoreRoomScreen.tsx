@@ -6,12 +6,12 @@ import type { Outcome } from "../adminResult"
 import { ScreenFrame } from "../components/ScreenFrame"
 import { Spinner } from "../components/Spinner"
 import type { Connection } from "../connection"
-import { useSnapshot, viewData } from "../hooks"
+import { useConnectionState, useSnapshot, viewData } from "../hooks"
 import { tt } from "../i18n"
-import { readLocalFile } from "../media"
-import { MAX_SAVE_BYTES, parseSaveFile, SAVE_LIMIT_MB, sizeLabel } from "../save"
+import { readLocalFile, type LocalFile } from "../media"
+import { looksLikeSave, MAX_SAVE_BYTES, SAVE_LIMIT_MB, sizeLabel } from "../save"
 import type { Palette, ThemeName } from "../themes"
-import { transferErrorText } from "../transfer"
+import { percent, transferErrorText } from "../transfer"
 
 export interface RestoreRoomScreenProps {
   connection: Connection
@@ -23,11 +23,9 @@ export interface RestoreRoomScreenProps {
   onRestored: () => void
 }
 
-/** The save file the admin picked, read and checked, waiting for the confirmation. */
+/** The save file the admin picked, read, waiting for the confirmation. */
 interface Picked {
-  readonly name: string
-  readonly size: number
-  readonly bundle: Record<string, unknown>
+  readonly file: LocalFile
 }
 
 type Step = "path" | "confirm" | "sending" | "waiting"
@@ -36,8 +34,11 @@ const CURSOR = "⚄"
 const ROWS = ["cancel", "go"] as const
 
 /**
- * The admin's "Restore the room from a save file": a path, the file read and checked, a plain
- * warning with the file's name and size, and only then `save {op: "import", bundle}`.
+ * The admin's "Restore the room from a save file": a path, the file read, a plain warning with
+ * the file's name and size, and only then the file uploaded over the byte channel
+ * (`media.offer {purpose: "save"}` and its PUT) and `save {op: "import", file}` run with its
+ * hash. The file's inside is the server's to judge; here it only has to start like one JSON
+ * object.
  *
  * An import REPLACES the room, so the server ends every member's connection after it has
  * answered (docs/protocol.md §6.7): this link drops on purpose. The session then goes offline,
@@ -49,6 +50,7 @@ const ROWS = ["cancel", "go"] as const
  */
 export function RestoreRoomScreen({ connection, theme, themeName, locale, onBack, onRestored }: RestoreRoomScreenProps) {
   const snapshot = useSnapshot(connection)
+  const local = useConnectionState(connection)
   const isAdmin = snapshot.welcome?.you.role === "admin"
   const room = snapshot.welcome?.room.id ?? ""
   const online = (viewData(snapshot, "party")?.members ?? []).filter((member) => member.online).length
@@ -83,12 +85,11 @@ export function RestoreRoomScreen({ connection, theme, themeName, locale, onBack
       setOutcome(undefined)
       try {
         const file = await readLocalFile(pathRef.current, "save", MAX_SAVE_BYTES)
-        const parsed = parseSaveFile(file.bytes)
-        if (!parsed.ok) {
-          setOutcome({ ok: false, text: tt(locale, parsed.code === "not_json" ? "restore.notJson" : "restore.notObject", { name: stripControlChars(file.name) }) })
+        if (!looksLikeSave(file.bytes)) {
+          setOutcome({ ok: false, text: tt(locale, "restore.notSave", { name: stripControlChars(file.name) }) })
           return
         }
-        setPicked({ name: file.name, size: file.bytes.length, bundle: parsed.bundle })
+        setPicked({ file })
         setChoice(0)
         setStep("confirm")
       } catch (caught) {
@@ -103,8 +104,17 @@ export function RestoreRoomScreen({ connection, theme, themeName, locale, onBack
       unanswered.current = false
       setOutcome(undefined)
       setStep("sending")
+      let hash: string
+      try {
+        hash = (await connection.upload(picked.file, "save")).hash
+      } catch (caught) {
+        // Refused or broken before the room was touched: the server's words, or ours.
+        setOutcome({ ok: false, text: transferErrorText(caught, locale, SAVE_LIMIT_MB) })
+        setStep("path")
+        return
+      }
       // Quiet: the answer is shown here, not in the game's log lines.
-      const result = await connection.runCommand("save", { op: "import", bundle: picked.bundle }, { quiet: true })
+      const result = await connection.runCommand("save", { op: "import", file: hash }, { quiet: true })
       setPicked(null)
       if (result === null) {
         // The link went down under the request: that is how an import ends a connection when
@@ -194,8 +204,8 @@ export function RestoreRoomScreen({ connection, theme, themeName, locale, onBack
       <>
         <text fg={theme.fumble}>{tt(locale, "restore.confirmTitle")}</text>
         <box flexDirection="column" marginTop={1}>
-          <text fg={theme.fg}>{tt(locale, "restore.file", { name: stripControlChars(picked.name) })}</text>
-          <text fg={theme.fg}>{tt(locale, "restore.size", { size: sizeLabel(picked.size) })}</text>
+          <text fg={theme.fg}>{tt(locale, "restore.file", { name: stripControlChars(picked.file.name) })}</text>
+          <text fg={theme.fg}>{tt(locale, "restore.size", { size: sizeLabel(picked.file.bytes.length) })}</text>
         </box>
         <box marginTop={1}>
           <text fg={theme.fumble}>{tt(locale, "restore.warning")}</text>
@@ -210,7 +220,8 @@ export function RestoreRoomScreen({ connection, theme, themeName, locale, onBack
       </>,
     )
   } else if (step === "sending") {
-    body = panel(<Spinner active label={tt(locale, "restore.working")} color={theme.accent} />)
+    const upload = local.upload
+    body = panel(<Spinner active label={upload !== null ? tt(locale, "restore.sending", { percent: percent(upload.sent, upload.size) }) : tt(locale, "restore.working")} color={theme.accent} />)
   } else if (step === "waiting") {
     body = panel(
       <>

@@ -634,7 +634,8 @@ export class Store {
         version: ROOM_BUNDLE_VERSION,
         turn: record.turn,
         documents: this.#q.docListOrdered.all(room).map((row) => ({ type: row.type, id: row.id, version: row.version, data: row.data, meta: row.meta })),
-        state: this.#q.stateList.all(room).map((row) => ({ key: row.key, value: row.value })),
+        // A key naming a file of this room's media does not travel (`StateKey.outsideBundle`).
+        state: this.#q.stateList.all(room).filter((row) => stateKeyNamed(row.key)?.outsideBundle === undefined).map((row) => ({ key: row.key, value: row.value })),
         modules: this.#q.moduleList.all(room).map((row) => ({ module: row.module, snapshot: row.snapshot })),
         events: this.#q.eventsAll.all(room).map((row) => {
           const event = { id: row.id, ts: row.ts, kind: row.kind, data: JSON.parse(row.data) as unknown };

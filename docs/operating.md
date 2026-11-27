@@ -253,11 +253,14 @@ directory the server was started in. A server started by *Host locally & play* k
 The dependable backup is the blunt one: stop the server, copy the whole data directory, start it
 again.
 
-A room can also be exported as one bundle: `.save` (or `.save export`; `Ctrl+Shift+S` in the terminal
-client) answers the admin who asked with the whole room — and nobody else, because it holds every
-secret of the room. `.save import <bundle>` replaces the room with a bundle; every member's
-connection then ends and comes back to the room as it now is. The terminal client does not write an
-exported bundle to a file yet, so for now take the copy of the data directory.
+A room can also be saved as one file. `.save` (`Ctrl+Shift+S` in the terminal client, or *Save the
+room to a file* in its menu) stores the whole room on the server as a file only admins can fetch,
+and the client downloads it to `~/.loreweaver/saves` — a private file, because it holds every secret
+of the room. *Restore the room from a save file* uploads a save and replaces the room with it; every
+member's connection then ends and comes back to the room as it now is. A save holds the room's
+documents, state and log, **not its files**: pictures shared at the table, uploaded sounds and report
+pages are not in it, and a restore removes the ones the room had. The copy of the data directory is
+the only backup that holds everything.
 
 ### Undo and reset — starting over without re-provisioning
 

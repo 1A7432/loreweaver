@@ -94,8 +94,11 @@ export interface Transport {
   start(onValue: (value: unknown) => void, onEnd: (reason: string) => void): void
   /** Close the connection and its endpoint. `onEnd` is NOT called for a close asked for here. */
   close(): void
-  /** GET a file by its content hash on a byte stream of its own. Rejects with a `ByteError`. */
-  fetch(hash: string): Promise<FetchedFile>
+  /**
+   * GET a file by its content hash on a byte stream of its own; a body over `maxBytes` (default
+   * the connection's own cap) is refused. Rejects with a `ByteError`.
+   */
+  fetch(hash: string, maxBytes?: number): Promise<FetchedFile>
   /** PUT the bytes of an accepted offer; resolves with the server's receipt. Rejects with a `ByteError`. */
   put(uploadId: string, bytes: Uint8Array, onProgress?: (sent: number) => void): Promise<ByteFile>
 }
@@ -105,8 +108,10 @@ export interface Transport {
 /** The most asked of one read, and the most written in one write. */
 export const BYTE_CHUNK = 64 * 1024
 /**
- * The largest body this client accepts from a GET, whatever the header declares: the largest file
- * the server stores (an audio file). A header promising more is refused before anything is kept.
+ * The largest body this client accepts from a GET of room media, whatever the header declares:
+ * the largest picture or sound the server stores (an audio file). A header promising more is
+ * refused before anything is kept. A room save, which may be larger, is fetched with its own cap
+ * (`save.ts`).
  */
 export const MAX_FETCH_BYTES = 128 * 1024 * 1024
 
@@ -377,9 +382,9 @@ export class ControlStream implements Transport {
     })
   }
 
-  fetch(hash: string): Promise<FetchedFile> {
+  fetch(hash: string, maxBytes?: number): Promise<FetchedFile> {
     if (!isContentHash(hash)) return Promise.reject(new ByteError("bad_hash"))
-    return this.#withStream((stream) => byteGet(stream, hash, this.#byteOptions))
+    return this.#withStream((stream) => byteGet(stream, hash, { ...this.#byteOptions, ...(maxBytes === undefined ? {} : { maxBytes }) }))
   }
 
   put(uploadId: string, bytes: Uint8Array, onProgress?: (sent: number) => void): Promise<ByteFile> {

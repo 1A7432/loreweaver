@@ -14,7 +14,7 @@ import {
   type EventFrame,
   type Result,
   type ServerFrame,
-  type SessionOptions, PAGE_LIMIT } from "loreweaver-protocol/v3";
+  type SessionOptions, MAX_LINE_BYTES, PAGE_LIMIT } from "loreweaver-protocol/v3";
 
 import { createHash } from "node:crypto";
 
@@ -92,15 +92,28 @@ class Player {
 
   /**
    * A PUT on a byte stream of the current connection (the byte channel beside the control
-   * stream): the header line, the body, the end of the stream. The server's answer line.
+   * stream): the header line, the body in reads no larger than the server asks for, the end of
+   * the stream. The server's answer line.
    */
   async put(uploadId: string, bytes: Uint8Array): Promise<unknown> {
     const server = this.#server;
     if (server === null) throw new Error("not connected");
-    const queue = [encodeByteLine({ op: "put", upload_id: uploadId }), bytes];
+    const header = encodeByteLine({ op: "put", upload_id: uploadId });
+    let sentHeader = false;
+    let at = 0;
+    const read = (max: number): Promise<Uint8Array | null> => {
+      if (!sentHeader) {
+        sentHeader = true;
+        return Promise.resolve(header);
+      }
+      if (at >= bytes.length) return Promise.resolve(null);
+      const chunk = bytes.subarray(at, at + max);
+      at += chunk.length;
+      return Promise.resolve(chunk);
+    };
     const out: Uint8Array[] = [];
     await new ByteChannel(() => server.byteAccess(), () => "en").serve(
-      { read: () => Promise.resolve(queue.shift() ?? null), stop: () => undefined },
+      { read, stop: () => undefined },
       {
         write: (chunk) => {
           out.push(chunk.slice());
@@ -570,7 +583,7 @@ test("a page over the protocol's limit is refused, not cut to it", async () => {
 // `reset`, which a client applies by clearing the very log it should load). The members'
 // connections are ended instead, and each comes back as after any dropped link.
 test("an import sends every member back to reconnect, and they come back holding the imported room", async () => {
-  const b = setup();
+  const b = setup({ media: true });
   const ada = await join(b, KEYS.ada);
   const root = await join(b, KEYS.root);
   await done(b, ada.session.input("one"));
@@ -579,12 +592,17 @@ test("an import sends every member back to reconnect, and they come back holding
   await done(b, root.session.runCommand("undo", {}));
   const saved = await done(b, root.session.runCommand("save", { op: "export" }));
   if (!saved.ok) throw new Error("export refused");
+  const file = (saved.data as { media: { hash: string; size: number } }).media;
+  const fetched = await done(b, root.get(file.hash));
+  // The same room offers its own export back: the bytes are already there, nothing travels.
+  const offered = await done(b, root.session.call("media.offer", { name: "room.json", mime: "application/json", size: file.size, sha256: createHash("sha256").update(fetched.body).digest("hex"), purpose: "save" }));
+  expect(offered).toMatchObject({ ok: true, data: { existing: { hash: file.hash } } });
   const before = serverLog(b).length;
   expect(b.store.eventsAfter(ROOM, 0, 10_000).some((event) => event.kind === "rewind")).toBe(true);
   await done(b, ada.session.input("after the save"));
 
   // The admin who imports is answered first; then every member's link goes.
-  expect(await done(b, root.session.runCommand("save", { op: "import", bundle: saved.data }))).toMatchObject({ ok: true });
+  expect(await done(b, root.session.runCommand("save", { op: "import", file: file.hash }))).toMatchObject({ ok: true });
   await settle(b);
   for (const player of [ada, root]) {
     expect(player.session.status).toBe("offline");
@@ -608,6 +626,68 @@ test("an import sends every member back to reconnect, and they come back holding
     expect(snapshot.welcome?.first).toBe(stored[0]?.seq);
   }
   expect(narratives(ada).map(([, text]) => text)).toEqual(["one", "Reply 1"]);
+});
+
+/** A room's content as `exportRoom` gives it, without what belongs to the room it lives in (event numbers are not in it). */
+function content(b: RoomBench): unknown {
+  const bundle = b.store.exportRoom(ROOM);
+  return { turn: bundle.turn, documents: bundle.documents, state: bundle.state, modules: bundle.modules, events: bundle.events };
+}
+
+// A save no longer travels in a control-stream line: a room larger than `MAX_LINE_BYTES`
+// goes out as a file fetched over the byte channel and comes back as an upload.
+test("a save larger than a control-stream line goes out over the byte channel and comes back as an upload into another server, whole", async () => {
+  const from = setup({ media: true });
+  // Over 8 MiB of log: narratives each within what a client accepts of one text.
+  const writer = from.store.beginTurn(ROOM);
+  for (let index = 0; index < 48; index++) {
+    const text = `${index}:${"灯".repeat(10)}${String(index % 10).repeat(180_000)}`;
+    writer.appendEvent({ id: `big-${index}`, ts: 1_764_240_000_000 + index, kind: "narrative", turn: writer.turn, data: { speaker: "kp", text, format: "plain" } });
+  }
+  const root = await join(from, KEYS.root);
+  const before = content(from);
+
+  const saved = await done(from, root.session.runCommand("save", { op: "export" }));
+  if (!saved.ok) throw new Error(saved.error.code);
+  const file = (saved.data as { media: { hash: string; mime: string; size: number; name: string } }).media;
+  expect(file.size).toBeGreaterThan(MAX_LINE_BYTES);
+  expect(file.mime).toBe("application/json");
+  // The answer is a reference, not the room: it fits a line with room to spare.
+  expect(JSON.stringify(saved).length).toBeLessThan(2048);
+  const fetched = await done(from, root.get(file.hash));
+  expect(fetched.head).toMatchObject({ op: "get", ok: true, hash: file.hash, size: file.size, mime: "application/json" });
+  expect(fetched.body.length).toBe(file.size);
+  const sha256 = createHash("sha256").update(fetched.body).digest("hex");
+  expect(sha256).toBe(file.hash);
+  // A player on the same server cannot fetch it.
+  const ada = await join(from, KEYS.ada);
+  expect((await done(from, ada.get(file.hash))).head).toMatchObject({ ok: false, code: "media_not_found" });
+
+  // Another server: the admin offers the file as a save, sends the bytes, and imports it.
+  const to = setup({ media: true });
+  const admin = await join(to, KEYS.root);
+  const offered = await done(to, admin.session.call("media.offer", { name: file.name, mime: "application/json", size: fetched.body.length, sha256, purpose: "save" }));
+  if (!offered.ok) throw new Error(offered.error.code);
+  const uploadId = (offered.data as { upload_id: string }).upload_id;
+  expect(await done(to, admin.put(uploadId, fetched.body))).toMatchObject({ op: "put", ok: true, hash: sha256, size: fetched.body.length, mime: "application/json" });
+  // Nobody heard of the upload, and no player can fetch it.
+  expect(admin.session.getSnapshot().events).toEqual([]);
+  const bao = await join(to, KEYS.bao);
+  expect((await done(to, bao.get(sha256))).head).toMatchObject({ ok: false, code: "media_not_found" });
+
+  expect(await done(to, admin.session.runCommand("save", { op: "import", file: sha256 }))).toMatchObject({ ok: true, data: { turn: writer.turn } });
+  await settle(to);
+  expect(admin.session.status).toBe("offline");
+  expect(content(to)).toEqual(before);
+  // The upload was read and removed.
+  expect(to.media?.find(ROOM, sha256, "admin")).toBeUndefined();
+
+  // Back on the restored room, the client holds the server's log.
+  admin.connect();
+  await settle(to);
+  expect(admin.session.status).toBe("online");
+  expect(admin.session.getSnapshot().events as unknown[]).toEqual(serverLog(to));
+  expect(admin.session.droppedFrames).toBe(0);
 });
 
 test("a member who connects in the middle of a turn is told one is running; the turn says busy once", async () => {

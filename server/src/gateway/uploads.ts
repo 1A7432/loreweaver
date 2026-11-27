@@ -1,5 +1,5 @@
 // Members' files, as the gateway sees them: an offer, the bytes that follow it, a fetch, the
-// room's upload switch — and which import files each member brought.
+// room's upload switch — and which import and save files each member brought.
 //
 // The media store decides everything about bytes (types, sizes, quotas, the rate, the
 // signatures, who may fetch what). This layer adds only what the store cannot know: what an
@@ -11,17 +11,22 @@
 // only a file its caller uploaded. An `audio` upload is a sound for the room's audio library:
 // an admin's only, sounds only, stored unlisted under `members` (every member must be able
 // to fetch what plays), announced to nobody — the room puts it in the library
-// (`gateway/audio.ts`) and the `audio` view shows it.
+// (`gateway/audio.ts`) and the `audio` view shows it. A `save` upload is a room save for
+// `save import`: an admin's only, JSON only, stored under the `admin` audience and against the
+// save budget, announced to nobody, and remembered per member as an import file is — a save
+// holds every secret of a room, so no player may ever fetch one or confirm one from its hash.
 import type { MediaData, Role, UploadPurpose } from "loreweaver-protocol/v3";
 
-import { CARD_JSON_MIME, isAudioMime, type Audience, type MediaRecord, type MediaStore } from "../infra/media/index.ts";
+import { CARD_JSON_MIME, isAudioMime, SAVE_MIME, type Audience, type MediaRecord, type MediaStore } from "../infra/media/index.ts";
 import { AUDIO_AUDIENCE } from "./audio.ts";
 
 /** Who may fetch an import file: the room's admins (and the server, reading it for `import`). */
 export const IMPORT_AUDIENCE: Audience = "admin";
 /** What a card file may be: a PNG with the card embedded, or the card as JSON. */
 export const IMPORT_MIMES: readonly string[] = ["image/png", CARD_JSON_MIME];
-/** Import files remembered per member (newest kept); an older one must be offered again. */
+/** Who may fetch a save file: the room's admins (and the server, reading it for `save import`). */
+export const SAVE_AUDIENCE: Audience = "admin";
+/** Import and save files remembered per member (newest kept); an older one must be offered again. */
 export const MAX_IMPORT_CLAIMS_PER_MEMBER = 16;
 /** Members whose import files are remembered at once, across rooms (oldest forgotten first). */
 export const MAX_IMPORT_CLAIM_MEMBERS = 4096;
@@ -91,11 +96,24 @@ export class Uploads {
       if (!IMPORT_MIMES.includes(offer.mime)) return { ok: false, code: "media_bad_mime" };
       // Bytes this member may already see (or brought before) need not travel again; a copy
       // they may not see is never confirmed from its hash — they send the bytes, and the
-      // store settles it.
-      const seen = this.media.find(room, offer.sha256, member.role) ?? this.#ownImport(room, member.id, offer.sha256);
-      if (seen !== undefined && this.media.uploadsEnabled(room)) {
+      // store settles it. A save is never a card file.
+      const seen = this.media.find(room, offer.sha256, member.role) ?? this.#own(room, member.id, offer.sha256);
+      if (seen !== undefined && seen.family !== "save" && this.media.uploadsEnabled(room)) {
         this.#claim(room, member.id, seen.hash);
         return { ok: true, kind: "existing", record: seen, share: false, audio: false };
+      }
+    }
+    if (offer.purpose === "save") {
+      // Checked before anything that looks at the bytes: a player learns nothing about which
+      // saves the room holds, not even whether the hash is one.
+      if (member.role !== "admin") return { ok: false, code: "forbidden" };
+      if (offer.mime !== SAVE_MIME) return { ok: false, code: "media_bad_mime" };
+      // A save an admin may already fetch (the room's latest export, another admin's upload)
+      // need not travel again.
+      const held = this.media.find(room, offer.sha256, "admin");
+      if (held !== undefined && held.family === "save" && this.media.uploadsEnabled(room)) {
+        this.#claim(room, member.id, held.hash);
+        return { ok: true, kind: "existing", record: held, share: false, audio: false };
       }
     }
     const begun = this.media.beginUpload({
@@ -105,7 +123,8 @@ export class Uploads {
       mime: offer.mime,
       size: offer.size,
       sha256: offer.sha256,
-      audience: offer.purpose === "import" ? IMPORT_AUDIENCE : offer.purpose === "audio" ? AUDIO_AUDIENCE : "room",
+      audience: offer.purpose === "import" ? IMPORT_AUDIENCE : offer.purpose === "save" ? SAVE_AUDIENCE : offer.purpose === "audio" ? AUDIO_AUDIENCE : "room",
+      save: offer.purpose === "save",
     });
     if (!begun.ok) return begun;
     if (begun.kind === "existing") return { ok: true, kind: "existing", record: begun.record, share: true, audio: false };
@@ -128,7 +147,8 @@ export class Uploads {
     if (!stored.ok) return stored;
     const record = stored.record;
     if (record.room !== room) return { ok: false, code: "media_unknown_upload" };
-    if (record.audience === IMPORT_AUDIENCE) this.#claim(room, member.id, record.hash);
+    // Import and save files alike (both `admin`): the member who brought one may use it.
+    if (record.audience === IMPORT_AUDIENCE || record.audience === SAVE_AUDIENCE) this.#claim(room, member.id, record.hash);
     // Only an admin's audio upload is stored under `members` by a member (a pack's files are the server's).
     return { ok: true, record, share: record.audience === "room", audio: record.audience === AUDIO_AUDIENCE };
   }
@@ -143,14 +163,27 @@ export class Uploads {
    * hash); undefined otherwise — a hash the room does not hold and one somebody else brought
    * give the same answer.
    */
-  async importFile(room: string, memberId: string, hash: string): Promise<{ record: MediaRecord; bytes: Uint8Array } | undefined> {
+  importFile(room: string, memberId: string, hash: string): Promise<{ record: MediaRecord; bytes: Uint8Array } | undefined> {
+    return this.#brought(room, memberId, hash, false);
+  }
+
+  /**
+   * The bytes of a save file `member` brought (`purpose: "save"`: an upload, or an offer they
+   * made with that hash); undefined otherwise, with the same one answer as `importFile`.
+   */
+  saveFile(room: string, memberId: string, hash: string): Promise<{ record: MediaRecord; bytes: Uint8Array } | undefined> {
+    return this.#brought(room, memberId, hash, true);
+  }
+
+  async #brought(room: string, memberId: string, hash: string, save: boolean): Promise<{ record: MediaRecord; bytes: Uint8Array } | undefined> {
     const claimed = this.#claims.get(this.#key(room, memberId))?.includes(hash) === true;
     const record = this.media.find(room, hash, "admin");
-    if (record === undefined || !(claimed || (record.audience === IMPORT_AUDIENCE && record.uploader === memberId))) return undefined;
+    if (record === undefined || (record.family === "save") !== save) return undefined;
+    if (!(claimed || (record.audience === IMPORT_AUDIENCE && record.uploader === memberId))) return undefined;
     return this.media.read(room, hash, "admin");
   }
 
-  #ownImport(room: string, memberId: string, hash: string): MediaRecord | undefined {
+  #own(room: string, memberId: string, hash: string): MediaRecord | undefined {
     const record = this.media.find(room, hash, "admin");
     return record !== undefined && record.audience === IMPORT_AUDIENCE && record.uploader === memberId ? record : undefined;
   }

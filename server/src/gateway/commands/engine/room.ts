@@ -1,6 +1,6 @@
-// Running the room: `undo`, `reset` (armed, then confirmed), `save` (export and import of
-// the whole room), `language`, `rule` (the rule system and its house-rule variant), `bot` (mute the Keeper),
-// and `help` (the commands view as text).
+// Running the room: `undo`, `reset` (armed, then confirmed), `language`, `rule` (the rule
+// system and its house-rule variant), `bot` (mute the Keeper), and `help` (the commands view
+// as text). `save` (export and import of the whole room) is in `save.ts`.
 //
 // Undo, reset and import move the room's generation: the command's own writer is void
 // afterwards, so they say so in their outcome (`lifecycle`) for the gateway, which
@@ -10,7 +10,7 @@ import { LifecycleError } from "../../../infra/lifecycle/errors.ts";
 import { isResetScope, type ResetScope } from "../../../infra/lifecycle/declarations.ts";
 import { translate } from "../../../infra/i18n.ts";
 import { COMMANDS_CATALOG } from "../catalog.ts";
-import { compact, integer, object, oneOf, type ObjectSchema, text, BOOLEAN } from "../schema.ts";
+import { compact, integer, object, oneOf, text, BOOLEAN } from "../schema.ts";
 import { firstWord, parseInteger } from "../parse.ts";
 import { KEEPER_MUTED, ROOM_LOCALE, ROOM_LOCALES, ROOM_RULE_PACK, ROOM_RULE_VARIANT } from "../state.ts";
 import { documentCatalogOf } from "../support.ts";
@@ -56,7 +56,8 @@ export class ResetGate {
   }
 }
 
-function lifecycleRefusal(error: unknown, call: CommandCall): Refused {
+/** A lifecycle operation's refusal as the command states it; anything else is thrown on. */
+export function lifecycleRefusal(error: unknown, call: CommandCall): Refused {
   if (error instanceof LifecycleError) {
     if (error.code === "undo_beyond_depth") return refuse("undo_beyond_depth", { depth: call.context.services.store.undoDepth });
     if (error.code === "invalid_bundle") return refuse("bad_bundle", { path: error.path });
@@ -153,51 +154,6 @@ export function resetCommand(gate: ResetGate): CommandSpec {
     },
   };
 }
-
-const ANY_OBJECT: ObjectSchema = { type: "object", properties: {}, additionalProperties: true };
-
-export const saveCommand: CommandSpec = {
-  id: "save",
-  source: "engine",
-  key: "save",
-  params: object({ op: oneOf(["export", "import"]), bundle: ANY_OBJECT }, ["op"]),
-  text: { en: ["save"], zh: ["save", "存档", "存檔"] },
-  role: "admin",
-  danger: true,
-  lifecycle: true,
-  parseText(rest) {
-    const [word, after] = firstWord(rest);
-    if (word === "" || word === "export") return { op: "export" };
-    if (word !== "import") return refuse("usage");
-    if (after === "") return refuse("missing_arg", { path: "bundle" });
-    try {
-      return { op: "import", bundle: JSON.parse(after) as unknown };
-    } catch {
-      return refuse("bad_bundle", { path: "" });
-    }
-  },
-  run(call, args): Done | Refused {
-    const store = call.context.services.store;
-    const room = call.context.room;
-    if (args.op === "export") {
-      const bundle = store.exportRoom(room);
-      // The bundle is the caller's: it holds every secret of the room, so it is never an event.
-      return { text: call.say("save.exported", { documents: bundle.documents.length, events: bundle.events.length }), data: bundle };
-    }
-    if (args.bundle === undefined) return refuse("missing_arg", { path: "bundle" });
-    let result;
-    try {
-      result = store.importRoom(room, args.bundle, documentCatalogOf(call.context.services));
-    } catch (error) {
-      return lifecycleRefusal(error, call);
-    }
-    return {
-      text: call.say("save.imported", { turn: result.turn }),
-      data: { epoch: result.epoch, turn: result.turn },
-      lifecycle: { kind: "import", epoch: result.epoch, turn: result.turn },
-    };
-  },
-};
 
 const LANGUAGE_WORDS: ReadonlyMap<string, string> = new Map([
   ["en", "en"],

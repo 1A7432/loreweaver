@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { readdirSync } from "node:fs"
 import { mkdtemp, readdir, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -20,10 +21,22 @@ afterEach(() => {
 
 const SECRET = "SENTINEL-the-well-hides-the-cult-9d41b7"
 const BUNDLE = { format: "loreweaver-room", version: 1, turn: 4, documents: [{ type: "lore", id: "l1", version: 1, data: JSON.stringify({ title: SECRET }), meta: "{}" }], state: [], modules: [], events: [] }
+const BYTES = new TextEncoder().encode(JSON.stringify(BUNDLE))
+const HASH = createHash("sha256").update(BYTES).digest("hex")
+
+/** The server stores the room as a file and answers `save` export with its reference, as the real one does. */
+function exportsRoom(server: FakeServer, bytes: Uint8Array = BYTES, hash: string = HASH): void {
+  server.files.set(hash, { bytes, mime: "application/json", name: "save-arkham-20261127-101500.json", purpose: "save" })
+  server.onCall = (method, params) =>
+    method === "command.run" && params.id === "save"
+      ? { ok: true, text: "Exported the room: 1 documents, 0 log entries.", data: { documents: 1, events: 0, media: { hash, mime: "application/json", size: bytes.length, name: "save-arkham-20261127-101500.json" } } }
+      : { ok: true }
+}
 
 async function open(server: FakeServer, role: Role = "admin") {
   server.role = role
-  const connection = server.connect()
+  const cache = await mkdtemp(join(tmpdir(), "lw-cache-"))
+  const connection = server.connect({ mediaCacheDir: cache })
   connections.push(connection)
   await connection.start()
   await waitFor("the welcome", () => connection.session.status === "online")
@@ -34,17 +47,16 @@ async function open(server: FakeServer, role: Role = "admin") {
   )
   harnesses.push(harness)
   const screen = (what: string, has: (frame: string) => boolean) => waitForScreen(harness, what, has)
-  return { connection, harness, screen, dir, back: () => back }
+  return { connection, harness, screen, dir, cache, back: () => back }
 }
 
 describe("SaveRoomScreen", () => {
-  test("Enter saves the room to a private file and tells the path; the bundle is in the file and nowhere else", async () => {
+  test("Enter saves the room to a private file and tells the path; the file is fetched over the byte channel and is nowhere else", async () => {
     const server = new FakeServer({ role: "admin", room: "arkham" })
-    server.onCall = (method, params) =>
-      method === "command.run" && params.id === "save" ? { ok: true, text: "Exported the room: 1 documents, 0 log entries.", data: BUNDLE } : { ok: true }
+    exportsRoom(server)
     const output = captureConsole()
     try {
-      const { harness, screen, dir, connection } = await open(server)
+      const { harness, screen, dir, cache, connection } = await open(server)
       await screen("the screen", (text) => text.includes("Save the room to a file") && text.includes("Save now"))
       harness.mockInput.pressEnter()
       const frame = await screen("the path", (text) => text.includes("Room saved to"))
@@ -57,8 +69,11 @@ describe("SaveRoomScreen", () => {
       // The path itself is on screen (it may wrap): its folder's last part and the file's name.
       expect(frame.replace(/\s+/g, "")).toContain(files[0] as string)
       const written = await readFile(path, "utf8")
-      expect(JSON.parse(written)).toEqual(BUNDLE)
+      expect(new Uint8Array(await readFile(path))).toEqual(BYTES)
       expect(written).toContain(SECRET)
+      // Not in the media cache, which is not private, and not held as a fetched file.
+      expect(await readdir(cache)).toEqual([])
+      expect(connection.getState().fetches.size).toBe(0)
       if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600)
 
       // The secret is in the file and nowhere else: not on screen, not in the local lines, not in
@@ -73,7 +88,7 @@ describe("SaveRoomScreen", () => {
 
   test("a second Enter makes a second file; the first is kept", async () => {
     const server = new FakeServer({ role: "admin" })
-    server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, data: BUNDLE } : { ok: true })
+    exportsRoom(server)
     const { harness, screen, dir } = await open(server)
     harness.mockInput.pressEnter()
     await screen("the first save", (text) => text.includes("Room saved to"))
@@ -94,7 +109,7 @@ describe("SaveRoomScreen", () => {
     expect(connection.getState().lines).toEqual([])
   })
 
-  test("a link that drops under the save says nothing was saved and why a big room can do that", async () => {
+  test("a link that drops under the save says nothing was saved", async () => {
     const server = new FakeServer({ role: "admin" })
     server.onCall = (method, params, transport) => {
       if (method === "command.run" && params.id === "save") transport.drop("line too long")
@@ -102,23 +117,41 @@ describe("SaveRoomScreen", () => {
     }
     const { harness, screen, dir } = await open(server)
     harness.mockInput.pressEnter()
-    const frame = await screen("the words", (text) => text.includes("nothing was saved"))
-    expect(frame).toContain("over 8 MB")
+    await screen("the words", (text) => text.includes("nothing was saved"))
     expect(await readdir(dir).catch(() => [])).toEqual([])
   })
 
-  test("an answer with no room in it is not written as a file", async () => {
+  test("an answer that names no save file, or the room itself (the old shape), is not written as a file", async () => {
+    for (const data of [undefined, BUNDLE]) {
+      const server = new FakeServer({ role: "admin" })
+      server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, text: "Exported", ...(data === undefined ? {} : { data }) } : { ok: true })
+      const { harness, screen, dir } = await open(server)
+      harness.mockInput.pressEnter()
+      await screen("the words", (text) => text.includes("named no save file to fetch"))
+      expect(await readdir(dir).catch(() => [])).toEqual([])
+    }
+  })
+
+  test("a file whose bytes do not match its hash is not written; nor one the server will not hand over", async () => {
     const server = new FakeServer({ role: "admin" })
-    server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, text: "Exported" } : { ok: true })
+    // The server names one hash and sends other bytes under it.
+    exportsRoom(server, new TextEncoder().encode("{\"tampered\":true}"), HASH)
     const { harness, screen, dir } = await open(server)
     harness.mockInput.pressEnter()
-    await screen("the words", (text) => text.includes("held no room to save"))
+    await screen("the words", (text) => text.includes("Could not fetch the save file"))
+    expect(await readdir(dir).catch(() => [])).toEqual([])
+
+    server.files.clear()
+    exportsRoom(server)
+    server.files.clear()
+    harness.mockInput.pressEnter()
+    await screen("the server's refusal", (text) => text.includes("refused: media_not_found"))
     expect(await readdir(dir).catch(() => [])).toEqual([])
   })
 
   test("a folder that cannot be written says so, with the file system's words", async () => {
     const server = new FakeServer({ role: "admin" })
-    server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, data: BUNDLE } : { ok: true })
+    exportsRoom(server)
     const connection = server.connect()
     connections.push(connection)
     await connection.start()

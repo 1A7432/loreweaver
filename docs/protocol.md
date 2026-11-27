@@ -386,7 +386,7 @@ codes a client meets most:
 | `command_failed` | The server failed; nothing was changed. |
 
 Commands add their own (`bad_dice`, `no_character`, `name_taken`, `reset_not_armed`,
-`undo_out_of_range`, `undo_beyond_depth`, `not_uploaded`, `not_a_card`, `last_admin`, …). A code without a
+`undo_out_of_range`, `undo_beyond_depth`, `not_uploaded`, `save_not_uploaded`, `not_a_card`, `last_admin`, …). A code without a
 sentence of its own is stated with a generic message that includes the code. Treat any code you
 do not know as a plain refusal and show `message`.
 
@@ -453,14 +453,30 @@ schema its module declared.
   it out: the table receives one `reset` event ([8.6](#86-reset)) and the caller gets
   `data {scope, epoch}`. A confirm with nothing armed is `reset_not_armed`; one naming another
   scope is `reset_scope_mismatch`.
-- **`save`** (admin): `{"op":"export"}` answers the whole room as a bundle in `data`, to the
-  caller alone (it holds every secret of the room). `{"op":"import","bundle":{…}}` replaces the
-  room with a bundle. An import replaces the room — another log under another numbering —
-  so no event announces it: after answering the admin, the server ENDS the connection of every
-  member of the room (no `error` frame; the link simply closes). Each client redials as after
-  any dropped link; the `welcome` then names a new `epoch`, the client discards the log it
-  held, and the replay hands it the room as it now is. A bundle's own `rewind` and `reset`
-  events are not imported: they are markers of the room's earlier life.
+- **`save`** (admin): the whole room as one file (a bundle, JSON), which travels on the byte
+  channel ([11](#11-the-byte-channel)), never in a frame — a room may be far larger than a line.
+  `{"op":"export"}` stores the bundle as an *unlisted* file of the room that only admins can
+  fetch (it holds every secret of the room) and answers the caller alone with
+  `data {documents, events, media: {hash, mime: "application/json", size, name}}`; the client
+  fetches it by `hash` ([11.3](#113-get)). The room keeps only its latest export: the next one
+  removes it, and a reset of everything or an import clears it — fetch it when it is offered.
+  `{"op":"import","file":"<hash>"}` replaces the room with a save file the caller uploaded with
+  `media.offer {purpose: "save"}` ([11.2](#112-offering-a-file)); `save_not_uploaded` for a hash
+  this admin did not upload (or offer). The file is checked whole before anything changes
+  (`bad_bundle` with the path of the first problem, `undeclared_document_type`, …), and it is
+  removed once read, whether the import is done or refused (except the room's own latest
+  export offered back, which stays) — offer it again to retry. A save holds no files: an import
+  removes every file the room held (shared pictures, uploaded sounds, report pages), so a `media`
+  event of the loaded log may name a file that is no longer there (`media_not_found`). An import
+  replaces the room — another log under another numbering — so no event announces it: after
+  answering the admin, the server ENDS the connection of every member of the room (no `error`
+  frame; the link simply closes). Each client redials as after any dropped link; the `welcome`
+  then names a new `epoch`, the client discards the log it held, and the replay hands it the
+  room as it now is. A bundle's own `rewind` and `reset` events are not imported: they are
+  markers of the room's earlier life. A bundle carries no reference to a file of the room it
+  came from (its latest export, its report pages, the uploaded sounds of its audio library,
+  what was playing): the room it is loaded into holds no such file, and nothing plays in it.
+  On a server that keeps no files, `save` is `no_media`.
 
 ### 6.8 The engine's commands
 
@@ -492,7 +508,7 @@ argument. Text forms are given as English table / Chinese table; with any of the
 | `language` | admin | `language` / `language`, `语言`, `語言` | `locale` (`en`\|`zh`) | Sets the room's language; announced by a `narrative` event in the new language. |
 | `undo` | admin, danger | `undo` / `undo`, `撤销`, `撤銷` | `turns?` (1–64) | Lifecycle ([6.7](#67-room-lifecycle-commands-as-a-client-sees-them)). |
 | `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?` (`story`\|`chars`\|`all`), `confirm?` | Lifecycle; arm, then confirm: without `confirm` the reset is armed for the caller (`data {armed, expiresInMs}` — how long the confirmation has), and the same member's `confirm: true` within that time carries it out. |
-| `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op` (`export`\|`import`), `bundle?` (object) | Lifecycle. |
+| `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op` (`export`\|`import`), `file?` (64 hex: an uploaded save) | Lifecycle; see [6.7](#67-room-lifecycle-commands-as-a-client-sees-them). Refusals: `save_not_uploaded`, `save_not_stored` (the export could not be stored; the message names the media code), `bad_bundle`, `no_media`. Text forms: `save [export]`, `save import <hash>`. |
 | `uploads` | player, observer; `on`: admin | `uploads` / `uploads`, `上传` | `on?` (boolean) | Shows or sets the room's upload switch (`data {on}`, and `text` saying which). The switch governs every upload to the room — a member's share, a card brought for import, an admin's sound for the audio library alike. Available when the server keeps files (`no_media`). |
 | `import` | player; `as: "world"`: admin | `import` / `import`, `导入` | `file?` (a 64-hex content hash), `pack?` (1–64), `card?` (1–512), `as` (`world`\|`character`), `name?` (1–64) | Imports a card file the caller uploaded with `purpose: "import"` ([11.6](#116-importing-a-card)), or a card an enabled pack ships (`pack` and `card`, its path in the pack; `pack_not_enabled`, `card_not_in_pack`). `no_media` without a media store and with no pack installed. As a character: a sheet rolled for the room's rule system and biased toward what the server's model reads from the card's persona, as `genchar` does (sharing its hourly cap); without a model, over the cap, or with an answer it cannot use, the sheet is rolled plainly and `text` says why — `data.concept` is `applied`, `no_model`, `rate_limited`, `model_failed`, `unusable`, `aborted` or `none`. A character import runs without queuing behind the room's turns. |
 | `pack` | player; `enable`, `disable`, `install`: admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op` (`list`\|`enable`\|`disable`\|`install`), `id?` (1–64), `ref?` (1–2000) | `list`: an admin sees every installed pack, a player the room's by name. `enable`/`disable` switch an installed pack in this room (`unknown_pack`, `too_many_packs`, `module_id_taken`); disabling one stops what plays one of its audio cues (an `audio` `stop` signal per layer). `install` (text form `install <ref>`): `ref` a path on the server, an `https://` URL or `gh:owner/repo[@tag]`; installs the pack on the server and enables it here with its skills; `data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`, `text` the trust card in words; one `narrative` system event. It runs without queuing behind the room's turns, and its one result comes when the fetch and install are done. Refusals: `not_https`, `bad_gh_ref`, `source_not_found`, `archive_too_large`, `fetch_failed`, `too_many_redirects`, `no_pack_asset`, `bad_release`, `bad_archive`, `invalid_pack`, `engine_too_old`, `already_installed`, `index_unreadable`, `install_failed`, `install_unavailable`. |
@@ -1140,7 +1156,7 @@ An upload starts on the control stream with `call media.offer`:
 | `mime` | string | The file's type (at most 128 characters). |
 | `size` | integer | Bytes, greater than 0. |
 | `sha256` | string | The lowercase hex SHA-256 of the bytes. |
-| `purpose` | `share` (default), `import` or `audio` | `share`: the file becomes room media and the table sees a `media` event once the bytes arrive. `import`: a card file for the `import` command ([11.6](#116-importing-a-card)), stored where only admins can fetch it, announced to nobody. `audio` (admins only, sounds only): a sound for the room's audio library, fetchable by every member, announced by no event; it joins the `audio` view's library ([10.4](#104-built-in-views)) under its file name without the extension as title. |
+| `purpose` | `share` (default), `import`, `audio` or `save` | `share`: the file becomes room media and the table sees a `media` event once the bytes arrive. `import`: a card file for the `import` command ([11.6](#116-importing-a-card)), stored where only admins can fetch it, announced to nobody. `audio` (admins only, sounds only): a sound for the room's audio library, fetchable by every member, announced by no event; it joins the `audio` view's library ([10.4](#104-built-in-views)) under its file name without the extension as title. `save` (admins only): a room save for `save import` ([6.7](#67-room-lifecycle-commands-as-a-client-sees-them)), stored where only admins can fetch it, announced to nobody. |
 
 A success answers one of:
 
@@ -1150,20 +1166,25 @@ A success answers one of:
   nothing. For a `share`, the file is announced to the table again (a new `media` event, `from`
   the offering member). For an `import`, the file is ready for the `import` command. For an
   `audio`, the sound is in the library (it already was, or the room held these bytes as a file
-  every member may fetch).
+  every member may fetch). For a `save`, the file (the room's latest export, or a save another
+  admin uploaded) is ready for `save import`. An `existing` answer never names a file the
+  offering member could not fetch.
 
 Accepted types: `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml` (a
 restricted subset), `audio/mpeg`, `audio/ogg`, `audio/wav`, `audio/flac`, `audio/mp4`,
 `audio/aac`. For `purpose: "import"` only `image/png` (a card with the data embedded) and
-`application/json`; for `purpose: "audio"` only the `audio/…` types.
+`application/json`; for `purpose: "audio"` only the `audio/…` types; for `purpose: "save"` only
+`application/json` (its bytes must start like one JSON object).
 
 Default limits: an image at most 8 MiB and 512 MiB of images per room; a sound at most
-128 MiB and 2048 MiB of sounds per room (the operator sets these two); 10 offers per member per
+128 MiB and 2048 MiB of sounds per room (the operator sets these two); a save at most 256 MiB
+and 512 MiB of saves per room (the latest export and one upload); 10 offers per member per
 room per minute (a refused offer still spends one); 100 uploaded sounds in a room's audio
-library.
+library. Card files count against the image budget; a save, uploaded or exported, against its
+own. Over a limit is refused (`media_too_large`, `media_quota_exceeded`), never cut.
 
 Refusals: `invalid_params` (a field of the wrong shape), `media_unavailable` (the server keeps
-no files), `observer_upload`, `forbidden` (`audio` from a non-admin), `audio_library_full`,
+no files), `observer_upload`, `forbidden` (`audio` or `save` from a non-admin), `audio_library_full`,
 `media_disabled` (the room's upload switch is off),
 `media_rate_limited`, `media_bad_mime`, `media_bad_offer`, `media_too_large`, `media_bad_hash`,
 `media_quota_exceeded`.
@@ -1177,7 +1198,9 @@ server: {"op":"get","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}
 
 A member can fetch what the room holds under an audience its role may see: room media (shared
 files, staging pictures), the audio library's sounds and the files of the room's enabled packs
-for everyone (what only an admin-only panel names, for admins); import files for admins. A hash in another room, one the
+for everyone (what only an admin-only panel names, for admins); import files, save files (a
+room's export and its uploaded saves) and the report's reveal edition for admins only — the role
+of the connection asking, at the moment it asks. A hash in another room, one the
 role may not see and one nobody holds all answer the same: `media_not_found`.
 
 ### 11.4 PUT
@@ -1284,6 +1307,7 @@ terminal control characters before writing to a terminal: `loreweaver-protocol/v
 | byte stream stall | 30 s | `BYTE_STALL_MS` |
 | `upload_id` | 64 characters | `MAX_UPLOAD_ID_CHARS` |
 | offered file name | 255 code points | `MAX_OFFER_NAME_CHARS` |
+| a save file (export or upload) | 256 MiB; 512 MiB of saves per room | server default |
 | offers | 10 per member per room per minute | server default |
 | reset confirmation window | 60 s | server |
 | model ids in a `model list` answer | 500, each ≤ 200 code points | server |

@@ -243,6 +243,12 @@ describe("GameView", () => {
     const SECRET = "SENTINEL-the-well-hides-the-cult-9d41b7"
     const BUNDLE = { format: "loreweaver-room", version: 1, turn: 4, documents: [{ type: "lore", id: "l1", version: 1, data: JSON.stringify({ title: SECRET }), meta: "{}" }], state: [], modules: [], events: [] }
     const EXPORTED = "Exported the room: 1 documents, 0 log entries."
+    const BYTES = new TextEncoder().encode(JSON.stringify(BUNDLE))
+    const HASH = createHash("sha256").update(BYTES).digest("hex")
+    // What the server answers an export with: the file's reference, never the room itself.
+    const ANSWER = { documents: 1, events: 0, media: { hash: HASH, mime: "application/json", size: BYTES.length, name: "save-arkham.json" } }
+    /** The server holds the export as a file, as the real one does. */
+    const holdsExport = (server: FakeServer) => server.files.set(HASH, { bytes: BYTES, mime: "application/json", name: "save-arkham.json", purpose: "save" })
     // A terminal tells Ctrl+Shift+S from Ctrl+S only through the kitty keyboard protocol, which the app asks for.
     const KITTY = { kittyKeyboard: true }
 
@@ -254,9 +260,10 @@ describe("GameView", () => {
       output,
     ]
 
-    test("Ctrl+Shift+S asks for the export, writes the bundle to a private file and tells the path; the bundle is nowhere else", async () => {
+    test("Ctrl+Shift+S asks for the export, fetches the file it names, writes it privately and tells the path; the room is nowhere else", async () => {
       const server = new FakeServer({ role: "admin" })
-      server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, text: EXPORTED, data: BUNDLE } : { ok: true })
+      holdsExport(server)
+      server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, text: EXPORTED, data: ANSWER } : { ok: true })
       const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
       const output = captureConsole()
       try {
@@ -281,9 +288,10 @@ describe("GameView", () => {
       }
     })
 
-    test("a typed .save ends up as a file too, like a report page, and its bundle stays out of the lines", async () => {
+    test("a typed .save ends up as a file too, like a report page, and the room stays out of the lines", async () => {
       const server = new FakeServer({ role: "admin" })
-      server.onInput = (text) => (text === ".save" ? { ok: true, text: EXPORTED, data: BUNDLE } : { ok: true })
+      holdsExport(server)
+      server.onInput = (text) => (text === ".save" ? { ok: true, text: EXPORTED, data: ANSWER } : { ok: true })
       const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
       const output = captureConsole()
       try {
@@ -304,12 +312,12 @@ describe("GameView", () => {
       }
     })
 
-    test("a command whose answer is not a bundle makes no file: an import's answer, a roll's", async () => {
+    test("a command whose answer names no save file makes no file: an import's answer, a roll's", async () => {
       const server = new FakeServer({ role: "admin" })
       server.onInput = (text) => (text.startsWith(".save import") ? { ok: true, text: "Loaded the bundle.", data: { epoch: 2, turn: 4 } } : { ok: true, text: "Rolled 4.", data: { totals: [4] } })
       const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
       const { harness, screen } = await play(server, { saveDir: dir })
-      await harness.mockInput.typeText(".save import {}")
+      await harness.mockInput.typeText(`.save import ${HASH}`)
       harness.mockInput.pressEnter()
       await screen("the import's line", (text) => text.includes("Loaded the bundle."))
       await harness.mockInput.typeText(".r")
@@ -331,6 +339,7 @@ describe("GameView", () => {
 
     test("a second press while the first export is still coming asks for nothing more", async () => {
       const server = new FakeServer({ role: "admin" })
+      holdsExport(server)
       // The answer is held: the test hands it over when it wants.
       server.onCall = () => null
       const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
@@ -340,7 +349,7 @@ describe("GameView", () => {
       harness.mockInput.pressKey("s", { ctrl: true, shift: true })
       await settle()
       expect(server.current.calls("command.run")).toHaveLength(1)
-      server.current.push({ type: "result", rid: server.current.calls("command.run")[0]?.rid, ok: true, text: EXPORTED, data: BUNDLE })
+      server.current.push({ type: "result", rid: server.current.calls("command.run")[0]?.rid, ok: true, text: EXPORTED, data: ANSWER })
       await screen("the saved line", (text) => text.includes("Room saved to"))
       expect(await readdir(dir)).toHaveLength(1)
     })

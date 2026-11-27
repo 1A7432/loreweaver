@@ -105,7 +105,7 @@ import type { ReactNode } from "react"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 import { createHash } from "node:crypto"
-import { HeaderReader, type ByteFile, type ClientFrame, type EventFrame, type EventKind, type EventPayloads, type Role } from "loreweaver-protocol/v3"
+import { HeaderReader, type ByteFile, type ClientFrame, type EventFrame, type EventKind, type EventPayloads, type Role, type UploadPurpose } from "loreweaver-protocol/v3"
 import { Connection, type ConnectionOptions } from "./connection"
 import { byteGet, bytePut, StreamGate, type ByteStreamLike, type Dialer, type FetchedFile, type Transport } from "./irohLink"
 
@@ -199,12 +199,12 @@ export class FakeTransport implements Transport {
 
   readonly #gate = new StreamGate()
 
-  fetch(hash: string): Promise<FetchedFile> {
+  fetch(hash: string, maxBytes?: number): Promise<FetchedFile> {
     return this.#gate.run(() => {
       if (this.closed) return Promise.reject(new Error("closed"))
       const stream = memoryStream()
       void this.#server.serveBytes(this, stream.toServer, stream.toClient)
-      return byteGet(stream.client, hash, { stallMs: 2000 })
+      return byteGet(stream.client, hash, { stallMs: 2000, ...(maxBytes === undefined ? {} : { maxBytes }) })
     })
   }
 
@@ -265,9 +265,9 @@ export class FakeServer {
   onInput: (text: string, transport: FakeTransport) => Answer | null = () => ({ ok: true })
   onCall: (method: string, params: Record<string, unknown>, transport: FakeTransport) => Answer | null = () => ({ ok: true })
   /** Files the room holds, by hash (what a GET answers). */
-  readonly files = new Map<string, { bytes: Uint8Array; mime: string; name: string; purpose: "share" | "import" | "audio" }>()
+  readonly files = new Map<string, { bytes: Uint8Array; mime: string; name: string; purpose: UploadPurpose }>()
   /** Accepted offers waiting for their bytes. */
-  readonly offers = new Map<string, { name: string; mime: string; size: number; sha256: string; purpose: "share" | "import" | "audio" }>()
+  readonly offers = new Map<string, { name: string; mime: string; size: number; sha256: string; purpose: UploadPurpose }>()
   /** Every `media.offer` received, in order. */
   readonly offered: Record<string, unknown>[] = []
   /** Refuse every offer with this (the upload switch, an observer…). */
@@ -356,7 +356,7 @@ export class FakeServer {
         this.#answer(transport, frame.rid, { ok: false, ...this.refuseOffer })
         return
       }
-      const params = frame.params as { name: string; mime: string; size: number; sha256: string; purpose?: "share" | "import" | "audio" }
+      const params = frame.params as { name: string; mime: string; size: number; sha256: string; purpose?: UploadPurpose }
       const held = this.files.get(params.sha256)
       if (held) {
         const existing = { hash: params.sha256, size: held.bytes.length, mime: held.mime, name: held.name, from: "m1" }

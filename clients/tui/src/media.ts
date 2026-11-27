@@ -152,7 +152,7 @@ export class LocalFileError extends Error {
 
 /**
  * What a person names a file for: a picture to share, a card to import, a sound for the audio
- * library, or a room save to restore (read here, sent as a command argument, never uploaded).
+ * library, or a room save to restore (uploaded with `purpose: "save"`).
  */
 export type UploadKind = "image" | "card" | "audio" | "save"
 

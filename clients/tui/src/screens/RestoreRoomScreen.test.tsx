@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { mkdtemp, truncate, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -77,14 +78,14 @@ describe("RestoreRoomScreen", () => {
     await truncate(join(dir, "big.json"), MAX_SAVE_BYTES + 1)
 
     const refused: Array<[string, string]> = [
-      ["words.json", "not JSON, so it is not a room save: words.json"],
-      ["bytes.json", "not JSON, so it is not a room save: bytes.json"],
-      ["list.json", "not a room save (it must be one JSON object): list.json"],
-      ["number.json", "not a room save (it must be one JSON object): number.json"],
-      ["nothing.json", "not a room save (it must be one JSON object): nothing.json"],
-      ["text.json", "not a room save (it must be one JSON object): text.json"],
+      ["words.json", "not a room save (a save is one JSON object): words.json"],
+      ["bytes.json", "not a room save (a save is one JSON object): bytes.json"],
+      ["list.json", "not a room save (a save is one JSON object): list.json"],
+      ["number.json", "not a room save (a save is one JSON object): number.json"],
+      ["nothing.json", "not a room save (a save is one JSON object): nothing.json"],
+      ["text.json", "not a room save (a save is one JSON object): text.json"],
       ["empty.json", "The file is empty"],
-      ["big.json", "Too large to send (over 8 MB)"],
+      ["big.json", "Too large to send (over 256 MB)"],
       ["gone.json", "No such file"],
     ]
     let previous = ""
@@ -98,6 +99,7 @@ describe("RestoreRoomScreen", () => {
     }
     await settle()
     expect(server.current.calls("command.run")).toHaveLength(0)
+    expect(server.offered).toEqual([])
     harness.mockInput.pressEscape()
   })
 
@@ -136,7 +138,7 @@ describe("RestoreRoomScreen", () => {
     await waitFor("back", () => back() === 1)
   })
 
-  test("confirming sends exactly one save import with the file's bundle, and the drop that follows is a success: the screen leaves for the menu", async () => {
+  test("confirming uploads the file as a save and sends exactly one save import naming it, and the drop that follows is a success: the screen leaves for the menu", async () => {
     const server = new FakeServer({ role: "admin" })
     replacesRoom(server)
     const { harness, screen, submit, dir, imports, connection, restored } = await open(server)
@@ -149,7 +151,12 @@ describe("RestoreRoomScreen", () => {
     harness.mockInput.pressEnter()
 
     await waitFor("the one import", () => imports().length === 1)
-    expect(imports()[0]?.params).toEqual({ id: "save", args: { op: "import", bundle: BUNDLE } })
+    // The file went up over the byte channel, whole, before the import named it.
+    const bytes = new TextEncoder().encode(JSON.stringify(BUNDLE))
+    const hash = createHash("sha256").update(bytes).digest("hex")
+    expect(server.offered).toEqual([{ name: "main.json", mime: "application/json", size: bytes.length, sha256: hash, purpose: "save" }])
+    expect(server.files.get(hash)?.bytes).toEqual(bytes)
+    expect(imports()[0]?.params).toEqual({ id: "save", args: { op: "import", file: hash } })
     // The link was ended by the server; the connection owner redials by itself, and the new
     // welcome names another generation: the screen is done.
     await waitFor("the screen leaves", () => restored() === 1)
@@ -204,6 +211,24 @@ describe("RestoreRoomScreen", () => {
     await waitFor("the screen leaves", () => restored() === 1)
     expect(connection.session.getSnapshot().epoch).toBe(2)
     expect(attempt).toBe(2)
+  })
+
+  test("an upload the server refuses is shown in its words, and no import is sent", async () => {
+    const server = new FakeServer({ role: "admin" })
+    server.refuseOffer = { code: "media_too_large", message: "That file is too large for this server." }
+    const { harness, screen, submit, dir, imports, restored } = await open(server)
+    await writeFile(join(dir, "main.json"), JSON.stringify(BUNDLE))
+    await submit("main.json")
+    await screen("the confirmation", (text) => text.includes("Replace the room with this save?"))
+    harness.mockInput.pressArrow("down")
+    await pump()
+    await harness.flush()
+    harness.mockInput.pressEnter()
+    const frame = await screen("the refusal", (text) => text.includes("That file is too large for this server."))
+    expect(frame).toContain("Save file")
+    await settle()
+    expect(imports()).toHaveLength(0)
+    expect(restored()).toBe(0)
   })
 
   test("the server's refusal is shown in its own words and the room is untouched", async () => {

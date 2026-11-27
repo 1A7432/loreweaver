@@ -114,6 +114,7 @@ function isPlaying(value: unknown): value is AudioPlaying {
 /** What each stateful layer is playing. See the file header for its lifecycle. */
 export const AUDIO_PLAYING: StateKey<AudioPlaying> = jsonStateKey("audio.playing", { reset: "all" }, isPlaying, {
   keptOnUndo: "what is playing is the table's present, not the story's past: an undo sends no audio signal, so the state must stay what the clients hear",
+  outsideBundle: "what plays may be an uploaded sound, a file of this room's media, which an import clears: a loaded room starts silent",
 });
 
 /** What the room is playing now; an unreadable value reads as nothing. */

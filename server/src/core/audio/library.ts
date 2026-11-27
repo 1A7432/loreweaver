@@ -101,6 +101,7 @@ function isLibrary(value: unknown): value is UploadedSound[] {
 /** The room's uploaded sounds, oldest first. See the file header for the lifecycle. */
 export const AUDIO_LIBRARY: StateKey<UploadedSound[]> = jsonStateKey("audio.library", { reset: "all" }, isLibrary, {
   keptOnUndo: "an upload belongs to no turn, and its bytes in the media store are not rewound: the entry naming them must stay with them",
+  outsideBundle: "it names files of this room's media, which an import clears: the loaded room does not hold them",
 });
 
 /** The id of a pack's cue in the library. */
