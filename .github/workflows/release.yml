@@ -88,12 +88,13 @@ jobs:
             platform: macos-arm64
           - os: windows-latest
             platform: windows-x64
+            exe: .exe
     defaults:
       run:
         shell: bash
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      EXE: ${{ runner.os == 'Windows' && '.exe' || '' }}
+      EXE: ${{ matrix.exe }}
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
