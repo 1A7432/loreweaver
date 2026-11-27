@@ -265,7 +265,7 @@ export class TurnCatalog {
     }
     const decoded = decodeArgs(tool.params, normalizeToolInput(call.name, call.input));
     if (!decoded.ok) return refusal(call.name, "bad_arguments", `Invalid arguments for tool ${call.name}: ${decoded.error}`);
-    const turn: ToolTurn = { ledger, deps: this.#deps, commands: this.#commands };
+    const turn: ToolTurn = { ledger, deps: this.#deps, commands: this.#commands, tools: [...this.#tools.keys()] };
     const keeperOnly = tool.flags.keeperOnly === true;
     try {
       const result = await tool.run(context, decoded.args, turn);

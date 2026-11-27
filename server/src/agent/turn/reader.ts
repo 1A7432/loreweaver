@@ -74,6 +74,7 @@ import type { Whisper } from "../lanes/scribe.ts";
 import type { ClockInfo } from "../modules.ts";
 import type { KeeperPromptSnapshot, ModuleCommandLine, PartyMember, PastExchange, PlayerAction } from "../prompt/index.ts";
 import { turnText } from "./catalog.ts";
+import { commandSignature } from "./command_signature.ts";
 
 /** Events read per page while walking the log back. */
 export const HISTORY_PAGE_EVENTS = 256;
@@ -339,7 +340,7 @@ function party(services: Services, room: string, viewer: Viewer, moduleCharacter
     // shown the name and the meters the module gave. (No sheet stands behind it.)
     const kept = findModuleCharacter(moduleCharacters, seat.character);
     if (kept !== null) {
-      members.push({ name: kept.name, resources: kept.resources.map((meter) => ({ label: meter.label, value: meter.value, max: meter.max })), status: [] });
+      members.push({ name: kept.name, resources: kept.resources.map((meter) => ({ label: meter.label, value: meter.value, max: meter.max })), status: kept.status });
       continue;
     }
     const document = services.documents.get(room, CHARACTER_TYPE, seat.character);
@@ -427,8 +428,8 @@ export function readKeeperSnapshot(context: RoomContext, parts: SnapshotParts): 
   };
 }
 
-/** A module command's line in the prompt: its id and the first line of its description. */
-export function commandLine(id: string, description: string): ModuleCommandLine {
+/** A module command's line in the prompt: its id, its arguments when they are few and plain, and the first line of its description. */
+export function commandLine(id: string, description: string, params: unknown): ModuleCommandLine {
   const first = description.split(/\r?\n/u).find((line) => line.trim() !== "")?.trim() ?? "";
-  return { id, summary: first };
+  return { id, summary: first, signature: commandSignature(params) };
 }

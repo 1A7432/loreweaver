@@ -268,6 +268,11 @@ describe("module commands", () => {
     const refusing = room.catalog({ commands: [{ module: "camp", info: rest }], deps: { runCommand: async () => ({ status: "refused", reason: "unavailable", text: "Not while enemies are near.", problems: [], events: [] }) } });
     expect((await room.call(refusing, "run_command", { id: "camp/sleep" })).code).toBe("unknown_command");
     expect((await room.call(refusing, "lookup_command", { id: "nope" })).code).toBe("unknown_command");
+    // One of the Keeper's own tools, asked for as a module's command: the refusal says whose it is.
+    const own = await room.call(refusing, "run_command", { id: "camp/kp_note", args: { action: "list" } });
+    expect([own.code, own.text]).toEqual(["unknown_command", '"kp_note" is one of your own tools, not a module command: call kp_note directly, with its own arguments. This room\'s commands: camp/rest.']);
+    expect((await room.call(refusing, "lookup_command", { id: "kp_note" })).text).toStartWith('"kp_note" is one of your own tools');
+    expect((await room.call(refusing, "run_command", { id: "camp/sleep" })).text).toBe('No module command "camp/sleep". This room\'s commands: camp/rest.');
     const refused = await room.call(refusing, "run_command", { id: "camp/rest" });
     expect([refused.status, refused.text]).toEqual(["refused", "camp/rest refused: the module says it is unavailable now: Not while enemies are near."]);
     const failing = room.catalog({ commands: [{ module: "camp", info: rest }], deps: { runCommand: async () => ({ status: "failed", problems: ["boom"], events: [] }) } });

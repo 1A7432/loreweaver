@@ -95,9 +95,10 @@ export function skillsSection(locale: string, skills: readonly string[]): string
 /** 7b (new in 3.0). The module commands the Keeper reaches through `run_command`. */
 export function moduleCommandsSection(locale: string, commands: readonly ModuleCommandLine[]): string {
   if (commands.length === 0) return "";
-  const lines = commands.map((command) =>
-    command.summary === "" ? `- ${command.id}` : promptText(locale, "prompt.command_line", { id: command.id, summary: command.summary }),
-  );
+  const lines = commands.map((command) => {
+    const call = `${command.id}${command.signature ?? ""}`;
+    return command.summary === "" ? `- ${call}` : promptText(locale, "prompt.command_line", { id: call, summary: command.summary });
+  });
   return promptText(locale, "prompt.commands_header") + "\n" + lines.join("\n");
 }
 

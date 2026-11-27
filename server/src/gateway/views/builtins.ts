@@ -145,15 +145,15 @@ function moduleResources(character: ModuleCharacter | null): ViewResource[] {
 }
 
 /**
- * A seat on a module's character as `me` and `party` show it: the name and the resources the
- * module gave at the last render (its id while the module does not offer it), the module's
- * id, and nothing of a sheet — the engine keeps none for it.
+ * A seat on a module's character as `me` and `party` show it: the name, the resources and the
+ * status lines the module gave at the last render (its id while the module does not offer
+ * it), the module's id, and nothing of a sheet — the engine keeps none for it.
  */
 function moduleSeatCharacter(source: ViewSource, id: string): { id: string; name: string; pack: string; status: string[]; resources: ViewResource[]; module: string } | null {
   const split = splitModuleCharacterId(id);
   if (split === null) return null;
   const character = findModuleCharacter(source.moduleCharacters ?? [], id);
-  return { id, name: character?.name ?? id, pack: "", status: [], resources: moduleResources(character), module: split.module };
+  return { id, name: character?.name ?? id, pack: "", status: [...(character?.status ?? [])], resources: moduleResources(character), module: split.module };
 }
 
 function seatsOf(source: ViewSource, viewer: Viewer): SeatingView["seats"] {

@@ -55,7 +55,7 @@ function seats(b: RoomBench): readonly { member: string; character: string }[] {
   return document === null ? [] : (readSeating(JSON.parse(document.data) as Record<string, never>)?.seats ?? []);
 }
 
-const ANA = { id: "colony:ana", name: "Ana", pack: "", status: [], resources: [{ id: "hp", label: "HP", value: 5, max: 5 }, { id: "food", label: "Food", value: 0 }], module: "colony" };
+const ANA = { id: "colony:ana", name: "Ana", pack: "", status: ["at the landing"], resources: [{ id: "hp", label: "HP", value: 5, max: 5 }, { id: "food", label: "Food", value: 0 }], module: "colony" };
 
 test("a member runs the module's command and is seated: me, party and characters show the character and its resources, to them and to another member", async () => {
   const b = setup();

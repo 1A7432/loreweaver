@@ -328,8 +328,8 @@ test("views: a module's character, seated by its module, reaches the client thro
     { id: "hp", label: "HP", value: 5, max: 5 },
     { id: "food", label: "Food", value: 0 },
   ];
-  expect(ada.session.view("me")?.data.character).toEqual({ id: "colony:ana", name: "Ana", pack: "", status: [], resources, attributes: [], skills: [], module: "colony" });
-  expect(bao.session.view("party")?.data.characters).toEqual([{ id: "colony:ana", name: "Ana", pack: "", status: [], resources, player: { id: expect.any(String), name: "Ada" }, module: "colony" }]);
+  expect(ada.session.view("me")?.data.character).toEqual({ id: "colony:ana", name: "Ana", pack: "", status: ["at the landing"], resources, attributes: [], skills: [], module: "colony" });
+  expect(bao.session.view("party")?.data.characters).toEqual([{ id: "colony:ana", name: "Ana", pack: "", status: ["at the landing"], resources, player: { id: expect.any(String), name: "Ada" }, module: "colony" }]);
   const offered = bao.session.view("characters")?.data.claimable.find((entry) => entry.id === "colony:ana");
   expect(offered).toMatchObject({ source: { kind: "module", id: "colony" }, player: { name: "Ada" } });
   // Nothing was dropped as not matching a schema.

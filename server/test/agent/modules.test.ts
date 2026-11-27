@@ -405,7 +405,7 @@ test("render: characters and the clock are validated; a clock from a non-claimer
         {
           module: "m",
           characters: [
-            character({ resources: [{ id: "hp", label: "HP", value: 3, max: 5 }, { id: "x", label: "X", value: "3" }] }),
+            character({ resources: [{ id: "hp", label: "HP", value: 3, max: 5 }, { id: "x", label: "X", value: "3" }], status: [" wounded ", "wounded", "", 7, x(81), "in the hall"] }),
             character({}),
             character({ id: "" }),
             character({ id: "d", blurb: x(2001) }),
@@ -418,7 +418,13 @@ test("render: characters and the clock are validated; a clock from a non-claimer
     [],
     info,
   );
-  expect(outcome.characters[0]).toEqual({ module: "m", id: "c", name: "C", blurb: null, resources: [{ id: "hp", label: "HP", value: 3, max: 5 }] });
+  expect(outcome.characters[0]).toEqual({ module: "m", id: "c", name: "C", blurb: null, resources: [{ id: "hp", label: "HP", value: 3, max: 5 }], status: ["wounded", "in the hall"] });
+  // A status line is trimmed and kept once; an empty one, one that is not text and one over the length are dropped and said.
+  expect(outcome.problems.filter((problem) => problem.includes("a status line that is not 1 to 80 characters was dropped"))).toHaveLength(3);
+  const crowded = validateRender({ viewers: [], characters: [{ module: "m", characters: [character({ status: Array.from({ length: 14 }, (_, i) => `s${i}`) }), character({ id: "e", status: "wounded" })] }] }, [], info);
+  expect(crowded.characters.map((entry) => entry.status.length)).toEqual([DEFAULT_CAPS.statuses, 0]);
+  expect(crowded.problems.some((problem) => problem.includes(`status lines past ${DEFAULT_CAPS.statuses} dropped`))).toBe(true);
+  expect(crowded.problems.some((problem) => problem.includes("its status was dropped, not a list of strings"))).toBe(true);
   expect(outcome.characters).toHaveLength(DEFAULT_CAPS.characters);
   expect(outcome.clock).toEqual({ module: "m", time: "dusk", round: 2 });
   expect(validateRender({ viewers: [], characters: [], clock: { module: "other", reading: { time: "noon" } } }, [], info).clock).toBeNull();

@@ -75,8 +75,9 @@ function furnished(locale = "en"): KeeperPromptSnapshot {
     cardDirectives: { head: "STABLE_CARD_HEAD speak like a noir narrator", postHistory: "VOLATILE_CARD_POST remember the rain" },
     skills: ["STABLE_SKILL_BODY run horror slowly"],
     moduleCommands: [
-      { id: "ring_bell", summary: "STABLE_COMMAND rings the lighthouse bell" },
-      { id: "check_tide", summary: "" },
+      { id: "ring_bell", summary: "STABLE_COMMAND rings the lighthouse bell", signature: "(times?: integer 1..5)" },
+      { id: "check_tide", summary: "", signature: null },
+      { id: "douse_lamp", summary: "", signature: "()" },
     ],
     summary: summary(2),
     worldImported: true,
@@ -228,7 +229,7 @@ describe("sections", () => {
 
   test("the section bodies render as 2.6 did", () => {
     const { stable, volatile } = assembleKeeperPrompt(furnished());
-    expect(stable).toContain(`${t("prompt.commands_header")}\n- ring_bell: STABLE_COMMAND rings the lighthouse bell\n- check_tide`);
+    expect(stable).toContain(`${t("prompt.commands_header")}\n- ring_bell(times?: integer 1..5): STABLE_COMMAND rings the lighthouse bell\n- check_tide\n- douse_lamp()`);
     expect(stable).toContain(
       `${t("prompt.chronicle.summary_label")}\nSTABLE_SUMMARY the party reached the lighthouse.\n${t("prompt.chronicle.keeper_label")} STABLE_MARGIN the keeper is the cultist`,
     );

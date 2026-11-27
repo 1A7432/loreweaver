@@ -58,8 +58,9 @@ describe("PartyRoster", () => {
   })
 
   test("a module's character: its module named, a resource with no maximum as its value, no sheet assumed; a module's free character is not offered to claim", async () => {
-    const own = { id: "colony:ana", name: "Ana", pack: "", status: [], resources: [{ id: "food", label: "Food", value: 2 }], attributes: [], skills: [], module: "colony" }
-    const party: PartyView = { members: [{ id: "m1", name: "Ada", role: "player", online: true, character: "colony:ana" }], characters: [{ ...own, player: { id: "m1", name: "Ada" } }], initiative: null }
+    const own = { id: "colony:ana", name: "Ana", pack: "", status: ["at the landing"], resources: [{ id: "food", label: "Food", value: 2 }], attributes: [], skills: [], module: "colony" }
+    const cai = { id: "colony:cai", name: "Cai", pack: "", status: ["in the hall", "wounded"], resources: [], player: { id: "m2", name: "Bao" }, module: "colony" }
+    const party: PartyView = { members: [{ id: "m1", name: "Ada", role: "player", online: true, character: "colony:ana" }], characters: [{ ...own, player: { id: "m1", name: "Ada" } }, cai], initiative: null }
     const offer = { claimable: [{ id: "colony:bo", name: "Bo", blurb: "", source: { kind: "module" as const, id: "colony" }, player: null }], systems: [], mine: "colony:ana" }
     expect(freeClaimables(offer)).toEqual([])
     const { renderer, flush, captureCharFrame } = await testRender(
@@ -71,6 +72,9 @@ describe("PartyRoster", () => {
     const frame = captureCharFrame()
     expect(frame).toContain("Ana (you)")
     expect(frame).toContain("Food 2")
+    // The module's own lines about each character, its own and another member's.
+    expect(frame).toContain("· at the landing")
+    expect(frame).toContain("· in the hall, wounded")
     expect(frame).toContain("Bo · kept by colony")
     expect(frame).not.toContain("▸ Bo")
   })

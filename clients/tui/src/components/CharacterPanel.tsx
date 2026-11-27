@@ -42,6 +42,20 @@ export function resourceColor(res: ViewResource, full: string, low: string): str
   return res.max === undefined ? full : statColor(res.value, res.max, full, low)
 }
 
+/**
+ * A character's status on one line, or nothing when it has none. An engine character's are
+ * afflictions; a module's are its module's own words on where and how the character is.
+ */
+export function StatusLine({ character, theme }: { character: { status: readonly string[]; module?: string }; theme: Palette }) {
+  if (character.status.length === 0) return null
+  const text = stripControlChars(character.status.join(", "))
+  return character.module !== undefined ? (
+    <text fg={theme.dim} wrapMode="none" truncate>· {text}</text>
+  ) : (
+    <text fg={theme.fail} wrapMode="none" truncate>✖ {text}</text>
+  )
+}
+
 export function CharacterPanel({ character, theme, locale }: CharacterPanelProps) {
   if (!character) {
     return (
@@ -83,7 +97,7 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
         </FitText>
       ))}
       {character.status.length > 0 ? (
-        <text fg={theme.fail} wrapMode="none" truncate>✖ {stripControlChars(character.status.join(", "))}</text>
+        <StatusLine character={character} theme={theme} />
       ) : character.module !== undefined ? null : (
         <text fg={theme.dim} wrapMode="none" truncate>{tt(locale, "character.ok")}</text>
       )}

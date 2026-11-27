@@ -15,7 +15,7 @@
   "prompt.chronicle.summary_label": "## Campaign summary (the story so far)",
   "prompt.chronicle.threads_label": "## Open threads (unresolved hooks / armed consequences)",
   "prompt.command_line": "- {id}: {summary}",
-  "prompt.commands_header": "## Module commands (run one with run_command; lookup_command shows what a command takes)",
+  "prompt.commands_header": "## Module commands (run one with run_command. A bracket after a command is everything it takes — `name?` is optional — so pass those and skip the lookup; for a command with no bracket, lookup_command shows what it takes)",
   "prompt.divider": "═══════════════════════════════════════",
   "prompt.expertise.generic": "# Game Master\nPlayers first; the story outranks rules minutiae; rule consistently and fairly.",
   "prompt.game_state.background_header": "📋 Investigation Background:",

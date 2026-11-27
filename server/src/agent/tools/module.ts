@@ -1,7 +1,7 @@
 // The two fixed tools through which the Keeper reaches a room's module commands
 // (decision 34): `run_command` and `lookup_command`. The prompt carries one line per
-// command the Keeper may run (its id and the first line of its description); tool cost does
-// not grow with the module. An `admin` command and a member's own verb (`keeper: false`) are
+// command the Keeper may run (its id, its arguments when they are few and plain, and the first
+// line of its description); tool cost does not grow with the module. An `admin` command and a member's own verb (`keeper: false`) are
 // not in that list; the tools still find them by id, describe them as not the Keeper's, and
 // refuse to run them. The command table and the function that runs a command in the room's
 // worker are the turn engine's.
@@ -10,7 +10,7 @@ import { keeperMayRun, type StepStop } from "loreweaver/runner";
 import type { JsonObject } from "../../core/documents/model.ts";
 import { param } from "./params.ts";
 import { refuse } from "./shared.ts";
-import { defineTool, type ModuleCommand, type ToolResult } from "./types.ts";
+import { defineTool, type ModuleCommand, type ToolResult, type ToolTurn } from "./types.ts";
 
 /** A command's id as the Keeper names it: `module/command`. */
 export function commandId(command: ModuleCommand): string {
@@ -26,9 +26,18 @@ export function findCommand(commands: readonly ModuleCommand[], id: string): Mod
   return bare.length === 1 ? (bare[0] as ModuleCommand) : null;
 }
 
-function unknownCommand(commands: readonly ModuleCommand[], id: string): ToolResult {
-  const known = commands.map(commandId).join(", ");
-  return refuse("unknown_command", `No module command "${id}". This room's commands: ${known === "" ? "(none)" : known}.`);
+/**
+ * The refusal for an id that names no module command. When the id — or what follows its last
+ * `/` — is one of the Keeper's own tools (`taixu/kp_note`), it says so: listing the room's
+ * commands alone leaves the model to try the same tool through `run_command` again.
+ */
+function unknownCommand(turn: ToolTurn, id: string): ToolResult {
+  const known = turn.commands.map(commandId).join(", ");
+  const listed = `This room's commands: ${known === "" ? "(none)" : known}.`;
+  const wanted = id.trim();
+  const tool = turn.tools.find((name) => name === wanted || name === wanted.slice(wanted.lastIndexOf("/") + 1));
+  if (tool !== undefined) return refuse("unknown_command", `"${tool}" is one of your own tools, not a module command: call ${tool} directly, with its own arguments. ${listed}`);
+  return refuse("unknown_command", `No module command "${id}". ${listed}`);
 }
 
 const WHO_MAY_RUN: Readonly<Record<ModuleCommand["info"]["role"], string>> = {
@@ -67,7 +76,7 @@ export const lookupCommandTool = defineTool({
   suspends: null,
   run(_context, args, turn): ToolResult {
     const command = findCommand(turn.commands, args.id);
-    if (command === null) return unknownCommand(turn.commands, args.id);
+    if (command === null) return unknownCommand(turn, args.id);
     const info = command.info;
     const lines = [
       `Command ${commandId(command)}: ${info.title}`,
@@ -91,7 +100,7 @@ export const runCommandTool = defineTool({
   suspends: "worker",
   async run(_context, args, turn): Promise<ToolResult> {
     const command = findCommand(turn.commands, args.id);
-    if (command === null) return unknownCommand(turn.commands, args.id);
+    if (command === null) return unknownCommand(turn, args.id);
     const runner = turn.deps.runCommand;
     if (runner === undefined) return refuse("modules_unavailable", "Module commands cannot be run on this server.");
     const id = commandId(command);

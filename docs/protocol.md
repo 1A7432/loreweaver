@@ -969,8 +969,8 @@ The JSON Schemas are in the protocol package (`BUILT_IN_VIEW_SCHEMAS`) and in `v
 | `member` | `{id, name, role, roleLabel}` | `roleLabel` is the role in the viewer's language. |
 | `character` | object or `null` | `null` for a spectator (no character). |
 | `character.id`, `.name`, `.pack` | string | `pack` is the character's rule system id; empty for a module's character. |
-| `character.module` | string, optional | Present on a module's character: the id of the module that keeps it (`character.id` is `<module>:<id>`). Such a character has the name and resources its module gave, and no status, attributes or skills: the engine keeps no sheet for it. Until the module has been read once, `name` is the id. |
-| `character.status` | string[] | Conditions. |
+| `character.module` | string, optional | Present on a module's character: the id of the module that keeps it (`character.id` is `<module>:<id>`). Such a character has the name, the resources and the status lines its module gave, and no attributes or skills: the engine keeps no sheet for it. Until the module has been read once, `name` is the id. |
+| `character.status` | string[] | Conditions. For a module's character, the short lines its module gave (where and how the character is); empty when it gave none. |
 | `character.resources` | `[{id, label, value, max?}]` | Meters such as HP and sanity. `max` is absent only on a module's character whose module gave that resource none. |
 | `character.attributes`, `.skills` | `[{key, label, value, derived?}]` | `value` is a number or a string. Filled only when the sheet is the viewer's own. `derived: true` marks a value the rule system computes from others and the sheet does not store (listed after the stored ones). Do not offer to edit a derived attribute: setting it is refused (`sheet_write`). Setting a derived skill gives the skill a value of its own, listed from then on without the flag. |
 

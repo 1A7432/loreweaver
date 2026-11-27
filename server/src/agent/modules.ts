@@ -12,7 +12,7 @@ import { charCount } from "loreweaver-protocol/v3";
 import type { CommandOrigin, CommandRole, Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
 import { type ArgsProblem, checkModuleArgs, commandAnswer, isValidName, mayRun, parseForm, runSteps, type StepStop, type TextForm, type ViewerRequest } from "loreweaver/runner";
 
-import { MAX_MODULE_CHARACTER_ID_CHARS, type ModuleCharacter, type ModuleResource } from "../core/characters/index.ts";
+import { MAX_MODULE_CHARACTER_ID_CHARS, MAX_STATUS_CHARS, MAX_STATUS_EFFECTS, type ModuleCharacter, type ModuleResource } from "../core/characters/index.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
 
 /** The most room members a module call carries; past it, the first ones and a problem for the operator. */
@@ -62,6 +62,8 @@ export interface ModuleCaps {
   readonly characterTextChars: number;
   readonly blurbChars: number;
   readonly resources: number;
+  readonly statuses: number;
+  readonly statusChars: number;
   readonly clockChars: number;
 }
 
@@ -99,6 +101,9 @@ export const DEFAULT_CAPS: ModuleCaps = {
   characterTextChars: MAX_MODULE_CHARACTER_ID_CHARS,
   blurbChars: 2000,
   resources: 16,
+  // What an engine character's status effects are held to.
+  statuses: MAX_STATUS_EFFECTS,
+  statusChars: MAX_STATUS_CHARS,
   clockChars: 200,
 };
 
@@ -835,7 +840,19 @@ function validateCharacters(module: string, raw: unknown, caps: ModuleCaps, prob
         problems.push(`module ${module}: character ${id}: a malformed resource was dropped`);
       } else resources.push({ id: rid, label, value, max: max === undefined ? null : max });
     }
-    out.push({ module, id, name, blurb: typeof blurb === "string" ? blurb : null, resources });
+    const status: string[] = [];
+    const lines = get(entry, "status");
+    if (lines !== undefined && !Array.isArray(lines)) problems.push(`module ${module}: character ${id}: its status was dropped, not a list of strings`);
+    for (const line of list(lines)) {
+      const text = typeof line === "string" ? shortText(line.trim(), caps.statusChars) : null;
+      if (status.length >= caps.statuses) {
+        problems.push(`module ${module}: character ${id}: status lines past ${caps.statuses} dropped`);
+        break;
+      }
+      if (text === null) problems.push(`module ${module}: character ${id}: a status line that is not 1 to ${caps.statusChars} characters was dropped`);
+      else if (!status.includes(text)) status.push(text);
+    }
+    out.push({ module, id, name, blurb: typeof blurb === "string" ? blurb : null, resources, status });
   }
   return out;
 }

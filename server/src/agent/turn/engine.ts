@@ -718,7 +718,7 @@ class KeeperTurn {
     // Only what the Keeper can run: an admin command, or a member's own verb (`keeper: false`),
     // would be a line in the prompt the Keeper must not act on.
     const moduleCommands = this.#modules.flatMap((module) =>
-      module.commands.filter((info) => keeperMayRun(info.role, info.keeper)).map((info) => commandLine(commandId({ module: module.id, info }), info.description)),
+      module.commands.filter((info) => keeperMayRun(info.role, info.keeper)).map((info) => commandLine(commandId({ module: module.id, info }), info.description, info.params)),
     );
     const snapshot = readKeeperSnapshot(context, {
       pack: context.pack,

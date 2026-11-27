@@ -215,6 +215,8 @@ export interface ToolTurn {
   readonly deps: ToolDeps;
   /** The room's module commands, for this turn. */
   readonly commands: readonly ModuleCommand[];
+  /** The names of the tools the Keeper has this turn. */
+  readonly tools: readonly string[];
 }
 
 /** A Keeper tool. */

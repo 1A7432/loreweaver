@@ -170,7 +170,7 @@ defineModule({
   load(snapshot, init) {},
   save() { return snapshot; },
 
-  characters(room) { return [{ id, name, blurb?, resources?: [{ id, label, value, max? }] }]; },
+  characters(room) { return [{ id, name, blurb?, resources?: [{ id, label, value, max? }], status?: [string] }]; },
   clock(room) { return { time: "Day 3, dusk", round?: 2 }; },
 
   on: {
@@ -242,6 +242,17 @@ commands: {
 - `params` is a JSON Schema object schema for the arguments (default `{ type: "object" }`).
   The engine checks the arguments against it **before** your code runs, whoever runs the
   command (see [Arguments](#arguments)); arguments that do not fit never reach `run`.
+  The Keeper's list of the room's commands has one line per command: its id and the first
+  line of its `description`. When the arguments are **few and plain** the line also shows
+  them — `duel/attack(target: string, times?: integer 1..5)` — and the Keeper runs the
+  command without first asking for its schema (one model call saved each time). That is
+  written for at most 4 properties, each a single `string`, `number`, `integer` or
+  `boolean` that says nothing beyond `enum` (up to 8 short values), `minimum`/`maximum`,
+  `minLength`/`maxLength`, `default`, `title` and `description`, in a schema that itself
+  says nothing beyond `properties`, `required` and `additionalProperties: true/false`. Any
+  other schema is shown without arguments and the Keeper looks it up — the line never shows
+  part of a schema. Property descriptions are not in that line: name a property so that it
+  reads without one.
 - `text` lists the command's text forms: what a member types to run it (see
   [Text forms](#text-forms)).
 - `role`: who may run it. The engine checks it before your code runs.
@@ -436,25 +447,32 @@ none of whose views anyone asked for is not read for views at all. Listing a roo
 ### Characters and seats
 
 `characters(room)` (read-only) lists the characters the module keeps itself — `{ id, name,
-blurb?, resources?: [{ id, label, value, max? }] }` — a simulation's settlers, a duel's
-fighters. The engine reads it at every render and keeps the last list beside the module's
+blurb?, resources?: [{ id, label, value, max? }], status?: string[] }` — a simulation's
+settlers, a duel's fighters. The engine reads it at every render and keeps the last list beside the module's
 views. It never writes a sheet for such a character: the character stays the module's, and
 the engine records only who sits on it.
 
 - Outside the module the character is `<module id>:<id>` (`colony:ana`), so a module never
   names an engine character and two modules never collide. The table's views show it: `me`
-  and `party` with its name and the resources you gave (and the module's id), the
-  `characters` view among what can be played.
+  and `party` with its name, the resources and the status lines you gave (and the module's
+  id), the `characters` view among what can be played.
+- `status` is a few short lines of where and how the character is (`"in the village head's
+  house"`, `"lightly wounded"`): clients show them where an engine character's status effects
+  are, and the Keeper reads them beside the character's resources. Up to 12 lines of 1 to 80
+  characters; a line is trimmed, a repeat is kept once, and one that does not fit is dropped
+  (and reported), never cut short.
 - A member is seated on one by **the module**, never by the engine's roster: `pc claim` of a
   module's character is refused. The engine's sheet and check commands, and the Keeper's
   sheet tools, know there is no sheet for it.
-- The list is the module's offer to the table: name, blurb and resources are table-grade.
+- The list is the module's offer to the table: name, blurb, resources and status lines are
+  table-grade.
   Put nothing secret in it.
 
 ```ts
 characters() {
   return settlers.filter((s) => s.alive).map((s) => ({
     id: s.id, name: s.name, resources: [{ id: "hp", label: "HP", value: s.hp, max: 10 }],
+    status: s.hp < 4 ? ["wounded"] : [],
   }));
 },
 commands: {
@@ -557,7 +575,7 @@ are per module per call unless noted.
 | A view's data | 512 KB |
 | Commands / views per module | 64 / 32 |
 | Titles / descriptions | 200 / 2,000 characters; text forms 16 of 200 characters (a command word at most 32); schemas 64 KB |
-| Characters | 64 per module; id and name 200 characters (an id with a space at either end is dropped: no seat could hold it); blurb 2,000; 16 resources each |
+| Characters | 64 per module; id and name 200 characters (an id with a space at either end is dropped: no seat could hold it); blurb 2,000; 16 resources each; 12 status lines of 80 characters each |
 | Clock reading | `time` 200 characters |
 | Variables snapshot sent to modules | 1 MB (larger: `{}` is sent instead) |
 | Members sent to modules | 256 (more: the first 256) |

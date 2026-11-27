@@ -15,7 +15,7 @@
   "prompt.chronicle.summary_label": "## 战役总述（前情提要）",
   "prompt.chronicle.threads_label": "## 未闭环的线索（悬置伏笔 / 已触发的暗后果）",
   "prompt.command_line": "- {id}：{summary}",
-  "prompt.commands_header": "## 模组命令（用 run_command 执行；lookup_command 查看某条命令需要什么参数）",
+  "prompt.commands_header": "## 模组命令（用 run_command 执行。命令后面带括号的，括号里就是它的全部参数——`名字?` 表示可以不给——照着传即可，不必再查；不带括号的，用 lookup_command 查看它需要什么参数）",
   "prompt.divider": "═══════════════════════════════════════",
   "prompt.expertise.generic": "# 游戏主持人\n玩家优先；故事高于规则细枝末节；裁定一致而公平。",
   "prompt.game_state.background_header": "📋 调查背景:",

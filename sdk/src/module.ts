@@ -208,6 +208,12 @@ export interface PlayableCharacter {
   readonly name: string;
   readonly blurb?: string;
   readonly resources?: readonly Resource[];
+  /**
+   * Short lines of where and how the character is ("in the village head's house", "lightly
+   * wounded"): shown beside its name wherever an engine character's status effects are, and
+   * told to the Keeper. Up to 12 lines of 1 to 80 characters each.
+   */
+  readonly status?: readonly string[];
 }
 
 /**

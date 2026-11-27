@@ -31,8 +31,8 @@ test("a namespaced id splits back into its module and the module's own id; an en
 
 test("the room's list is found by namespaced id; a seat it no longer lists reads as its id", () => {
   const list = [
-    { module: "colony", id: "ana", name: "Ana", blurb: null, resources: [] },
-    { module: "rival", id: "ana", name: "Rival Ana", blurb: null, resources: [] },
+    { module: "colony", id: "ana", name: "Ana", blurb: null, resources: [], status: [] },
+    { module: "rival", id: "ana", name: "Rival Ana", blurb: null, resources: [], status: [] },
   ];
   expect(findModuleCharacter(list, "rival:ana")?.name).toBe("Rival Ana");
   expect(findModuleCharacter(list, "colony:bo")).toBeNull();

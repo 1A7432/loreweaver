@@ -695,8 +695,8 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 | `member` | `{id, name, role, roleLabel}` | `roleLabel` 是查看者语言里的身份名。 |
 | `character` | object 或 `null` | 旁观的人（没有角色）为 `null`。 |
 | `character.id`, `.name`, `.pack` | string | `pack` 是角色的规则系统 id；模组的角色为空。 |
-| `character.module` | string，可选 | 模组的角色才有：管理它的模组的 id（`character.id` 是 `<module>:<id>`）。这样的角色只有模组给的名字和量表，没有状态、属性和技能：引擎不为它存角色卡。模组还没被读过一次之前，`name` 就是 id。 |
-| `character.status` | string[] | 状态。 |
+| `character.module` | string，可选 | 模组的角色才有：管理它的模组的 id（`character.id` 是 `<module>:<id>`）。这样的角色有模组给的名字、量表和状态文字，没有属性和技能：引擎不为它存角色卡。模组还没被读过一次之前，`name` 就是 id。 |
+| `character.status` | string[] | 状态。模组的角色则是模组给的几行短文字（角色在哪、怎么样）；模组没给就是空的。 |
 | `character.resources` | `[{id, label, value, max?}]` | HP、理智之类的量表。只有模组的角色、而模组没给这一项上限时，才没有 `max`。 |
 | `character.attributes`, `.skills` | `[{key, label, value, derived?}]` | `value` 是数或字符串。只有角色卡是查看者自己的时才填。`derived: true` 标出规则系统由别的值算出来、角色卡上不存的值（排在存着的值后面）。不要提供修改推算出的属性：设置它会被拒绝（`sheet_write`）。设置推算出的技能会让这个技能有自己的值，此后列出时就不再带这个标记。 |
 

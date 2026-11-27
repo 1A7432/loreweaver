@@ -45,6 +45,7 @@ export default defineModule({
           { id: "hp", label: "HP", value: settler.hp, max: 5 },
           { id: "food", label: "Food", value: years },
         ],
+        status: ["at the landing"],
       }));
   },
   commands: {

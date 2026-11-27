@@ -4,7 +4,7 @@ import type { KeyEvent } from "@opentui/core"
 import { stripControlChars, type CharactersView, type PartyView, type ViewResource } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
-import { CharacterPanel, resourceColor, resourceText, type SheetCharacter } from "./CharacterPanel"
+import { CharacterPanel, resourceColor, resourceText, StatusLine, type SheetCharacter } from "./CharacterPanel"
 import { FitText } from "./FitText"
 
 type Claimable = CharactersView["claimable"][number]
@@ -133,11 +133,14 @@ export function PartyRoster({ character, party, characters, theme, locale, focus
           {expanded ? (
             <CharacterPanel character={character} theme={theme} locale={locale} />
           ) : (
-            character.resources.map((res) => (
-              <text key={res.id} fg={resourceColor(res, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
-                {resourceLine(res, COMPACT_BAR_WIDTH)}
-              </text>
-            ))
+            <>
+              {character.resources.map((res) => (
+                <text key={res.id} fg={resourceColor(res, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
+                  {resourceLine(res, COMPACT_BAR_WIDTH)}
+                </text>
+              ))}
+              <StatusLine character={character} theme={theme} />
+            </>
           )}
         </box>
       ) : others.length === 0 && loose.length === 0 ? (
@@ -161,6 +164,7 @@ export function PartyRoster({ character, party, characters, theme, locale, focus
                 {resourceLine(res, open ? DETAIL_BAR_WIDTH : COMPACT_BAR_WIDTH)}
               </text>
             ))}
+            <StatusLine character={entry} theme={theme} />
           </box>
         )
       })}

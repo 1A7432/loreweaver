@@ -14,10 +14,9 @@ import type { Relationships } from "../../core/relationships/index.ts";
 import type { RulePack } from "../../core/rulepacks/index.ts";
 import type { ModuleVariables, VarMap } from "../../core/variables/index.ts";
 
-/** A seated character as the state panel shows it: name, meters and status effects. */
 /**
- * One seated character as the state panel lists it. A module's character has the resources its
- * module gave (a meter may have no maximum) and no status of the engine's.
+ * One seated character as the state panel lists it: name, meters and status effects. A module's
+ * character has the resources (a meter may have no maximum) and the status lines its module gave.
  */
 export interface PartyMember {
   readonly name: string;
@@ -30,6 +29,8 @@ export interface ModuleCommandLine {
   readonly id: string;
   /** One line saying what it does; "" when the module gave none. */
   readonly summary: string;
+  /** Its arguments as one bracket, when they are few and plain (`(target: string, times?: integer 1..5)`); else null. */
+  readonly signature: string | null;
 }
 
 /** A command a player ran themselves since the Keeper's last turn. */

@@ -9,7 +9,7 @@
 // own handlers it is the module's bare id (the SDK runner strips the prefix).
 //
 // What such a character shows is the module's own offer to the table — name, blurb,
-// resources — and is table-grade by definition: no Keeper-only part exists.
+// resources, status lines — and is table-grade by definition: no Keeper-only part exists.
 
 /** A module id: the SDK's name pattern (`[a-z][a-z0-9_]*`, at most 64 characters). */
 const MODULE_PREFIX = /^([a-z][a-z0-9_]{0,63}):/u;
@@ -34,6 +34,8 @@ export interface ModuleCharacter {
   readonly name: string;
   readonly blurb: string | null;
   readonly resources: readonly ModuleResource[];
+  /** The module's own short lines about the character (an engine character's status effects, for a module's). */
+  readonly status: readonly string[];
 }
 
 /** The id the engine knows a module's character by. */
