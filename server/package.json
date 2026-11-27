@@ -1,6 +1,6 @@
 {
   "name": "loreweaver-server",
-  "version": "3.0.0-alpha.0",
+  "version": "3.0.0",
   "description": "The Loreweaver server.",
   "type": "module",
   "private": true,

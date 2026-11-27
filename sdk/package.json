@@ -1,6 +1,6 @@
 {
   "name": "loreweaver",
-  "version": "3.0.0-alpha.0",
+  "version": "3.0.0",
   "description": "Loreweaver module SDK: the types a module is written against and a fake host for testing one.",
   "type": "module",
   "private": true,

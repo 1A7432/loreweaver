@@ -8,9 +8,6 @@
   },
   "include": [
     "src/index.ts",
-    "src/types.ts",
-    "src/client.ts",
-    "src/sanitize.ts",
     "src/v3/index.ts"
   ]
 }

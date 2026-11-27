@@ -7,14 +7,14 @@
     },
     "clients/protocol": {
       "name": "loreweaver-protocol",
-      "version": "2.6.0",
+      "version": "3.0.0",
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "clients/tui": {
       "name": "@loreweaver/tui",
-      "version": "0.7.0",
+      "version": "3.0.0",
       "bin": {
         "loreweaver": "./dist/index.js",
       },
@@ -36,7 +36,7 @@
     },
     "sdk": {
       "name": "loreweaver",
-      "version": "3.0.0-alpha.0",
+      "version": "3.0.0",
       "devDependencies": {
         "@types/bun": "1.4.5",
         "typescript": "^7.0.2",
@@ -44,7 +44,7 @@
     },
     "server": {
       "name": "loreweaver-server",
-      "version": "3.0.0-alpha.0",
+      "version": "3.0.0",
       "dependencies": {
         "@anthropic-ai/sdk": "1.14.0",
         "@number0/iroh": "1.2.0",

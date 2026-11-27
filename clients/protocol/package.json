@@ -1,7 +1,7 @@
 {
   "name": "loreweaver-protocol",
-  "version": "2.6.0",
-  "description": "Typed wire-protocol frames and a reconnecting WebSocket client for Loreweaver, the self-hosted AI Game Master / Keeper (protocol v2.6).",
+  "version": "3.0.0",
+  "description": "The Loreweaver wire protocol 3.0 for clients: typed frames and views, a decoder for what a server sends, and a transport-agnostic client session. Loreweaver is a self-hosted AI Game Master / Keeper for tabletop RPGs.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -19,8 +19,8 @@
     "ai-game-master",
     "coc",
     "dnd",
-    "wire-protocol",
-    "websocket"
+    "protocol",
+    "iroh"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -30,11 +30,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./types": {
-      "bun": "./src/types.ts",
-      "types": "./dist/types.d.ts",
-      "default": "./dist/types.js"
-    },
     "./v3": {
       "bun": "./src/v3/index.ts",
       "types": [
@@ -42,11 +37,6 @@
         "./src/v3/index.ts"
       ],
       "default": "./dist/v3/index.js"
-    },
-    "./client": {
-      "bun": "./src/client.ts",
-      "types": "./dist/client.d.ts",
-      "default": "./dist/client.js"
     }
   },
   "files": [
