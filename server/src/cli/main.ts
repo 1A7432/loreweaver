@@ -46,6 +46,8 @@ function settingsFrom(env: Environment): Settings | Outcome {
 export async function run(argv: readonly string[], env: Environment = {}): Promise<Outcome> {
   const [command, ...rest] = argv;
   if (argv.length === 1 && command === "--version") return { code: 0, out: SERVER_VERSION };
+  // Asked for anywhere on the line: `install --help` must not go looking for a pack named `--help`.
+  if (argv.includes("--help") || argv.includes("-h")) return { code: 0, out: USAGE };
   if (argv.length === 1 && command === "selftest") {
     const report = await selftest(roomWorkerEntry());
     return { code: report.ok ? 0 : 1, out: JSON.stringify(report) };
@@ -111,7 +113,9 @@ if (import.meta.main) {
   if (server === undefined) process.exit(outcome.code);
   let closing = false;
   const stop = (): void => {
-    if (closing) return;
+    // A second signal while closing: the person means it. A close that hangs (a worker that
+    // will not end, a peer that will not let go) must not make the process unkillable by Ctrl-C.
+    if (closing) process.exit(130);
     closing = true;
     void server.close().then(
       () => process.exit(0),

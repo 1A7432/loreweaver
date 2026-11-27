@@ -1,19 +1,41 @@
 Loreweaver — an AI Game Master / Keeper for TTRPGs
 Copyright (c) 2026 Loreweaver contributors
 
-This product includes software and design derived from the following projects:
+Loreweaver 3.0 is written in TypeScript and runs on Bun. This product includes
+software and design derived from the following projects:
 
-- hermes-agent (MIT License, Copyright 2025 Nous Research)
-  The platform-adapter / gateway layer (gateway/, adapters/) is vendored and
-  trimmed from hermes-agent. The MIT license text is retained where its code is
-  reused.
+- EJS (Apache License 2.0)
+  A minified copy is vendored (assets/vendor/ejs.min.js) and embedded in the
+  server, which renders SillyTavern-style lore templates with it inside a
+  room's worker thread. License text: assets/vendor/EJS-LICENSE.
 
-- avrae/d20 (MIT License)
-  Used as the dice-expression engine (`pip install d20`).
+- Lodash (MIT License, Copyright OpenJS Foundation and other contributors)
+  A minified copy is vendored (assets/vendor/lodash.min.js) and offered to
+  those templates as `_`. License text: assets/vendor/LODASH-LICENSE.
 
 - SealDice (sealdice-core, MIT License)
-  The CN command dialect, COC success-level function, house-rule table, and
-  skill-alias tables are re-implemented in Python based on SealDice's design.
+  The Chinese command words, the Call of Cthulhu success-level ladder, the
+  house-rule table and the skill-alias tables are re-implemented here, as
+  rule-pack data and command tables, based on SealDice's design.
+
+- avrae/d20 (MIT License)
+  The dice notation follows d20's grammar. The dice engine is this project's
+  own; none of d20's code is used.
+
+- SillyTavern (AGPL-3.0)
+  Loreweaver reads SillyTavern character cards and lorebooks so that existing
+  content can be played. The code that imports them, activates lore entries
+  and substitutes macros (server/src/core/worldbook/, server/src/core/card/)
+  is this project's own TypeScript, written to behave as SillyTavern does and
+  with reference to its source (public/scripts/world-info.js, macros.js,
+  variables.js), whose function names its comments cite.
+
+Versions 2.x were written in Python and vendored a trimmed platform-adapter
+and gateway layer from hermes-agent (MIT License, Copyright 2025 Nous
+Research); 3.0 contains none of that code.
+
+Other dependencies are installed from the npm registry under their own
+licenses (see bun.lock and each package's license file).
 
 Game content:
 

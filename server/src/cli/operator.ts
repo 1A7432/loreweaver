@@ -45,8 +45,8 @@ export type WorldCardImported =
   | { readonly ok: false; readonly code: string; readonly detail?: string };
 
 /**
- * Import a card file as `room`'s world — the admin's action, done from the shell (the
- * protocol's byte channel, which a client would upload a card through, is not built yet).
+ * Import a card file as `room`'s world — the admin's action, done from the shell (a client
+ * does the same over the byte channel: an upload with purpose `import`, then `import`).
  * The new lore entries are embedded for recall when embeddings are configured.
  */
 export async function importWorldCard(settings: Settings, room: string, file: string): Promise<WorldCardImported> {
