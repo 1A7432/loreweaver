@@ -450,6 +450,7 @@ export class CommandRegistry {
           available: available === true,
         };
         if (module.forms !== undefined && module.forms.length > 0) entry.text = { forms: module.forms, usage: module.forms.join(" | ") };
+        if (module.danger === true) entry.danger = true;
         if (available !== true) entry.reason = available;
         entries.push(entry);
       }

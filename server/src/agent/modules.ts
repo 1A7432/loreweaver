@@ -101,6 +101,8 @@ export interface CommandInfo {
   readonly text: readonly string[];
   /** `keeper`: the Keeper's alone, never shown to a member; `admin`: never the Keeper's. */
   readonly role: CommandRole;
+  /** The module marked it destructive: a client asks before running it. */
+  readonly danger: boolean;
   /** Whether availability depends on more than the role. */
   readonly checksAvailability: boolean;
 }
@@ -569,6 +571,8 @@ function validateCommands(module: string, raw: unknown, caps: ModuleCaps, proble
         params,
         text: text as string[],
         role,
+        // Strictly `true`: anything else a module sent is not a flag.
+        danger: get(entry, "danger") === true,
         checksAvailability: get(entry, "available") === true,
       });
     }

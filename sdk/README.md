@@ -226,6 +226,9 @@ commands: {
     too far, a reveal triggered early. Then `call.by` is `"member"` and `who` is the admin.
 
   Observers use no command.
+- `danger: true` marks a command that is destructive or hard to take back (it wipes a
+  tracker, ends a scene). A client asks the person before running it, and a pack's own page
+  cannot answer for them. It changes nothing about who may run the command.
 - `available(who, room)` (read-only) narrows it further: `true`, or a reason shown to that
   member. It is asked from a member's point of view: when the engine renders what each
   member can do, and again at the moment of use (when the Keeper runs the command, `who`

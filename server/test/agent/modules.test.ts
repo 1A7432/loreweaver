@@ -119,8 +119,8 @@ test("load: command and view tables are capped; malformed entries are left out",
     ],
   });
   expect(bad.modules[0]?.commands).toEqual([
-    { name: "good", title: "T", description: "", params: { type: "object" }, text: ["go {where}"], role: "admin", checksAvailability: true },
-    { name: "keepers", title: "T", description: "", params: { type: "object" }, text: [], role: "keeper", checksAvailability: false },
+    { name: "good", title: "T", description: "", params: { type: "object" }, text: ["go {where}"], role: "admin", danger: false, checksAvailability: true },
+    { name: "keepers", title: "T", description: "", params: { type: "object" }, text: [], role: "keeper", danger: false, checksAvailability: false },
   ]);
   expect(bad.problems).toHaveLength(6);
 });
@@ -302,9 +302,9 @@ const info: ModuleInfo[] = [
     id: "m",
     events: { turnStart: false, toolUse: false, replyPhase: false },
     commands: [
-      { name: "open", title: "Open", description: "", params: { type: "object" }, text: [], role: "player", checksAvailability: false },
-      { name: "sit", title: "Sit", description: "", params: { type: "object" }, text: [], role: "player", checksAvailability: true },
-      { name: "boss", title: "Boss", description: "", params: { type: "object" }, text: [], role: "admin", checksAvailability: false },
+      { name: "open", title: "Open", description: "", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: false },
+      { name: "sit", title: "Sit", description: "", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: true },
+      { name: "boss", title: "Boss", description: "", params: { type: "object" }, text: [], role: "admin", danger: false, checksAvailability: false },
     ],
     views: [
       { name: "status", title: null, schema: {} },
@@ -415,8 +415,8 @@ test("render: a keeper command is part of an admin's commands and of no other vi
       id: "k",
       events: { turnStart: false, toolUse: false, replyPhase: false },
       commands: [
-        { name: "open", title: "Open", description: "", params: { type: "object" }, text: [], role: "player", checksAvailability: false },
-        { name: "advance", title: "Advance", description: "", params: { type: "object" }, text: [], role: "keeper", checksAvailability: true },
+        { name: "open", title: "Open", description: "", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: false },
+        { name: "advance", title: "Advance", description: "", params: { type: "object" }, text: [], role: "keeper", danger: false, checksAvailability: true },
       ],
       views: [],
       clock: false,

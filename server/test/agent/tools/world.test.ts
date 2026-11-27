@@ -203,7 +203,7 @@ describe("generate_image (gated)", () => {
 });
 
 describe("module commands", () => {
-  const rest: CommandInfo = { name: "rest", title: "Rest", description: "Take a long rest.", params: { type: "object", properties: { hours: { type: "integer" } } }, text: [], role: "player", checksAvailability: true };
+  const rest: CommandInfo = { name: "rest", title: "Rest", description: "Take a long rest.", params: { type: "object", properties: { hours: { type: "integer" } } }, text: [], role: "player", danger: false, checksAvailability: true };
   const ok: CommandOutcome = { status: "ok", result: { text: "You rest for 8 hours.", data: null }, problems: [], facts: [], writes: [], blocks: [], rolls: [], logs: [] };
 
   test("lookup_command describes a command; run_command runs it through the injected worker call", async () => {

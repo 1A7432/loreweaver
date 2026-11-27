@@ -407,7 +407,7 @@ this viewer may use them now:
 | `params` | The arguments as a JSON Schema object ([6.6](#66-parameter-schemas)). |
 | `text` | Optional: `forms` (the words that run it, without prefix) and `usage` (a one-line usage text). Absent for a command without a text form. |
 | `role` | `player` (players and admins) or `admin` (admins only). |
-| `danger` | Present and `true` for a destructive command: ask before running it (`undo`, `reset`, `save`). |
+| `danger` | Present and `true` for a destructive command: ask before running it (`undo`, `reset`, `save`; a module command its module declared `danger`). |
 | `available` | Whether this viewer can run it here now. |
 | `reason` | When not available, one of: `observer` (the viewer is an observer and the command is not one observers may run), `no_rule_system` (`check`: the room's rule system grades no checks), `not_in_system` (`opposed`: the room's rule system has no contest), `no_media` (`uploads`, `audio`, `bgm`, `ambience`, `sfx`: the server keeps no files; `import`: no files and no pack installed), `settings_unavailable` (`model`, `imagegen`, `key`: the server runs without run-time settings). A module command is available to every player (below). |
 

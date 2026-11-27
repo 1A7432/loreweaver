@@ -38,6 +38,7 @@ export default defineModule({
       title: "Wipe",
       description: "Start the omen clock over.",
       role: "admin",
+      danger: true,
       run() {
         hours = 0;
         return { text: "wiped" };

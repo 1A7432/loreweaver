@@ -308,7 +308,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 | `params` | 参数，一个 JSON Schema 对象（[6.6](#66-参数-schema)）。 |
 | `text` | 可选：`forms`（运行它的词，不带前缀）和 `usage`（一行用法说明）。没有文本形式的命令没有这个字段。 |
 | `role` | `player`（玩家和管理员）或 `admin`（仅管理员）。 |
-| `danger` | 破坏性命令带这个字段且为 `true`：运行前先确认（`undo`、`reset`、`save`）。 |
+| `danger` | 破坏性命令带这个字段且为 `true`：运行前先确认（`undo`、`reset`、`save`；以及模组自己声明了 `danger` 的模组命令）。 |
 | `available` | 这个查看者此刻能否在这里运行它。 |
 | `reason` | 不可用时，是下面之一：`observer`（查看者是旁观者，而这个命令旁观者不能用）、`no_rule_system`（`check`：房间的规则系统不评级检定）、`not_in_system`（`opposed`：房间的规则系统没有对抗）、`no_media`（`uploads`、`audio`、`bgm`、`ambience`、`sfx`：服务器不存文件；`import`：不存文件，也没装扩展包）、`settings_unavailable`（`model`、`imagegen`、`key`：服务器运行时不能改设置）。模组命令对任何玩家都可用（见下）。 |
 

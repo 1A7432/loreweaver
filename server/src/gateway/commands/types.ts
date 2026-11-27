@@ -205,6 +205,8 @@ export interface ModuleCommandEntry {
   readonly params: unknown;
   readonly forms?: readonly string[];
   readonly role: CommandRole;
+  /** The module marked it destructive. */
+  readonly danger?: boolean;
   readonly available: true | string;
 }
 

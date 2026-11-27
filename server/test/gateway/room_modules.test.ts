@@ -125,6 +125,9 @@ test("a keeper command is no player's: refused like a role they lack, nothing ap
   const rootTable = (views(root.sent, "commands").at(-1)?.data as { commands: { id: string; role: string }[] }).commands;
   expect(listed(root.sent).toSorted()).toEqual(["omens/advance", "omens/look", "omens/wipe"]);
   expect(rootTable.find((entry) => entry.id === "omens/advance")?.role).toBe("admin");
+  // A module marks its own destructive command: the view carries it, so a client asks first.
+  const flags = (views(root.sent, "commands").at(-1)?.data as { commands: { id: string; danger?: boolean }[] }).commands;
+  expect([flags.find((entry) => entry.id === "omens/wipe")?.danger, flags.find((entry) => entry.id === "omens/look")?.danger]).toEqual([true, undefined]);
 
   // And runs it: the module is told a member called, the state moves, the table hears the fact.
   root.receive({ type: "call", rid: "admin", method: "command.run", params: { id: "omens/advance", args: {} } });

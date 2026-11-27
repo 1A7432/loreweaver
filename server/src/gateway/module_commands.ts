@@ -81,6 +81,7 @@ export class RoomModuleCommands implements ModuleCommands {
           available: true,
         };
         if (command.text.length > 0) entry.forms = command.text;
+        if (command.danger) entry.danger = true;
         entries.push(entry);
       }
     }

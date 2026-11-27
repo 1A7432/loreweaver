@@ -102,6 +102,8 @@ export interface CommandDescription {
   readonly params: Json;
   readonly text: Json;
   readonly role: Json;
+  /** Whether it declared `danger: true`. */
+  readonly danger: boolean;
   /** Whether it defines `available`. */
   readonly available: boolean;
 }
@@ -410,6 +412,7 @@ function describe(instance: Instance): ModuleDescription {
       params: toJson(own(spec, "params") ?? { type: "object" }) ?? null,
       text: toJson(own(spec, "text") ?? []) ?? null,
       role: toJson(own(spec, "role") ?? "player") ?? null,
+      danger: own(spec, "danger") === true,
       available: typeof available === "function",
     } satisfies CommandDescription;
   });

@@ -110,7 +110,7 @@ test("the host runs a command as a member or as the Keeper; a keeper command is 
           },
         },
         look: { title: "Look", run: (_args, _who, _fx, _room, call) => ({ text: call.by === "keeper" ? "the omen is in the well" : "you see the well" }) },
-        wipe: { title: "Wipe", role: "admin", run: () => ({ text: "wiped" }) },
+        wipe: { title: "Wipe", role: "admin", danger: true, run: () => ({ text: "wiped" }) },
       },
       views: { none: { schema: {}, for: () => null } },
     }),
@@ -133,6 +133,8 @@ test("the host runs a command as a member or as the Keeper; a keeper command is 
   expect((await host.command("look")).outcome).toEqual({ status: "ok", result: { text: "you see the well" } });
   expect((await host.keeperCommand("wipe", {}, mo)).outcome).toEqual({ status: "refused", reason: "role" });
   expect(host.description.commands.map((command) => command.role)).toEqual(["keeper", "player", "admin"]);
+  // A command says for itself that it is destructive; only a strict `true` counts.
+  expect(host.description.commands.map((command) => command.danger)).toEqual([false, false, true]);
 });
 
 test("views are per viewer; characters and clock read the state", async () => {

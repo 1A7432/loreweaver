@@ -51,7 +51,7 @@ const ALWAYS_ON = [
 const GATED = ["adjust_relationship", "set_relationship", "get_relationships", "generate_image"];
 const MODULE = ["run_command", "lookup_command"];
 
-const COMMAND: CommandInfo = { name: "rest", title: "Rest", description: "Take a rest.", params: { type: "object" }, text: [], role: "player", checksAvailability: false };
+const COMMAND: CommandInfo = { name: "rest", title: "Rest", description: "Take a rest.", params: { type: "object" }, text: [], role: "player", danger: false, checksAvailability: false };
 
 function names(catalog: TurnCatalog): string[] {
   return catalog.tools.map((tool) => tool.name);

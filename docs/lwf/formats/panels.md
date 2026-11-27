@@ -271,12 +271,29 @@ A client that runs pages MUST:
 - give the page **no network capability**: it holds room data;
 - hand it only the values of the views its panel declared, for the member viewing it, and
   the events of the room's log;
-- let it act only through `command.run`, as that member.
+- let it act only through `command.run`, as that member;
+- hand it nothing a template would not show: a list element flagged `hidden: true` (§4.2)
+  is left out of what a page receives, at any depth;
+- ask the person, in the client's own interface, before running a command the `commands`
+  view marks `danger` — a page cannot answer that question itself.
 
-**Bridge.** The reference bridge is the host object `window.loreweaver`; its shape is the
-desktop client's to define and is not fixed by this version. A client that does not run
-pages renders the page's `fallback`, or one localized "needs a rich client" line for
-`fallback: null`.
+**Bridge.** A page talks to its client through the host object `window.loreweaver`. This
+version of the format fixes the rules above, not the object's shape; the reference is the
+desktop client's **bridge version 2** (Loreweaver Studio, `docs/PAGE-BRIDGE.md` in its
+repository), which a page written today should target:
+
+| member | what it gives |
+|---|---|
+| `version` | `"2"` |
+| `ready()` | A promise of `{panel: {id, title}, locale, theme, member: {name, role}}`; nothing else works before it. |
+| `views()` / `onViews(cb)` | The panel's declared handles → current values (`null`: not held yet), for the member viewing it; the callback runs once with the current values and again on every change. |
+| `onEvent(cb)` | Each new event of the room's log after the page became ready, as the protocol delivers it. No history is replayed. |
+| `run(command, args?)` | A promise of `{ok: true, text?, data?}` or `{ok: false, code, message}`: `command.run` as that member. A refusal is the server's own, or the client's: `unavailable`, `cancelled` (a `danger` command the person declined), `rate_limited`, `too_large`, `invalid_params`, `busy`, `not_ready`, `not_sent`. |
+
+A client that does not run pages renders the page's `fallback`, or one localized "needs a
+rich client" line for `fallback: null`. A client that runs pages renders the fallback too
+while a page loads, when it does not call `ready()` in time, and for a page written against
+an earlier bridge.
 
 ## 8. What is refused
 

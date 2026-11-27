@@ -215,6 +215,12 @@ export interface CommandSpec {
   /** Who may run it; see `CommandRole`. Default `player`. */
   readonly role?: CommandRole;
   /**
+   * Destructive or hard to take back (it wipes a tracker, ends a scene). A client asks the
+   * person before running it — and a pack's own page cannot answer that question for them.
+   * It changes nothing about who may run the command or how the engine runs it.
+   */
+  readonly danger?: boolean;
+  /**
    * Read-only. `true`, or a reason shown to that viewer. Asked from a member's point of view:
    * for a member's `commands` view, and at the moment of use (when the Keeper runs the
    * command, `who` is the member whose turn it is).
