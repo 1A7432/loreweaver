@@ -23,6 +23,7 @@ import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCom
 import { audioCommand, layerCommand } from "./engine/audio.ts";
 import { importCommand, uploadsCommand } from "./engine/files.ts";
 import { packCommand, panelsCommand, skillCommand } from "./engine/packs.ts";
+import { reportCommand } from "./engine/report.ts";
 import { imagegenCommand, type KeyAdmin, keyCommand, modelCommand } from "./engine/admin.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
 import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, saveCommand, undoCommand } from "./engine/room.ts";
@@ -139,6 +140,7 @@ export class CommandRegistry {
       layerCommand("bgm", options.uploads ?? null, packs),
       layerCommand("ambience", options.uploads ?? null, packs),
       layerCommand("sfx", options.uploads ?? null, packs),
+      reportCommand(options.uploads ?? null),
       jrrpCommand,
       drawCommand,
       modelCommand(options.models ?? null),

@@ -66,6 +66,7 @@ const CASES: readonly Case[] = [
   { line: ".图片生成 set openai gpt-image-2 1536x1024", id: "imagegen", args: { op: "set", provider: "openai", model: "gpt-image-2", size: "1536x1024" }, member: ADMIN, admin: true },
   { line: ".key list", id: "key", args: { op: "list" }, member: ADMIN, admin: true },
   { line: ".jrrp", id: "jrrp", args: {} },
+  { line: ".report", id: "report", args: {} },
   { line: ".draw", id: "draw", args: {} },
   { line: ".help r", id: "help", args: { id: "r" } },
   { line: ".sc 1/1d6", id: "rules.sanity_check", args: { success: "1", failure: "1d6" }, setup: withCharacter },

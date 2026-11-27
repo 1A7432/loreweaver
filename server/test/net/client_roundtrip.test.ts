@@ -120,6 +120,30 @@ class Player {
     this.#attachment?.closed("network dropped");
   }
 
+  /**
+   * A GET on a byte stream of the current connection: the server's answer line, and the
+   * bytes that follow it when it says yes.
+   */
+  async get(hash: string): Promise<{ readonly head: Record<string, unknown>; readonly body: Uint8Array }> {
+    const server = this.#server;
+    if (server === null) throw new Error("not connected");
+    const queue = [encodeByteLine({ op: "get", hash })];
+    const out: Uint8Array[] = [];
+    await new ByteChannel(() => server.byteAccess(), () => "en").serve(
+      { read: () => Promise.resolve(queue.shift() ?? null), stop: () => undefined },
+      {
+        write: (chunk) => {
+          out.push(chunk.slice());
+          return Promise.resolve();
+        },
+        finish: () => Promise.resolve(),
+      },
+    );
+    const all = Buffer.concat(out);
+    const end = all.indexOf(0x0a);
+    return { head: JSON.parse(all.subarray(0, end).toString("utf8")) as Record<string, unknown>, body: new Uint8Array(all.subarray(end + 1)) };
+  }
+
   seqs(): number[] {
     return this.session.getSnapshot().events.map((event) => event.seq);
   }
@@ -636,4 +660,30 @@ test("keys and the model from a client: an admin mints a key and a second client
   expect(ada.seqs()).toEqual(serverSeqs(b));
   expect(ada.session.droppedFrames).toBe(0);
   expect(root.session.droppedFrames).toBe(0);
+});
+
+test("the session report: a player asks for the page and fetches it over the byte channel; the reveal edition is the admin's, and its hash is no use to a player", async () => {
+  const b = setup({ media: true });
+  const root = await join(b, KEYS.root);
+  const ada = await join(b, KEYS.ada);
+  await done(b, ada.session.input("I light the lamp."));
+
+  const asked = await done(b, ada.session.runCommand("report", { format: "html" }));
+  if (!asked.ok) throw new Error(asked.error.code);
+  const page = (asked.data as { edition: string; media: { hash: string; mime: string; size: number; name: string } }).media;
+  expect(asked.data).toMatchObject({ format: "html", edition: "player", media: { mime: "text/html" } });
+  const fetched = await done(b, ada.get(page.hash));
+  expect(fetched.head).toMatchObject({ op: "get", ok: true, hash: page.hash, mime: "text/html", size: page.size });
+  expect(createHash("sha256").update(fetched.body).digest("hex")).toBe(page.hash);
+  expect(new TextDecoder().decode(fetched.body)).toContain("I light the lamp.");
+  // Asking for the page tells the table nothing: no event beyond the line and its reply.
+  expect(ada.session.getSnapshot().events.map((event) => event.kind)).toEqual(["narrative", "narrative"]);
+
+  expect(await done(b, ada.session.runCommand("report", { format: "html", reveal: true }))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+  const revealed = await done(b, root.session.runCommand("report", { format: "html", reveal: true }));
+  if (!revealed.ok) throw new Error(revealed.error.code);
+  const secret = (revealed.data as { media: { hash: string } }).media.hash;
+  expect((await done(b, root.get(secret))).head).toMatchObject({ ok: true, mime: "text/html" });
+  expect((await done(b, ada.get(secret))).head).toMatchObject({ ok: false });
+  expect(ada.session.droppedFrames).toBe(0);
 });
