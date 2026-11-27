@@ -28,3 +28,16 @@ test("a check on Dodge rolls against half of DEX", () => {
   expect(hasCheckValue(spec, set.sheet, "Dodge")).toBe(true);
   expect(checkValue(spec, set.sheet, dodge)).toMatchObject({ kind: "value", value: 30, from: "derived" });
 });
+
+test("a check on Know rolls against EDU", () => {
+  const { sheet } = newSheet(spec, "Ada", "coc7");
+  const edu = resolveName(spec, "EDU") ?? "EDU";
+  const set = setSheetValue(spec, sheet, edu, 73);
+  if (!set.ok) throw new Error(`could not set EDU: ${set.code}`);
+  for (const typed of ["Know", "know"]) {
+    const know = resolveName(spec, typed);
+    expect([typed, know]).not.toEqual([typed, null]);
+    expect(hasCheckValue(spec, set.sheet, typed)).toBe(true);
+    expect(checkValue(spec, set.sheet, know ?? "")).toMatchObject({ kind: "value", value: 73 });
+  }
+});

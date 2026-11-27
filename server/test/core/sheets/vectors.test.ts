@@ -134,7 +134,8 @@ describe("sheets_cases", () => {
         else check(t, `${probe.pack} resolve ${JSON.stringify(name)}`, resolveName(sheetSpec, name), probe.resolved[i]);
       });
     }
-    pin(t, 274, { [NAMED_BY_PACK]: 23 });
+    // 24, not 23: coc7 labels 知识 "Know" (owner's ruling, 2026-11-27), which the old engine did not resolve.
+    pin(t, 273, { [NAMED_BY_PACK]: 24 });
   });
 
   test("loaded sheets, canonical values, derived values and hit points", () => {

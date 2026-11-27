@@ -12,11 +12,11 @@ const HAN = /\p{Script=Han}/u;
 /**
  * Labels held back, each with why. A display label is also a name the stat answers to (the
  * 2026-11-27 ruling in `test/core/sheets/vectors.test.ts`), so a label can change which names
- * resolve, and those are pinned by the reference vectors:
- *   - coc7 `知识` → "Know" (CoC 7e's own term) would make `KNOW`, the sheet's storage key for
- *     it, a name of the stat: one pinned `sheets_cases` cell moves. Held for the owner.
+ * resolve, and those are pinned by the reference vectors. None is held now: coc7 `知识` → "Know"
+ * (CoC 7e's own term) was the one, added on the owner's word (2026-11-27) with the one pinned
+ * `sheets_cases` cell it moves.
  */
-const HELD: ReadonlySet<string> = new Set(["coc7 en 知识"]);
+const HELD: ReadonlySet<string> = new Set<string>();
 
 /** The canonical names a pack's sheet shows: attributes, derived values, skills (and the names its defaults give). */
 function shownNames(pack: RulePack): string[] {
