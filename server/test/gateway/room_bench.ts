@@ -118,7 +118,8 @@ export interface BenchOptions {
   readonly director?: readonly ScriptedReply[] | Responder;
   readonly system?: string | null;
   readonly rateLimit?: RateLimitSettings;
-  readonly images?: DirectorImageDeps;
+  /** The Stage Director's pictures: fixed deps, or asked per pass as the server does (null: no image client now). */
+  readonly images?: DirectorImageDeps | ((room: string) => DirectorImageDeps | null);
   /** Told every op posted to the room worker, as it is posted. */
   readonly onPost?: (op: string) => void;
   /** A media store (in a temporary directory) behind the byte channel, `uploads` and `import`; these limits when given. */
@@ -202,7 +203,7 @@ export class RoomBench {
       review: REVIEW_OFF,
       lanes: options.lanes ?? LANES_OFF,
       kitFor: (room) => (packs === null || options.kit !== undefined ? (options.kit ?? null) : packs.kitFor(store, room, "en")),
-      ...(options.images === undefined ? {} : { images: options.images }),
+      ...(options.images === undefined ? {} : { images: typeof options.images === "function" ? options.images : () => options.images as DirectorImageDeps }),
       rateLimit: options.rateLimit ?? { capacity: 10_000, refillPerSecond: 10_000 },
       spawnWorker: spawn,
       modulesFor: (room) => (packs === null || options.modules !== undefined ? modules : packs.modulesFor(store, room)),

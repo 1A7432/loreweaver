@@ -53,7 +53,8 @@ export interface HubDeps {
   /** A room's presentation kit (from its installed packs), or null for none. */
   readonly kitFor: (room: string) => RoomKit | null;
   /** The image client and media store for the Stage Director; absent: no new pictures. */
-  readonly images?: DirectorImageDeps;
+  /** What the Stage Director's pictures need, for a room, NOW; null while pictures are off or not configured. */
+  readonly images?: (room: string) => DirectorImageDeps | null;
   /**
    * Members' files over the byte channel, on the server's media store (the same object the
    * command table's `uploads` and `import` are given). Absent: no uploads, no fetches.
@@ -156,7 +157,7 @@ export class Hub {
       defaultRulePack: deps.defaultRulePack ?? null,
       review: deps.review,
       lanes: deps.lanes,
-      images: deps.images ?? null,
+      images: deps.images ?? (() => null),
       limiter: this.#limiter,
       chains: this.#chains,
       uploads: deps.uploads ?? null,

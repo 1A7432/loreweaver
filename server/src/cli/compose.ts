@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import type { LaneModels, Services } from "../agent/context.ts";
 import { recallStorages, type RecallDeps } from "../agent/recall.ts";
+import type { DirectorImageDeps } from "../agent/lanes/director.ts";
 import { servicesOn } from "../agent/services.ts";
 import type { GenerateImage } from "../agent/tools/index.ts";
 import { recordPlayerAction, runKeeperTurn } from "../agent/turn/index.ts";
@@ -23,7 +24,7 @@ import { parseReviewList, REVIEW_OFF, type ReviewFilter } from "../gateway/revie
 import { Uploads } from "../gateway/uploads.ts";
 import type { Settings } from "../infra/config.ts";
 import { type Clock, systemClock } from "../infra/ids.ts";
-import { ImageGenError } from "../infra/imagegen/index.ts";
+import { ImageGenError, type ImageGenerator, RASTER_MIMES } from "../infra/imagegen/index.ts";
 import { RoomStorages } from "../infra/lifecycle/storages.ts";
 import { DEFAULT_MEDIA_LIMITS, MediaStore } from "../infra/media/index.ts";
 import { ensurePrivateDir, writePrivateFile } from "../infra/private_files.ts";
@@ -66,6 +67,8 @@ export interface HubParts {
   readonly review: ReviewFilter;
   readonly recall?: RecallDeps;
   readonly generateImage?: GenerateImage;
+  /** The Stage Director's pictures for a room, now; null while there is no image client. */
+  readonly directorImages?: (room: string) => DirectorImageDeps | null;
   readonly packs?: RulePackRegistry;
   readonly defaultRulePack?: string | null;
   /** The media store: members' uploads and fetches over the byte channel, `uploads` and `import`. Absent: none. */
@@ -123,7 +126,8 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
       scribe: settings.scribe.enabled,
       director: settings.director.enabled,
       directorSettings: {
-        imagesEnabled: settings.director.images && settings.imagegen !== undefined,
+        // Whether the operator allows them; whether a client exists is asked at each pass.
+        imagesEnabled: settings.director.images && parts.directorImages !== undefined,
         maxImages: settings.director.maxImages,
         pregenPerBeat: settings.director.pregenPerBeat,
       },
@@ -137,8 +141,36 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
     ...(uploads === null ? {} : { uploads }),
     ...(parts.modelSettings === undefined ? {} : { models: parts.modelSettings }),
     ...(parts.keys === undefined ? {} : { keys: parts.keys }),
+    ...(parts.directorImages === undefined ? {} : { images: parts.directorImages }),
   });
   return { hub, services };
+}
+
+/**
+ * The Stage Director's pictures for a room: the image client as it is NOW (an admin may
+ * switch it at run time; null means none, and the pass shows the pack's own picture), the
+ * room's own media to read a subject's reference from and to keep the picture in. A picture
+ * it makes is the room's, like one the Keeper asked for.
+ */
+export function directorImagesFrom(client: () => ImageGenerator | null, media: MediaStore): (room: string) => DirectorImageDeps | null {
+  return (room) => {
+    const now = client();
+    if (now === null) return null;
+    return {
+      generate: async (request, signal) => {
+        // The reference is a pack's picture; only a raster one can condition a picture.
+        const mime = RASTER_MIMES.find((known) => known === request.reference.mime);
+        if (mime === undefined) throw new ImageGenError("bad_request");
+        return now.generate({ prompt: request.prompt, reference: { bytes: request.reference.bytes, mime } }, signal);
+      },
+      // A subject's reference picture is a pack asset the room registered, whatever its audience.
+      readAsset: async (asset) => (await media.read(room, asset.hash, "admin"))?.bytes ?? null,
+      storeImage: async (bytes, mime, name) => {
+        const stored = await media.registerServerBlob({ room, bytes, mime, name, audience: "room" });
+        return stored.ok ? { hash: stored.record.hash, mime: stored.record.mime, size: stored.record.size } : null;
+      },
+    };
+  };
 }
 
 export interface ServerOptions {
@@ -314,6 +346,8 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     }
   };
 
+  const directorImages = directorImagesFrom(() => modelSettings.image(), media);
+
   const fresh = !existsSync(join(settings.dataDir, "keys.json"));
   const keystore = keystoreIn(settings.dataDir);
   const firstKey = fresh ? { room: FIRST_ROOM, key: keystore.mint({ room: FIRST_ROOM, name: "Admin", role: "admin" }, clock.now()).key } : null;
@@ -332,6 +366,7 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     media,
     ...(recall === undefined ? {} : { recall }),
     generateImage,
+    directorImages,
     modelSettings,
     keys: keystore,
   });

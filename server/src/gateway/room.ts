@@ -136,7 +136,8 @@ export interface RoomHost {
   readonly defaultRulePack: string | null;
   readonly review: ReviewFilter;
   readonly lanes: LaneSettings;
-  readonly images: DirectorImageDeps | null;
+  /** Asked at each pass: an admin may switch image generation on, off or over at run time. */
+  readonly images: (room: string) => DirectorImageDeps | null;
   readonly limiter: RateLimiter;
   readonly chains: OrderedChains;
   /** Members' files (the byte channel's gateway side); null on a server without a media store. */
@@ -635,11 +636,14 @@ export class Room {
     const director = kit === null ? null : { kit, images: readDirectorImageState(services.store, this.id) };
     const vetoRoom = moduleRoom(services, this.id, context.turn, this.#moduleClock);
     void host.chains.schedule(this.id, async () => {
+      // Pictures are on when the operator allows them AND an image client exists right now.
+      const images = host.images(this.id);
+      const lanes = images === null && host.lanes.directorSettings.imagesEnabled ? { ...host.lanes, directorSettings: { ...host.lanes.directorSettings, imagesEnabled: false } } : host.lanes;
       await runLanePass(
         { context, scribe, player: input.text, reply, vetoRoom, director },
         {
-          settings: host.lanes,
-          images: host.images,
+          settings: lanes,
+          images,
           moduleWorker: () => host.moduleWorker(this.id),
           refreshViews: () => this.refreshViews(),
           broadcastEvent: (event) => {
