@@ -41,6 +41,8 @@ const messages = {
     "hostlocal.error.noServer":
       "No Loreweaver 3.0 server on this machine: keep the `loreweaver` server in the same folder as this program, set TRPG_LOCAL_SERVER_BIN, or put the server binary at {path}",
     "hostlocal.error.refused": "The server refused to start ({code})",
+    "hostlocal.error.otherDatabase":
+      "This folder holds a game database from Loreweaver 2, which 3.0 cannot read. Nothing in it was changed. Enter another local server folder (for example ~/.loreweaver/v3) and host again; the old folder stays as it is for 2.x.",
     "hostlocal.error.exited": "The server exited before it was ready (exit code {code})",
     "hostlocal.error.timeout": "The server did not become ready in time",
     "hostlocal.error.noKey": "The server started but no admin key is known for it",
@@ -431,6 +433,8 @@ const messages = {
     "hostlocal.error.noServer":
       "这台机器上没有 Loreweaver 3.0 服务器：请把服务器程序 `loreweaver` 和本程序放在同一个文件夹，或设置 TRPG_LOCAL_SERVER_BIN，或把服务器程序放到 {path}",
     "hostlocal.error.refused": "服务器拒绝启动（{code}）",
+    "hostlocal.error.otherDatabase":
+      "这个目录里是 Loreweaver 2 的游戏数据库，3.0 读不了，里面的东西没有被改动。请把“本地服务器目录”换成别的目录（比如 ~/.loreweaver/v3）再开服；原来的目录原样留给 2.x 用。",
     "hostlocal.error.exited": "服务器在就绪前退出了（退出码 {code}）",
     "hostlocal.error.timeout": "服务器没有按时就绪",
     "hostlocal.error.noKey": "服务器已启动，但不知道它的管理员钥匙",

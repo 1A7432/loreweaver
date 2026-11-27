@@ -49,7 +49,9 @@ bun server/src/cli/main.ts --version
 
 ### 由别的程序来托管
 
-把服务器当子进程启动的程序（比如客户端的「本地开服」），加上 `--until-stdin-closes`，并让子进程的标准输入保持为一条打开的管道。父进程一旦消失——崩溃、被杀都算——管道就断，服务器像收到 SIGTERM 一样停下，不会在没人管的情况下一直跑着。`serve` 不管成败都只回一个 JSON 对象：就绪行（`ok: true`、ticket、提示，以及新目录的第一把管理员钥匙），或者带 `code` 的拒绝（`bad_settings`、`data_dir_in_use`、带 `detail` 的 `startup_failed`）。
+把服务器当子进程启动的程序（比如客户端的「本地开服」），加上 `--until-stdin-closes`，并让子进程的标准输入保持为一条打开的管道。父进程一旦消失——崩溃、被杀都算——管道就断，服务器像收到 SIGTERM 一样停下，不会在没人管的情况下一直跑着。`serve` 不管成败都只回一个 JSON 对象：就绪行（`ok: true`、ticket、提示，以及新目录的第一把管理员钥匙），或者带 `code` 的拒绝（`bad_settings`、`data_dir_in_use`、`other_database`、带 `detail` 的 `startup_failed`）。
+
+`other_database`：数据目录里的 `loreweaver.db` 不是这台服务器建的——Loreweaver 2 的服务器用同一个文件名存数据库，3.0 读不了它。所有要用数据目录的命令（`serve`、`key`、`import-world`、`install`、`packs`、`uninstall`）都会这样回答，并带上目录 `data_dir`，而且是在打开或写入任何东西之前：旧数据原样不动。把 `TRPG_DATA_DIR` 指向另一个目录即可。
 
 ### 重启后仍然有效的 ticket
 

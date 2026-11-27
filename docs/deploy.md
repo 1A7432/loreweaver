@@ -78,8 +78,14 @@ A program that starts the server as a child (a client's "host locally") adds
 goes away — a crash and a kill included — the pipe ends and the server stops as on SIGTERM,
 instead of running on with nobody to stop it. `serve` answers with ONE JSON object either way:
 the ready line (`ok: true`, the ticket, the notes, the first admin key of a fresh directory),
-or a refusal with a `code` (`bad_settings`, `data_dir_in_use`, `startup_failed` with a
-`detail`).
+or a refusal with a `code` (`bad_settings`, `data_dir_in_use`, `other_database`,
+`startup_failed` with a `detail`).
+
+`other_database`: the data directory's `loreweaver.db` was not made by this server — a
+Loreweaver 2 server kept its database under the same name, and 3.0 does not read it. Every
+command that works on a data directory (`serve`, `key`, `import-world`, `install`, `packs`,
+`uninstall`) answers it, with the directory as `data_dir`, before it opens or writes anything
+there: the older data is left exactly as it was. Point `TRPG_DATA_DIR` at another directory.
 
 ### A ticket that survives restarts
 

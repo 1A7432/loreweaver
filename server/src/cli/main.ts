@@ -18,6 +18,7 @@
 // starts. `doctor` and `lint` arrive with the layers they drive.
 import { ConfigError, loadSettings, type Settings } from "../infra/config.ts";
 import { roomWorkerEntry } from "../infra/runtime/worker.ts";
+import { databaseOwner } from "../infra/database_owner.ts";
 import { runningServer } from "../infra/data_lock.ts";
 import { SERVER_VERSION } from "../infra/version.ts";
 import { openServer, type RunningServer, StartupError } from "./compose.ts";
@@ -48,13 +49,22 @@ const SERVE_FLAGS: readonly string[] = ["--local", STDIN_FLAG];
 
 export type Environment = Readonly<Record<string, string | undefined>>;
 
+/**
+ * The settings of a command that works on a data directory — or its refusal: settings that
+ * do not parse, or a data directory whose database is not this server's (`other_database`: a
+ * Loreweaver 2 server's has the same file name). Asked before anything is opened or written,
+ * so a refused command leaves that directory exactly as it was.
+ */
 function settingsFrom(env: Environment): Settings | Outcome {
+  let settings: Settings;
   try {
-    return loadSettings(env);
+    settings = loadSettings(env);
   } catch (error) {
     if (error instanceof ConfigError) return { code: 2, out: JSON.stringify({ ok: false, code: "bad_settings", problems: error.problems }) };
     throw error;
   }
+  if (databaseOwner(settings.dataDir) === "other") return { code: 2, out: JSON.stringify({ ok: false, code: "other_database", data_dir: settings.dataDir }) };
+  return settings;
 }
 
 /**

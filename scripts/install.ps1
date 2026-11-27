@@ -14,6 +14,12 @@
 #   TRPG_HOME              default %USERPROFILE%\.loreweaver
 #   TRPG_BIN               default %TRPG_HOME%\bin
 #   TRPG_NO_MODIFY_PATH    set to leave PATH alone
+#   TRPG_UPGRADE_TO_3      on a machine that has Loreweaver 2: 1 installs without asking
+#
+# Loreweaver 3 is not an update of Loreweaver 2 (neither opens the other's rooms, saves or
+# packs, and the two do not connect), and Loreweaver 2's own `loreweaver update` runs this
+# script. So on a machine that has Loreweaver 2 and not yet 3 it says so and asks first; with
+# nobody to ask it installs nothing. Loreweaver 2 is never removed.
 #
 # The whole script is one function called on its last line, so a download cut short runs nothing.
 
@@ -22,11 +28,15 @@ function Install-Loreweaver {
   $ProgressPreference = "SilentlyContinue"
   $Repository = "1A7432/loreweaver"
   $Programs = @("loreweaver.exe", "loreweaver-tui.exe")
+  # The last Loreweaver 2 release that holds its own installer.
+  $LastV2Tag = "v2.6.0"
   # The one Windows build is x64; Windows on ARM runs it emulated.
   $Archive = "loreweaver-windows-x64.zip"
 
   $Tag = if ($env:TRPG_RELEASE_TAG) { $env:TRPG_RELEASE_TAG } else { "latest" }
   if ($Tag -notmatch '^[A-Za-z0-9._+-]+$') { throw "TRPG_RELEASE_TAG is not a release tag" }
+  # A Loreweaver 2 tag (a pin its launcher passes on): that release has its own installer.
+  if ($Tag -match '^(v|release-)[012]\.') { throw "$Tag is a Loreweaver 2 release, and this is the Loreweaver 3 installer. Use that release's own:  irm https://github.com/$Repository/releases/download/$Tag/install.ps1 | iex" }
   $LwHome = if ($env:TRPG_HOME) { $env:TRPG_HOME } else { Join-Path $HOME ".loreweaver" }
   $Bin = if ($env:TRPG_BIN) { $env:TRPG_BIN } else { Join-Path $LwHome "bin" }
   $Origin = $env:TRPG_ORIGIN
@@ -48,6 +58,30 @@ function Install-Loreweaver {
       Invoke-WebRequest -Uri "$base/$Name" -OutFile $To -UseBasicParsing
     } catch {
       throw "could not download $base/$Name"
+    }
+  }
+
+  # Loreweaver 2 is installed here (its client's files, or its launcher) and Loreweaver 3 is not yet.
+  $hasV3 = Test-Path -LiteralPath (Join-Path $Bin "loreweaver.exe") -PathType Leaf
+  $hasV2 = (Test-Path -LiteralPath (Join-Path $LwHome "clients\tui\src\index.tsx") -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $Bin "loreweaver.cmd") -PathType Leaf)
+  if ($hasV2 -and -not $hasV3) {
+    Write-Host "> Loreweaver 2 is installed on this machine. Loreweaver 3 is a new program, not an update of it:"
+    Write-Host ">   - it does not open Loreweaver 2's rooms, saves, packs or modules, and a 2 client and a 3 server"
+    Write-Host ">     (or the other way round) do not connect;"
+    Write-Host ">   - Loreweaver 2 is kept: run it as loreweaver.cmd (plain 'loreweaver' becomes Loreweaver 3's server);"
+    Write-Host ">     its files and data are not touched;"
+    Write-Host ">   - to reinstall Loreweaver 2:"
+    Write-Host ">       irm https://github.com/$Repository/releases/download/$LastV2Tag/install.ps1 | iex"
+    $answer = $env:TRPG_UPGRADE_TO_3
+    if (-not $answer) {
+      $nobody = $false
+      try { $nobody = (-not [Environment]::UserInteractive) -or [Console]::IsInputRedirected } catch { $nobody = $true }
+      if ($nobody) { throw "nothing was installed: there is nobody to ask. To install Loreweaver 3 here, run this again after  `$env:TRPG_UPGRADE_TO_3 = '1'" }
+      $answer = Read-Host "> Install Loreweaver 3 now? [y/N]"
+    }
+    if ($answer -notmatch '^(1|y|yes|true)$') {
+      Write-Host "> nothing was installed. Loreweaver 2 is as it was."
+      return
     }
   }
 

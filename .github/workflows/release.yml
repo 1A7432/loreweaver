@@ -209,7 +209,28 @@ jobs:
           export HOME="$RUNNER_TEMP/home2"
           mkdir -p "$HOME"
           if TRPG_ORIGIN="$RUNNER_TEMP/tampered" bash release/install.sh; then echo "a tampered download was installed"; exit 1; fi
-          [ ! -e "$HOME/.loreweaver/bin/loreweaver" ] && [ ! -e "$HOME/.local/bin/loreweaver" ]
+          [ ! -e "$HOME/.loreweaver/bin/loreweaver" ]
+          [ ! -e "$HOME/.local/bin/loreweaver" ]
+
+          # A machine with Loreweaver 2 (its client's files and its launcher, whose `update`
+          # runs this script): nothing is installed unasked — a job has no terminal to ask
+          # on — and with the answer given, 2 is kept beside 3.
+          export HOME="$RUNNER_TEMP/home3"
+          mkdir -p "$HOME/.loreweaver/clients/tui/src" "$HOME/.local/bin"
+          echo '// 2.x' > "$HOME/.loreweaver/clients/tui/src/index.tsx"
+          printf '#!/usr/bin/env bash\nexec bun run "${TRPG_HOME}/clients/tui/src/index.tsx" "$@"\n' > "$HOME/.local/bin/loreweaver"
+          if bash release/install.sh </dev/null; then echo "Loreweaver 3 was installed over Loreweaver 2 unasked"; exit 1; fi
+          [ ! -e "$HOME/.loreweaver/bin" ]
+          [ ! -e "$HOME/.local/bin/loreweaver.old" ]
+          TRPG_UPGRADE_TO_3=0 bash release/install.sh
+          [ ! -e "$HOME/.loreweaver/bin" ]
+          TRPG_UPGRADE_TO_3=1 bash release/install.sh
+          [ "$("$HOME/.local/bin/loreweaver" --version)" = "$VERSION" ]
+          grep -q 'clients/tui/src/index.tsx' "$HOME/.local/bin/loreweaver.old"
+          [ -f "$HOME/.loreweaver/clients/tui/src/index.tsx" ]
+          bash release/install.sh </dev/null   # Loreweaver 3 is here now: nothing to ask
+          # A Loreweaver 2 tag is that release's own installer's to install.
+          if TRPG_RELEASE_TAG=v2.6.0 bash release/install.sh; then echo "a Loreweaver 2 tag was taken"; exit 1; fi
 
       - name: install.ps1
         if: runner.os == 'Windows'
@@ -244,6 +265,34 @@ jobs:
           try { & ./release/install.ps1 } catch { $refused = $true }
           if (-not $refused) { throw "a tampered download was installed" }
           if (Test-Path (Join-Path $env:TRPG_HOME "bin/loreweaver.exe")) { throw "a tampered download left a program behind" }
+
+          # A machine with Loreweaver 2 (its client's files and its launcher, whose `update`
+          # runs this script): nothing is installed unasked, and with the answer given, 2 is
+          # kept beside 3.
+          $env:TRPG_HOME = Join-Path $env:RUNNER_TEMP "lw3"
+          $env:TRPG_ORIGIN = Join-Path $PWD "release"
+          $bin = Join-Path $env:TRPG_HOME "bin"
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:TRPG_HOME "clients/tui/src"), $bin | Out-Null
+          Set-Content (Join-Path $env:TRPG_HOME "clients/tui/src/index.tsx") "// 2.x"
+          Set-Content (Join-Path $bin "loreweaver.cmd") "@echo 2.x"
+          # Nobody to ask: a child with no input, which may not prompt.
+          "" | pwsh -NoProfile -NonInteractive -File ./release/install.ps1
+          if ($LASTEXITCODE -eq 0) { throw "Loreweaver 3 was installed over Loreweaver 2 unasked" }
+          if (Test-Path (Join-Path $bin "loreweaver.exe")) { throw "an unasked install left a program behind" }
+          $env:TRPG_UPGRADE_TO_3 = "0"
+          & ./release/install.ps1
+          if (Test-Path (Join-Path $bin "loreweaver.exe")) { throw "a refused install left a program behind" }
+          $env:TRPG_UPGRADE_TO_3 = "1"
+          & ./release/install.ps1
+          if ((& "$bin/loreweaver.exe" --version) -ne $env:VERSION) { throw "the installed server is not $env:VERSION" }
+          if ((Get-Content (Join-Path $bin "loreweaver.cmd")) -ne "@echo 2.x") { throw "Loreweaver 2's launcher was not kept" }
+          Remove-Item Env:TRPG_UPGRADE_TO_3
+          & ./release/install.ps1   # Loreweaver 3 is here now: nothing to ask
+          # A Loreweaver 2 tag is that release's own installer's to install.
+          $env:TRPG_RELEASE_TAG = "v2.6.0"
+          $refused = $false
+          try { & ./release/install.ps1 } catch { $refused = $true }
+          if (-not $refused) { throw "a Loreweaver 2 tag was taken" }
 
   release:
     name: Draft release

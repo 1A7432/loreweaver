@@ -29,7 +29,7 @@ if (command === "key") {
   process.exit(0)
 }
 if (process.env.FAKE_REFUSE) {
-  console.error(JSON.stringify({ ok: false, code: "bad_settings" }))
+  console.error(JSON.stringify({ ok: false, code: process.env.FAKE_REFUSE === "1" ? "bad_settings" : process.env.FAKE_REFUSE }))
   process.exit(2)
 }
 mkdirSync(dir, { recursive: true })
@@ -161,6 +161,9 @@ describe("bringing a server up", () => {
     const refused = await bringUpServer(() => {}, undefined, { localServerHome: tempDir(), env: { FAKE_REFUSE: "1" }, searchFrom: root }).catch((error: unknown) => error)
     expect(refused).toBeInstanceOf(HostLocalError)
     expect(refused).toMatchObject({ key: "hostlocal.error.refused", vars: { code: "bad_settings" } })
+    // A folder holding a Loreweaver 2 database: its own words, since only another folder helps.
+    const older = await bringUpServer(() => {}, undefined, { localServerHome: tempDir(), env: { FAKE_REFUSE: "other_database" }, searchFrom: root }).catch((error: unknown) => error)
+    expect(older).toMatchObject({ key: "hostlocal.error.otherDatabase" })
 
     const none = await bringUpServer(() => {}, undefined, { localServerHome: tempDir(), env: {}, searchFrom: tempDir() }).catch((error: unknown) => error)
     expect(none).toMatchObject({ key: "hostlocal.error.noServer" })

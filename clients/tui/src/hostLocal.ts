@@ -51,6 +51,15 @@ export class HostLocalError extends Error {
   }
 }
 
+/**
+ * A server's refusal, as this client says it. A folder holding another Loreweaver's database
+ * (2.x kept its own under the same name in the same default folder) has words of its own: the
+ * person can only act on it by choosing another folder. Any other code is shown as it is.
+ */
+function refused(code: string): HostLocalError {
+  return code === "other_database" ? new HostLocalError("hostlocal.error.otherDatabase") : new HostLocalError("hostlocal.error.refused", { code })
+}
+
 export interface HostHandle {
   ticket: string
   key: string
@@ -212,7 +221,7 @@ async function mintAdminKey(command: ServerCommand, env: Record<string, string>,
   try {
     const parsed = JSON.parse(out.trim()) as { ok?: unknown; key?: unknown; code?: unknown }
     if (code === 0 && parsed.ok === true && typeof parsed.key === "string") return parsed.key
-    throw new HostLocalError("hostlocal.error.refused", { code: typeof parsed.code === "string" ? parsed.code : String(code) })
+    throw refused(typeof parsed.code === "string" ? parsed.code : String(code))
   } catch (error) {
     if (error instanceof HostLocalError) throw error
     throw new HostLocalError("hostlocal.error.refused", { code: String(code) })
@@ -288,7 +297,7 @@ export const bringUpServer: BringUp = async (onLog, signal, options = {}) => {
         else reject(new HostLocalError("hostlocal.error.exited", { code }))
       })
     })
-    if (!ready.ok) throw new HostLocalError("hostlocal.error.refused", { code: ready.code })
+    if (!ready.ok) throw refused(ready.code)
     if (ready.firstKey) {
       key = ready.firstKey
       newKey = true

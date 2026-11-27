@@ -30,6 +30,7 @@ import { DEFAULT_MEDIA_LIMITS, MediaStore } from "../infra/media/index.ts";
 import { takeDataLock } from "../infra/data_lock.ts";
 import { ensurePrivateDir, writePrivateFile } from "../infra/private_files.ts";
 import { OpenAIEmbeddings, VectorIndex } from "../infra/recall/index.ts";
+import { databasePath } from "../infra/database_owner.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
 import { spawnWorker, type WorkerHandle } from "../infra/runtime/worker.ts";
 import { ServerSettings } from "../infra/server_settings.ts";
@@ -256,7 +257,7 @@ export interface OpenData {
  */
 export function openData(settings: Settings, clock: Clock = systemClock): OpenData {
   ensurePrivateDir(settings.dataDir);
-  const path = join(settings.dataDir, "loreweaver.db");
+  const path = databasePath(settings.dataDir);
   const db = openDatabase(path);
   // The database holds API keys an admin set at run time (`infra/server_settings.ts`): the
   // owner's alone, like the key file. SQLite gives its journal files the database's mode.

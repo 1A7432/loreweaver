@@ -40,6 +40,29 @@ finds on `PATH`, which is where the installers put it.
 A pre-release never becomes GitHub's "latest", so the one-line installers (which ask for the
 latest release) do not pick it up; install one with `TRPG_RELEASE_TAG=<tag>`.
 
+## Machines that have Loreweaver 2
+
+Loreweaver 2 followed GitHub's "latest" release, so the first 3.x release that becomes
+"latest" reaches every 2.x machine:
+
+- **`loreweaver update` on 2.x runs the latest release's installer** — from then on, ours. So
+  `install.sh` and `install.ps1` look for Loreweaver 2 (its client's files under
+  `~/.loreweaver/clients`, or its launcher) on a machine that has no Loreweaver 3 yet, say
+  that 3 is a new program that opens none of 2's rooms, saves or packs, and ask before
+  installing; with nobody to ask they install nothing (`TRPG_UPGRADE_TO_3=1` answers
+  beforehand). Loreweaver 2 is kept either way — its command as `loreweaver.old` (on Windows
+  `loreweaver.cmd`), its files and data untouched — and can be reinstalled from its own last
+  release (`LAST_V2_TAG` in both installers: the last 2.x release that holds an installer).
+- **Both generations keep a hosted server's data in `~/.loreweaver/data`**, in a database
+  file of the same name. The 3.x server reads whose database it is before it writes
+  anything and refuses a 2.x one (`other_database`), leaving it as it was; the clients then
+  ask for another folder.
+- **A 2.x client that hosts a server downloads `loreweaver-server-<platform>` from the release
+  its installer pinned** — unaffected. One that follows "latest" instead (Loreweaver Studio
+  0.1.0, or a 2.x client installed from a checkout's installer) asks the latest release for
+  that file and, failing that, for the source of `main`: neither is a 2.x server once 3.x
+  is the latest release and `main`. A server it already downloaded keeps working.
+
 ## What is checked before a draft exists
 
 - The type checks and tests of `ci.yml`, on the tagged commit.
@@ -49,7 +72,8 @@ latest release) do not pick it up; install one with `TRPG_RELEASE_TAG=<tag>`.
   compiled file, and both programs' `--version` against the tag's.
 - On each platform: the installer, run against exactly the files the release will hold —
   install, run both programs from where they landed, install again over it, and a checksum
-  that does not match must install nothing.
+  that does not match must install nothing; on a machine made to look like it has Loreweaver 2,
+  nothing is installed unasked, and with the answer given 2 is kept beside 3.
 
 Nothing is signed or notarised. On macOS a copy downloaded with a browser is quarantined until
 the person allows it (`xattr -d com.apple.quarantine <file>`); `install.sh` downloads with
