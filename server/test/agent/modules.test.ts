@@ -409,7 +409,7 @@ test("dispatch: a command left out at load is refused without a round trip, and 
   expect(posts).toEqual(["load", "command"]);
 });
 
-test("render: a keeper command is no part of any viewer's commands", () => {
+test("render: a keeper command is part of an admin's commands and of no other viewer's", () => {
   const modules: ModuleInfo[] = [
     {
       id: "k",
@@ -423,17 +423,19 @@ test("render: a keeper command is no part of any viewer's commands", () => {
       characters: false,
     },
   ];
-  const raw = { viewers: [{ views: [], available: [{ module: "k", command: "advance", verdict: true }] }, { views: [], available: [] }], characters: [], clock: null, failures: [], broken: [] };
+  const verdict = [{ module: "k", command: "advance", verdict: true }];
+  const raw = { viewers: [{ views: [], available: verdict }, { views: [], available: verdict }], characters: [], clock: null, failures: [], broken: [] };
   const outcome = validateRender(raw, [ada, mo], modules);
-  expect(outcome.viewers.map((viewer) => viewer.commands.map((entry) => entry.command))).toEqual([["open"], ["open"]]);
+  // Ada plays; Mo is the admin. A verdict the worker sent for a player is not what lists it.
+  expect(outcome.viewers.map((viewer) => viewer.commands.map((entry) => entry.command))).toEqual([["open"], ["open", "advance"]]);
   expect(outcome.problems).toEqual([]);
 });
 
-test("dispatch: who runs a command — a keeper command is refused to members without a round trip; the Keeper never runs an admin one", async () => {
+test("dispatch: who runs a command — a keeper command is refused to players and observers without a round trip; the Keeper never runs an admin one", async () => {
   const posts: string[] = [];
   const w = worker(["omens"], { posts });
   const base = { module: "omens", args: {}, seed: "s", room: ROOM };
-  for (const who of [ada, mo, eve]) {
+  for (const who of [ada, eve]) {
     expect(await dispatchCommand(w, { ...base, command: "advance", who, by: "member" })).toMatchObject({ status: "refused", reason: "role", text: null });
   }
   for (const who of [ada, mo]) {
@@ -449,6 +451,8 @@ test("dispatch: who runs a command — a keeper command is refused to members wi
   expect(await dispatchCommand(w, { ...base, command: "look", who: ada, by: "keeper" })).toMatchObject({ status: "ok", result: { text: "keeper: the letter is in the well" } });
   expect(await dispatchCommand(w, { ...base, command: "look", who: ada, by: "member" })).toMatchObject({ status: "ok", result: { text: "member: you see the well" } });
   expect(await dispatchCommand(w, { ...base, command: "wipe", who: mo, by: "member" })).toMatchObject({ status: "ok", result: { text: "wiped" } });
+  // An admin may run a keeper command — as a member, and the module is told so.
+  expect(await dispatchCommand(w, { ...base, command: "advance", who: mo, by: "member" })).toMatchObject({ status: "ok", result: { text: expect.stringContaining("member for Mo") } });
 });
 
 test("dispatch: render and tool veto through a real worker; a hung veto allows every call", async () => {

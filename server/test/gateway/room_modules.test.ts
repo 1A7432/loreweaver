@@ -89,20 +89,18 @@ test("the scene view shows the clock a module keeps, before any turn has run", a
   expect(views(ada.sent, "scene").at(-1)?.data).toMatchObject({ clockModule: "kitchen", time: "hp 10", round: 0 });
 });
 
-test("a keeper command is no member's: refused like a role they lack, nothing applied, absent from their commands view", async () => {
+test("a keeper command is no player's: refused like a role they lack, nothing applied, absent from their commands view; an admin may run it", async () => {
   const b = setup({ modules: ["omens"] });
   const ada = b.join(KEYS.ada);
   const root = b.join(KEYS.root);
   const before = b.store.moduleStates(ROOM).get("omens");
   ada.receive({ type: "call", rid: "run", method: "command.run", params: { id: "omens/advance", args: {} } });
   ada.receive({ type: "input", rid: "typed", text: ".omens/advance" });
-  root.receive({ type: "call", rid: "admin", method: "command.run", params: { id: "omens/advance", args: {} } });
   ada.receive({ type: "call", rid: "look", method: "command.run", params: { id: "omens/look", args: {} } });
   await b.settled();
   for (const [sent, rid] of [
     [ada.sent, "run"],
     [ada.sent, "typed"],
-    [root.sent, "admin"],
   ] as const) {
     const refused = resultFor(sent, rid);
     // The same refusal an admin command gives a player: it names no command and carries nothing of the module's.
@@ -123,5 +121,14 @@ test("a keeper command is no member's: refused like a role they lack, nothing ap
   await b.settled();
   const listed = (sent: typeof ada.sent) => (views(sent, "commands").at(-1)?.data as { commands: { id: string }[] }).commands.map((entry) => entry.id).filter((id) => id.startsWith("omens/"));
   expect(listed(ada.sent)).toEqual(["omens/look"]);
-  expect(listed(root.sent)).toEqual(["omens/look", "omens/wipe"]);
+  // The admin's table lists it, as an admin command: it is theirs to repair the table with.
+  const rootTable = (views(root.sent, "commands").at(-1)?.data as { commands: { id: string; role: string }[] }).commands;
+  expect(listed(root.sent).toSorted()).toEqual(["omens/advance", "omens/look", "omens/wipe"]);
+  expect(rootTable.find((entry) => entry.id === "omens/advance")?.role).toBe("admin");
+
+  // And runs it: the module is told a member called, the state moves, the table hears the fact.
+  root.receive({ type: "call", rid: "admin", method: "command.run", params: { id: "omens/advance", args: {} } });
+  await b.settled();
+  expect(resultFor(root.sent, "admin")).toMatchObject({ ok: true, text: expect.stringContaining("member for Root") });
+  expect(b.store.moduleStates(ROOM).get("omens")).toEqual({ hours: 1 });
 });

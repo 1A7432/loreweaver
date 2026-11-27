@@ -67,14 +67,15 @@ export class RoomModuleCommands implements ModuleCommands {
     const entries: ModuleCommandEntry[] = [];
     for (const module of described.modules) {
       for (const command of module.commands) {
-        // A `keeper` command is the Keeper's machinery: no member's table lists it at all.
-        if (command.role === "keeper") continue;
+        // A `keeper` command is the Keeper's machinery. Among MEMBERS only an admin may run it,
+        // so in the members' table it is an admin command: listed for admins, absent for
+        // everyone else (the registry leaves admin entries out of a player's view).
         const entry: { -readonly [K in keyof ModuleCommandEntry]: ModuleCommandEntry[K] } = {
           id: `${module.id}/${command.name}`,
           title: command.title,
           description: command.description,
           params: command.params,
-          role: command.role,
+          role: command.role === "keeper" ? "admin" : command.role,
           // Whether the module's own `available` says yes is known per viewer from a render;
           // the table lists the command and the module answers at the moment of use.
           available: true,

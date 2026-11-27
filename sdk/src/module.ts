@@ -195,7 +195,8 @@ type Awaitable<T> = T | Promise<T>;
 
 /**
  * Who may run a command. `player` (default): players and admins, and the Keeper. `admin`:
- * admins only — never the Keeper. `keeper`: the Keeper only; never shown to a member.
+ * admins only — never the Keeper. `keeper`: the Keeper's; never shown to a player, and among
+ * members only an admin may run it.
  */
 export type CommandRole = "player" | "admin" | "keeper";
 

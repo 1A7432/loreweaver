@@ -723,8 +723,9 @@ export function validateRender(raw: unknown, viewers: readonly Who[], modules: r
         else views.push({ module: module.id, view: view.name, data });
       }
       for (const command of module.commands) {
-        // A viewer is a member; the Keeper's own commands are no part of what they are shown.
-        if (command.role === "keeper") continue;
+        // The Keeper's own commands are no part of what a member is shown — except an admin,
+        // who may run them (to repair what the Keeper got wrong).
+        if (command.role === "keeper" && who.member?.role !== "admin") continue;
         commands.push({ module: module.id, command: command.name, availability: availability(module.id, command, who, rawAvailable, find, caps, problems) });
       }
     }

@@ -28,7 +28,7 @@ function unknownCommand(commands: readonly ModuleCommand[], id: string): ToolRes
 
 const WHO_MAY_RUN: Readonly<Record<ModuleCommand["info"]["role"], string>> = {
   player: "any player, and you",
-  keeper: "you only (players never see it)",
+  keeper: "you (players never see it; the room admin may also run it by hand)",
   admin: "the room admin only; you cannot run it",
 };
 

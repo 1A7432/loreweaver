@@ -116,14 +116,16 @@ test("the host runs a command as a member or as the Keeper; a keeper command is 
     }),
     { who: ada },
   );
-  for (const member of [ada, mo, eve]) {
+  for (const member of [ada, eve]) {
     const refused = await host.command("advance", {}, member);
     expect(refused.outcome).toEqual({ status: "refused", reason: "role" });
     expect(refused.facts).toEqual([]);
     expect(await host.available("advance", member)).toBe("role");
   }
-  await host.view("none", mo);
+  await host.view("none", ada);
   expect(asked).toBe(0);
+  // An admin may run a keeper command (as a member: `call.by` says so).
+  expect((await host.command("advance", {}, mo)).outcome).toEqual({ status: "ok", result: { text: "member for Mo" } });
   const advanced = await host.keeperCommand("advance");
   expect(advanced.outcome).toEqual({ status: "ok", result: { text: "keeper for Ada" } });
   expect(advanced.facts.map((fact) => fact.text)).toEqual(["an hour passes"]);

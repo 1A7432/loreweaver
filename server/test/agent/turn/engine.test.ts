@@ -179,7 +179,7 @@ describe("the Keeper runs module commands as the Keeper", () => {
       expect(head).toContain("omens/advance");
       expect(head).toContain("omens/look");
       const tools = (h.keeper.requests[1]?.messages ?? []).filter((message) => message.role === "tool").map((message) => String(message.content));
-      expect(tools[0]).toContain("Who may run it: you only");
+      expect(tools[0]).toContain("Who may run it: you (players never see it; the room admin may also run it by hand)");
       // `who` is still the member who spoke; the module knows the Keeper ran it, and its Keeper-only text reaches only the Keeper.
       expect(tools[1]).toBe("omens/advance: keeper for Ada: hour 1, OMEN_DUE_AT_SIX");
       expect(tools[2]).toBe("omens/look: keeper: the letter is in the well");

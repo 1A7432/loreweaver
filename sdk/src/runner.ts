@@ -224,19 +224,21 @@ export function isValidName(name: unknown): name is string {
 }
 
 /**
- * Whether the member `who` may use a command declared with `role`. A `keeper` command is
- * no member's, an admin's included.
+ * Whether the member `who` may use a command declared with `role`. An admin may use every
+ * command — a `keeper` one too: it is how a person repairs what the Keeper got wrong (the
+ * owner's ruling). No other member may use a `keeper` command.
  */
 export function mayUse(role: unknown, who: Who): boolean {
   const member = who.member;
-  if (member === null || role === "keeper") return false;
+  if (member === null) return false;
   if (member.role === "admin") return true;
   return member.role === "player" && (role === undefined || role === "player");
 }
 
 /**
  * Whether a command declared with `role` may be run by `by`. The Keeper may run `player`
- * and `keeper` commands, whoever spoke; never an `admin` one. A member is `mayUse`.
+ * and `keeper` commands, whoever spoke; never an `admin` one. A member is `mayUse` (so an
+ * admin runs anything, and then `by` is `"member"`).
  */
 export function mayRun(role: unknown, by: CommandOrigin["by"], who: Who): boolean {
   if (by === "keeper") return role === undefined || role === "player" || role === "keeper";
@@ -620,8 +622,8 @@ export class ModuleRunner {
         }
         for (const name of commandNames) {
           const spec = lookup<CommandSpec>(definition.commands, name);
-          // A viewer is a member, and a `keeper` command is no member's to be offered.
-          if (!spec || typeof spec.available !== "function" || spec.role === "keeper") continue;
+          // A `keeper` command is offered to no member but an admin.
+          if (!spec || typeof spec.available !== "function" || (spec.role === "keeper" && who.member?.role !== "admin")) continue;
           const read = await this.#read(instance, out, () => spec.available?.(structuredClone(who), structuredClone(request.room)));
           available.push(
             "value" in read ? { module: instance.id, command: name, verdict: read.value } : { module: instance.id, command: name, error: read.error },

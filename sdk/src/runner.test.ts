@@ -99,10 +99,13 @@ test("roles: observers and nobody use nothing; admins use everything", () => {
   expect(mayUse(undefined, { member: null, character: null })).toBe(false);
 });
 
-test("roles: a keeper command is no member's; the Keeper runs player and keeper commands, never admin ones", () => {
+test("roles: among members a keeper command is an admin's alone; the Keeper runs player and keeper commands, never admin ones", () => {
   const nobody: Who = { member: null, character: null };
   expect(mayUse("keeper", ada)).toBe(false);
-  expect(mayUse("keeper", mo)).toBe(false);
+  expect(mayUse("keeper", eve)).toBe(false);
+  expect(mayUse("keeper", nobody)).toBe(false);
+  // An admin may: it is how a person repairs what the Keeper got wrong.
+  expect(mayUse("keeper", mo)).toBe(true);
   for (const speaker of [ada, mo, eve, nobody]) {
     expect(mayRun(undefined, "keeper", speaker)).toBe(true);
     expect(mayRun("player", "keeper", speaker)).toBe(true);
@@ -110,11 +113,12 @@ test("roles: a keeper command is no member's; the Keeper runs player and keeper 
     expect(mayRun("admin", "keeper", speaker)).toBe(false);
   }
   expect(mayRun("admin", "member", mo)).toBe(true);
-  expect(mayRun("keeper", "member", mo)).toBe(false);
+  expect(mayRun("keeper", "member", mo)).toBe(true);
+  expect(mayRun("keeper", "member", ada)).toBe(false);
   expect(mayRun("player", "nobody" as never, ada)).toBe(false);
 });
 
-test("a command is told who runs it; a keeper command is refused to every member and run for the Keeper", async () => {
+test("a command is told who runs it; a keeper command is refused to players and observers, run for the Keeper and for an admin", async () => {
   const seen: Json[] = [];
   const r = runner(
     defineModule({
@@ -135,7 +139,7 @@ test("a command is told who runs it; a keeper command is refused to every member
     }),
   );
   const call = (command: string, by: "keeper" | "member", who: Who) => r.command({ module: "clockwork", command, args: {}, who, by, seed: "s", room: room(1) });
-  for (const member of [ada, mo, eve]) {
+  for (const member of [ada, eve]) {
     const refused = await call("advance", "member", member);
     expect(refused.outcome).toEqual({ status: "refused", reason: "role" });
     expect(refused.effects).toEqual([]);
@@ -145,6 +149,10 @@ test("a command is told who runs it; a keeper command is refused to every member
   expect(kept.outcome).toEqual({ status: "ok", result: { text: "advanced; the omen is due" } });
   expect(kept.effects.map((effect) => effect.kind)).toEqual(["fact"]);
   expect(seen).toEqual([["keeper", "Ada"]]);
+  // An admin runs it too, and the module is told it was a member's call.
+  const repaired = await call("advance", "member", mo);
+  expect(repaired.outcome).toEqual({ status: "ok", result: { text: "advanced" } });
+  expect(seen.at(-1)).toEqual(["member", "Mo"]);
   expect((await call("look", "keeper", eve)).outcome).toEqual({ status: "ok", result: { text: "keeper" } });
   expect((await call("look", "member", ada)).outcome).toEqual({ status: "ok", result: { text: "member" } });
   expect((await call("wipe", "keeper", mo)).outcome).toEqual({ status: "refused", reason: "role" });

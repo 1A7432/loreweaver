@@ -218,10 +218,12 @@ commands: {
   - `player` (default): players and admins, and the Keeper.
   - `admin`: admins only. The Keeper never runs it, whoever is speaking: admin commands
     (resets, settings) are the human admin's.
-  - `keeper`: the Keeper only. It is Keeper machinery: never listed in a member's
-    `commands` view, and a member who names it anyway is refused as having the wrong role.
+  - `keeper`: the Keeper's. It is Keeper machinery: never listed in a player's
+    `commands` view, and a player who names it anyway is refused as having the wrong role.
     The Keeper sees it in its list of the room's commands and runs it with its
-    `run_command` tool.
+    `run_command` tool. A room's **admin** may run it too (and sees it among their
+    commands): that is how a person repairs what the Keeper got wrong — a clock advanced
+    too far, a reveal triggered early. Then `call.by` is `"member"` and `who` is the admin.
 
   Observers use no command.
 - `available(who, room)` (read-only) narrows it further: `true`, or a reason shown to that
@@ -395,7 +397,7 @@ The host:
 | `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. |
 | `view(name, who?, room?)` | The view's data for `who`; throws if it failed. |
 | `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones are refused with `reason: "role"`. |
-| `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (always, for a `keeper` command), else what `available` answers. |
+| `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (a `keeper` command: for everyone but an admin), else what `available` answers. |
 | `characters(room?)`, `clock(room?)` | The read-only answers. |
 | `checkpoint` | The current checkpoint: what a restart would load. |
 | `description` | The static description the engine reads at load. |
