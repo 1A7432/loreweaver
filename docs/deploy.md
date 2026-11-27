@@ -2,69 +2,86 @@
 
 # Deploying Loreweaver
 
-Most tables are hosted **peer-to-peer from a laptop** — just `python -m app --serve`, or one-click
-**Host locally** from the connect screen (see the [README](../README.md)). This page is for running
-an **always-on server** (a 24/7 public game with a stable ticket). Loreweaver connects over **Iroh**
-— p2p QUIC, dialed by a ticket, with **no domain, TLS, port-forward, or reverse proxy**. Players
-join with deployer-issued keys; there is no account system. (There is no Docker image or
-WebSocket **player-client** serve path — the old TUI WebSocket remains only for offline tests.)
+Most tables are hosted **peer-to-peer from a laptop** — one-click **Host locally & play** on the
+terminal client's connect screen, or `bun server/src/cli/main.ts serve` (see the
+[README](../README.md)). This page is for running an **always-on server** (a 24/7 game with a stable
+ticket). Loreweaver connects over **Iroh** — p2p QUIC, dialed by a ticket, with **no domain, TLS,
+port-forward, or reverse proxy**. Players join with keys the room's admin hands out; there is no
+account system. There is no Docker image, and 3.0 has no WebSocket transport.
+
+3.0 has no published release yet: you run the server from a checkout, with [Bun](https://bun.sh).
 
 ## Run it (bare metal)
 
-Requires Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/).
-
 ```bash
 git clone https://github.com/1A7432/loreweaver && cd loreweaver
-cp .env.example .env          # then set TRPG_LLM__* (or leave blank for the offline demo)
-uv sync                       # env + deps (Iroh is a default dep)
-uv run python -m app --serve --keys ./data/keys.toml
+bun install
+cp .env.example .env          # then set TRPG_LLM__* (the server starts without; the Keeper cannot answer until set)
+bun server/src/cli/main.ts serve
 ```
 
-On first run the server **auto-mints a keeper key** and prints a shareable **Iroh ticket** — both
-are also written next to the keystore as `keeper-key.txt` / `iroh-ticket.txt`. Share the ticket +
-the keeper key; connect with them, then mint more keys / create rooms right in the client's *Rooms
-& invites* screen — no server access needed. State (SQLite + keys) lives next to `--keys`.
+When it is ready the server prints one JSON line and keeps running until it is interrupted:
+
+```json
+{"ok":true,"version":"3.0.0","ticket":"endpoint…","notes":["recall_off"],"first_key":{"room":"main","key":"…"}}
+```
+
+On a fresh data directory it mints an **admin key** for the room `main` and prints it here, once —
+`first_key` is never shown again. Connect with the ticket and that key, then mint more keys right in
+the client's **Access keys** screen (or with `.key mint`) — no server access needed. `notes` are
+start-up remarks as codes: `model_not_configured`, `context_window_unknown`, `recall_off`. A setting
+the server cannot use stops it before anything is opened:
+`{"ok":false,"code":"bad_settings","problems":[…]}` names every variable at once.
+
+The other commands, from the shell. Each prints one JSON object, so a script can read it:
+
+```bash
+bun server/src/cli/main.ts key <room> <admin|player|observer> <name>   # a new key; its value is printed once
+bun server/src/cli/main.ts import-world <room> <card-file>             # a SillyTavern card as the room's world
+bun server/src/cli/main.ts packs                                       # the installed packs
+bun server/src/cli/main.ts install <path|https-url|gh:owner/repo[@tag]> [--yes]
+bun server/src/cli/main.ts uninstall <id>
+bun server/src/cli/main.ts selftest                                    # can this build run a turn end to end
+bun server/src/cli/main.ts --version
+```
+
+Run `key` and `import-world` while the server is **stopped**: a running server keeps its own copy of
+the key file and of the rooms. A pack installed or uninstalled from the shell is seen by a running
+server when it next starts. A key names its room; a key for a room that does not exist yet starts
+that room.
+
+### One file instead of a checkout
+
+`cd server && bun run build` compiles the server into one executable, `server/dist/loreweaver`, and
+runs its self-test. It takes the same commands (`loreweaver serve`, `loreweaver key …`) and needs no
+Bun on the machine it runs on. Give it its settings as environment variables. Placed at
+`<local server folder>/server-bin/loreweaver`, it is also what the terminal client's *Host locally &
+play* runs when the client is not inside a checkout.
 
 ### A ticket that survives restarts
 
-The ticket is stable across restarts, and **directly** reachable, not just through the relay. Two
-small files next to the keystore make it so:
-
-- `iroh-secret.key` fixes the server's identity (the first half of the ticket).
-- `iroh-port.txt` remembers the UDP port the server bound (the direct addresses inside the
-  ticket). The first start picks a port and saves it; every later start binds the same one. A
-  client holding an old ticket (Loreweaver Studio remembers the last table) dials those addresses
-  first, so it reconnects in a moment instead of waiting on the relay, which can take tens of
-  seconds from far away.
-
-Keep both files (a backup of the `--keys` directory covers them); deleting either one gives the
-server a new ticket. To choose the port yourself, for example to open exactly that port in a cloud
-firewall or security group, set `TRPG_TUI__IROH_PORT=<port>` (it wins over the saved one and is
-saved in turn). If the port cannot be bound at startup (another process holds it), the server
-logs a warning, picks a random port instead, and the ticket changes this once: re-share the new
-one. Only the IPv4 socket is pinned; IPv6 addresses in a ticket still change per start, which is
-harmless because the IPv4 and relay paths carry the connection.
-
-> Behind a SOCKS proxy for a non-China LLM? `uv pip install socksio`. A China-direct provider
-> (e.g. DeepSeek) needs no proxy — run with a clean env.
+The server's identity is `transport.key` in its data directory: the same key, the same ticket, after
+every restart. Keep it (a copy of the data directory covers it); deleting it gives the server a new
+ticket, and every player needs the new one.
 
 ## Keep it running (systemd)
 
 ```ini
 # /etc/systemd/system/loreweaver.service  — replace YOU with your username
 [Unit]
-Description=Loreweaver Iroh server
+Description=Loreweaver server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=YOU
-WorkingDirectory=/home/YOU/loreweaver                 # .env is loaded from here
-ExecStart=/home/YOU/.local/bin/uv run python -m app --serve --keys /home/YOU/loreweaver-data/keys.toml
+WorkingDirectory=/home/YOU/loreweaver
+EnvironmentFile=/home/YOU/loreweaver/.env
+Environment=TRPG_DATA_DIR=/home/YOU/loreweaver-data
+ExecStart=/home/YOU/.bun/bin/bun server/src/cli/main.ts serve
 Restart=on-failure
 RestartSec=10
-TimeoutStartSec=120                                   # Iroh's relay handshake takes a moment
 
 [Install]
 WantedBy=multi-user.target
@@ -72,195 +89,165 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now loreweaver
-journalctl -u loreweaver -f       # follow logs — the ticket + keeper key print at startup
+journalctl -u loreweaver -f       # follow logs — the ready line (ticket, first key) prints at startup
 ```
+
+The server stops cleanly on `SIGTERM` and `SIGINT`: it closes every connection and the database
+before it exits.
 
 ## Updating
 
-A room admin updates the server from the client's **Rooms & invites** page — no SSH needed.
-It is **on by default** for the git-checkout deployment above: an admin (only) sees the
-server-vs-client version and an **Update server** button whenever the client is newer.
-Pressing it runs `TRPG_TUI__UPDATE_COMMAND` on the server (default
-`git pull --ff-only && uv sync`), then the process **re-execs itself into the new code**
-(same PID, so the Iroh ticket is unchanged and no `systemctl restart` is needed — it works
-with the `Restart=on-failure` unit above). Clients briefly disconnect and reconnect.
-
-`loreweaver update` does the same server update by default after reinstalling the client
-(using your saved keeper connection), so one command keeps both in step —
-`loreweaver update --client-only` skips the server.
-
-Override the command for a non-git deployment, or disable the feature entirely:
+3.0 has no self-update. Update by hand:
 
 ```bash
-# in ~/loreweaver/.env
-TRPG_TUI__UPDATE_COMMAND=git pull --ff-only && uv sync   # default (git checkout)
-# TRPG_TUI__UPDATE_COMMAND=docker compose pull && docker compose up -d   # your own mechanism
-# TRPG_TUI__UPDATE_COMMAND=                                # blank → button hidden, feature off
+cd ~/loreweaver && git pull && bun install && sudo systemctl restart loreweaver
 ```
 
-You can still update by hand any time:
-
-```bash
-cd ~/loreweaver && git pull && uv sync && sudo systemctl restart loreweaver
-```
-
-Security: the command is yours, from server-side config — a client can only ask the server
-to run *its own* configured command, never supply one. The default only pulls from the
-checkout's own git remote. The keeper key is the trust boundary, exactly as for
-`.model`/key management; set `TRPG_TUI__UPDATE_COMMAND` blank if you'd rather it never run.
+The ticket stays the same. A client must share the server's protocol major version: one that is too
+old or too new is refused, with a message saying which side is behind — so update the clients from
+the same checkout.
 
 ## Configuration
 
-All settings use the `TRPG_` env prefix with `__` for nesting (see
-`.env.example` / `infra/config.py`), loaded from `.env` in the working directory unless
-`TRPG_ENV_FILE` points at a different file. The TUI's one-click local host path sets
-`TRPG_ENV_FILE=<local server folder>/.env` automatically.
+All settings are `TRPG_*` environment variables, with `__` between levels
+(`server/src/infra/config.ts` is the one place that reads them; [`.env.example`](../.env.example)
+lists every one). Started with `bun`, the server also reads `.env` from the directory it starts in.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `TRPG_LLM__PROVIDER` | `openai` (+ presets: `deepseek`, `groq`, `openrouter`, `together`, `ollama`, `lmstudio`, …), dual-mode `chatgpt` / `gpt-subscription`, subscription `supergrok`, or native `anthropic` / `gemini` | `openai` |
-| `TRPG_LLM__API_KEY` | provider/proxy API key — not used by a subscription OAuth path; **blank = offline demo Keeper** for normal API-key providers | *(empty)* |
-| `TRPG_LLM__BASE_URL` | OpenAI-compatible base URL; an explicit value selects the proxy path for `chatgpt` / `gpt-subscription`, while blank selects subscription OAuth | provider preset |
-| `TRPG_LLM__CHAT_MODEL` | chat model id | `gpt-4o` |
-| `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | retrieval embeddings | `text-embedding-3-small` / `1536` |
-| `TRPG_LOCALE` | UI language `en` / `zh` | `en` |
-| `TRPG_ENV_FILE` | explicit `.env` file to load before starting the server | `.env` in the working directory |
-| `TRPG_DATA_DIR` | campaign/runtime data directory (db → `<data_dir>/loreweaver.db`) | `./data` |
-| `TRPG_TUI_KEYS` | keystore file path (also overridable with `--keys`; independent of `TRPG_DATA_DIR`) | `./keys.toml` |
-| `TRPG_LOCAL_SERVER_HOME` | TUI one-click local hosting root: server binary/source cache, `.env`, data, keys, and ticket sidecars | `TRPG_HOME`, else `<user home>/.loreweaver` |
-| `TRPG_RELEASE_TAG` | Pin the installer/client and one-click server downloads to a versioned GitHub Release such as `release-0.5.1.dev29+g0cf542b` | latest release |
-| `TRPG_SERVER_RELEASE_TAG` | Pin only the one-click server binary/source download tag; the installer writes this automatically for release builds | `TRPG_RELEASE_TAG`, else latest release |
-| `TRPG_ENABLE_VECTOR_DB` | worldbook / document retrieval | `true` |
-| `TRPG_TUI__JOIN_TIMEOUT` | seconds an unauthenticated connection has to send `join` before being closed | `10` |
-| `TRPG_TUI__IROH_PORT` | UDP port the Iroh endpoint binds (IPv4); pin it for a firewall rule. `0` = remembered in `iroh-port.txt` next to the keys, picked on first start. See [A ticket that survives restarts](#a-ticket-that-survives-restarts) | `0` |
-| `TRPG_CENSOR__WORDLIST_PATH` | Content-moderation wordlist: a JSON file `{"word": level, ...}` (level `1`-`5`, see `gateway.ops.CensorLevel`). See [Content moderation](#content-moderation) | *(empty = moderation OFF)* |
-| `TRPG_CENSOR__WORDLIST` | Content-moderation wordlist, inline: `word[:level],word2[:level2],...` — an alternative to a file, handy for one env var. Combines with `WORDLIST_PATH` if both are set | *(empty = moderation OFF)* |
+| `TRPG_LOCALE` | the language of rooms until a room sets its own: `en` / `zh` | `en` |
+| `TRPG_DATA_DIR` | the data directory: database, key file, server identity, media, installed packs | `./data` |
+| `TRPG_LLM__PROVIDER` | a preset — `openai`, `anthropic`, `deepseek`, `openrouter`, `moonshot` — or any name of yours together with `TRPG_LLM__BASE_URL` | *(none)* |
+| `TRPG_LLM__BASE_URL` | the endpoint's address; wins over the preset's | the preset's |
+| `TRPG_LLM__API_KEY` | the provider's API key | *(none: no model)* |
+| `TRPG_LLM__CHAT_MODEL` | the model id | *(none: no model)* |
+| `TRPG_LLM__WIRE` | `openai-compatible`, `anthropic` or `openai-responses` | the preset's, else `openai-compatible` |
+| `TRPG_LLM__REASONING_EFFORT` | `low`, `medium`, `high`, `xhigh` or `max` | the provider's |
+| `TRPG_LLM__CONTEXT_WINDOW` | the model's context window in tokens; the chronicle fold measures against it | known models' own; else 32000 is assumed |
+| `TRPG_LLM__MAX_OUTPUT_TOKENS` | a cap on one reply | the provider's |
+| `TRPG_LLM__TIMEOUT_MS` | how long one model call may take | the SDK's |
+| `TRPG_LLM__PROMPT_CACHE_KEY` | `false` stops the OpenAI wires from sending `prompt_cache_key` | `true` |
+| `TRPG_NPC__*`, `TRPG_SCRIBE__*`, `TRPG_DIRECTOR__*`, `TRPG_MEMORY__*` | the same ten fields for one lane; a model or effort alone keeps the Keeper's endpoint and key, a provider or base URL makes a separate endpoint with its own key | the Keeper's client |
+| `TRPG_TURN__MAX_ROUNDS` | tool rounds the Keeper may take in one turn | `12` |
+| `TRPG_SCRIBE__ENABLED` | the Scribe | `true` |
+| `TRPG_DIRECTOR__ENABLED` | the Stage Director | `true` |
+| `TRPG_DIRECTOR__IMAGES` | `false`: the Director shows a pack's pictures but never generates one | `true` |
+| `TRPG_DIRECTOR__MAX_IMAGES` | pictures one story may generate | `24` |
+| `TRPG_DIRECTOR__PREGEN_PER_BEAT` | likely-next subjects one beat may prepare | `2` |
+| `TRPG_CHRONICLE__ENABLED` | the chronicle fold | `true` |
+| `TRPG_CHRONICLE__FOLD_TRIGGER` / `__FOLD_FLOOR` / `__FOLD_EMERGENCY` | fractions of the context window (floor < trigger ≤ emergency) | `0.60` / `0.40` / `0.85` |
+| `TRPG_CHRONICLE__LAG_TURNS` | recent turns never folded | `4` |
+| `TRPG_CHRONICLE__SUMMARY_MAX_CHARS` | the campaign summary's length cap | `4000` |
+| `TRPG_IMAGEGEN__BASE_URL`, `__API_KEY`, `__MODEL` | image generation; all three, or none | *(off)* |
+| `TRPG_IMAGEGEN__SIZE` | `WIDTHxHEIGHT` or `auto` | `1024x1024` |
+| `TRPG_IMAGEGEN__DIALECT` | `openai` or `xai` | `openai` |
+| `TRPG_EMBEDDINGS__API_KEY`, `__MODEL`, `__DIMENSIONS` | recall by meaning (an OpenAI-compatible embeddings endpoint); without it lore activates by keyword only | *(off)* |
+| `TRPG_EMBEDDINGS__BASE_URL` | that endpoint's address | OpenAI's |
+| `TRPG_CENSOR__WORDLIST` / `TRPG_CENSOR__WORDLIST_PATH` | the word filter: see [Content moderation](#content-moderation) | *(off)* |
+| `TRPG_STORE__UNDO_DEPTH` | how many turns back `.undo` may reach | `4` |
+| `TRPG_MODULES__CALL_TIMEOUT_MS` | how long one call into a room's module worker may take before the worker is ended | `5000` |
+| `TRPG_TUI__AUDIO_MAX_FILE_BYTES` | one sound, in bytes | 128 MiB |
+| `TRPG_TUI__AUDIO_ROOM_QUOTA_BYTES` | all of a room's sounds together, in bytes | 2 GiB |
 
-ChatGPT subscriptions are not API keys. For the direct subscription path, start
-the server, run `.model login chatgpt` from a private/local admin chat, complete
-the device-code flow, then run `.model set chatgpt [model]`. Leave
-`TRPG_LLM__BASE_URL` blank for this path; Loreweaver uses the saved OAuth grant,
-not browser cookies or web-session automation. `.model login supergrok` followed
-by `.model set supergrok [model]` selects the SuperGrok subscription path and can
-also supply its image-generation bearer.
-
-Existing compatible gateways remain supported: set provider to `chatgpt` or
-`gpt-subscription`, explicitly set `TRPG_LLM__BASE_URL=<gateway /v1 endpoint>`,
-and provide the gateway API key. An explicit `base_url` always selects this
-classic proxy path rather than subscription OAuth.
-
-Release builds publish an adjacent `.sha256` for every client and server archive. The
-installer verifies the client digest before extraction; one-click hosting verifies the
-selected server archive. If an older binary release has no sidecar, or its checksum metadata is
-unreachable or malformed, one-click hosting falls back to the selected source path. A valid
-checksum that does not match the downloaded archive is fatal. Untagged `main` builds and numeric
-stable `v*` tags become GitHub's Latest release; explicitly tagged prereleases remain
-pre-releases. The HTTP mirror keeps a flat compatibility copy for its one-line installer and an
-immutable copy at `releases/<tag>/` for every published build. A released or pinned installer
-uses the tag-specific mirror copy, so a later development publish cannot replace its fallback
-archive. An embedded digest is accepted only when the selected tag matches the installer's
-embedded tag; other selections fetch the selected archive's sidecar. Checksum mismatches are
-fatal and never trigger extraction or a fallback to a different payload.
-The installer uses `https://registry.npmjs.org` by default; set `TRPG_REGISTRY` only when you
-intentionally choose another registry.
+A room admin can change the model lanes and image generation at run time (`.model`, `.imagegen`, or
+the **Model** screen); those changes are stored in the database and win over the variables until
+`.model reset`.
 
 ## Encryption
 
 Iroh player connections are **end-to-end encrypted, with nothing to configure** (QUIC/TLS, each peer
-authenticated by its public key), with no certificate to manage. This protects traffic between
-an OpenTUI player and the Loreweaver server; it does not say what the server sends to a configured
-model provider.
+authenticated by its public key), with no certificate to manage. This protects traffic between a
+client and the Loreweaver server; it does not say what the server sends to a configured model
+provider.
 
 ## Data flow and trust boundaries
 
-- The deterministic rules engine, SQLite campaign state, media, room keys, and backups stay on
+- The deterministic rules engine, the SQLite campaign state, media, room keys and backups stay on
   the server you operate. The Iroh relay, when one is needed, carries encrypted traffic and does
   not terminate the application session.
-- A **remote** LLM endpoint is a separate data processor. It receives module text for analysis,
-  the Keeper system prompt (which by design carries the module's Keeper-only lore), relevant
-  conversation history, and the current player input. The standard app uses a local hash
-  embedder; if an embedding backend is explicitly replaced with a remote implementation, document
-  chunks also go to that endpoint. Select a local endpoint such as Ollama or LM Studio when this
-  material must remain on infrastructure you control.
-- The player knowledge pool and every NPC or companion are kept apart by the code itself: a sub-actor is
-  built only from its own record and sheet. The main Keeper is intentionally different — it sees
-  secrets in order to run the mystery. Prompt instructions and the nightly live-model red-line
-  eval reduce and measure its leak risk; they are not a proof that every model will behave.
-- Player keys are room-scoped. Keeper keys can read Keeper-only state and manage keys only for
-  their own room, but provider/model configuration is deployment-wide. Issue Keeper keys only to
-  fully trusted co-administrators. A caller-supplied custom provider URL is never paired with an
-  older saved API key unless the caller supplies that key for the new endpoint.
-- Provider API keys and subscription OAuth grants are stored unencrypted in the local SQLite
-  database so hot configuration survives restart. They are sent as authorization only to the
-  chosen provider endpoint, not to players. Treat the host account and its backups as part of the
-  trusted computing base.
+- A **remote** LLM endpoint is a separate data processor. It receives the Keeper's prompt (which by
+  design carries the world's keeper-only lore), relevant conversation history, and the current player
+  input; a character made from a description or a card sends that text as well. Recall by meaning
+  is off unless configured; an embedding endpoint you configure receives lore entries and chronicle
+  lines. Select a local endpoint such as Ollama or LM Studio when this material must remain on
+  infrastructure you control.
+- Players and every NPC are kept apart from keeper material by the code itself: an NPC actor is
+  built only from its own record and sheet, and the Stage Director only from what the table has
+  already seen. The main Keeper is intentionally different — it sees secrets in order to run the
+  mystery. Prompt instructions and live-model play-tests reduce and measure its leak risk; they are
+  not a proof that every model will behave.
+- A module is real code, run in the room's worker thread with no security sandbox: installing a pack
+  is a decision to run its code on this machine. The trust card says so before anything is written.
+  Packs are installed by whoever runs the server, or by a room admin from the table (`.pack install`).
+- Keys are room-scoped. Admin keys can read keeper-only state and manage keys only for their own
+  room, but model configuration and pack installation are server-wide. Issue admin keys only to
+  fully trusted co-administrators.
+- API keys set at run time are stored unencrypted in the local SQLite database so they survive a
+  restart. They are sent as authorization only to the chosen provider endpoint, never to players.
+  Treat the host account and its backups as part of the trusted computing base.
 
 ## Content moderation
 
-`gateway.ops.Censor` is a real, bypass-resistant word matcher (NFKC + casefold
-normalization, de-obfuscation for spaced/punctuated/fullwidth spellings,
-whole-word boundaries, offset-preserving masking) — but **it ships with no
-wordlist and is OFF by default.** Loreweaver deliberately does not bundle a
-profanity/slur list: maintaining one, and getting multilingual coverage
-right, is a policy choice each deployer should own, not something baked into
-the engine. With no wordlist configured, `Censor` takes an explicit no-op
-path on every call — it is not silently filtering anything.
+The word filter (`server/src/gateway/review.ts`) is a real, bypass-resistant word matcher — NFKC and
+case folding, letters of a word may be separated by spaces, dots, asterisks, hyphens, middle dots or
+zero-width characters, whole-word matching, masks placed on the original characters — but **it ships
+with no word list and is OFF by default.** Loreweaver deliberately does not bundle a profanity/slur
+list: maintaining one, and getting multilingual coverage right, is a policy choice each operator
+should own, not something baked into the engine. With no list configured the filter is an explicit
+no-op — it is not silently filtering anything.
 
-To turn it on, set **one** of `TRPG_CENSOR__WORDLIST_PATH` (a JSON file) or
-`TRPG_CENSOR__WORDLIST` (an inline list) — see the
-[Configuration](#configuration) table above. Example file:
+To turn it on, set `TRPG_CENSOR__WORDLIST` (inline: `word[:level],word2[:level2],…`) or
+`TRPG_CENSOR__WORDLIST_PATH` (a text file, one `word[:level]` per line), or both — they combine. A
+list file that cannot be read stops the server from starting: an operator who asked for a filter
+does not get an unfiltered server.
 
-```json
-{ "some-slur": 5, "some-mild-word": 2 }
+```
+some-slur:5
+some-mild-word:2
 ```
 
-Levels are `1` (`NOTICE`) through `5` (`FORBIDDEN`); a hit at `DANGER` (`4`)
-or above blocks the message (the reply is replaced), below that it is masked
-in place. Word matching is locale-agnostic — list whatever words/scripts you
-need moderated.
+Levels run from `1` (notice) to `5` (forbidden); a word without one is `1`. Every hit is masked; a
+hit at `4` (danger) or above blocks the Keeper's reply — it is not published, and the turn ends with
+a notice instead. Word matching is locale-agnostic — list whatever words and scripts you need.
 
 **Current scope — read before relying on this:**
 
-- It only screens the **AI Keeper's own narration** (`agent.loop.run_kp_turn`'s
-  `output_review`, wired in `gateway.runner.GatewayRunner` and
-  `net.tui_server.TuiServer`). **Player input is not screened.** A player can
-  type anything; only what the Keeper says back is checked.
-- It is a wordlist matcher, not a semantic classifier — it catches listed
-  words (and simple obfuscations of them), nothing it wasn't told about.
+- It screens what the engine itself puts in front of the table: the Keeper's narration, a module's
+  table facts, and the text a model wrote for a new character (`.genchar`, a character card import).
+  **Player input is not screened.**
+- A room whose admin enabled a mature-content skill is not filtered at all.
+- It is a word matcher, not a semantic classifier — it catches listed words (and simple obfuscations
+  of them), nothing it wasn't told about.
 
-Do not treat this as a moderation solution out of the box — it is a
-configurable building block that does nothing until you supply a wordlist.
+Do not treat this as a moderation solution out of the box — it is a configurable building block that
+does nothing until you supply a word list.
 
 ## Keys & persistence
 
-- **Keys** bind an opaque token to a `room` (the shared `chat_key`) and a role.
-  Mint with `--tui-key add`; unknown keys are rejected on join. The keystore is
-  a TOML file (`keys.toml`) — never commit it.
-- **Persistence** is a single SQLite file (`loreweaver.db`) holding all
-  campaign state, scoped by `room`. Keep the `/data` volume to keep progress.
-- **Provider credentials** entered at runtime, including subscription OAuth
-  access/refresh grants, are stored unencrypted in that local SQLite file so
-  they survive restart. Protect the database like `.env` or `keys.toml`.
-- **Room backups** created from the admin UI are server-side JSON
-  snapshots confined to `<data_dir>/room_backups/`; an optional path is treated as a
-  filename inside that directory. They include raw access keys, room state, vector data,
-  and self-contained media blobs, so protect them like
-  `keys.toml`.
-- **Local permissions** are tightened on new secret-bearing files (`0600`) and dedicated data /
-  backup directories (`0700`) where the filesystem implements POSIX modes. On Windows or filesystems
+- **Keys** bind a random secret to one room and one role (`player`, `admin` or `observer`). They
+  live in `keys.json` in the data directory. Mint them from the client's **Access keys** screen or
+  with `.key mint`; with the server stopped, also with `loreweaver key`. A key's value is shown once,
+  when it is minted; listings show it masked. Revoking a key ends its holder's connections at once.
+  The room's last admin key cannot be revoked or demoted.
+- **Persistence** is one SQLite file, `loreweaver.db`, holding every room's state. Keep the data
+  directory to keep progress.
+- **Run-time credentials** (API keys set with `.model` or `.imagegen`) are stored unencrypted in that
+  file so they survive a restart. Protect the database like `.env` or `keys.json`.
+- **Room bundles** exported with `.save` hold every secret of the room; protect them like the
+  database.
+- **Local permissions:** the data directory is created `0700`, and the database, the key file and
+  the server identity `0600`, where the filesystem implements POSIX modes. On Windows or filesystems
   without POSIX permissions this is best-effort, not an ACL manager.
-- **Secrets** (`.env`, `keys.toml`, `keeper-key.txt`, `*.db`, backups) are git-ignored; only
-  `*.example.*` files are tracked. Never commit them.
+- **Secrets** (`.env`, the `data/` directory) are git-ignored. Never commit them.
 
 ## Connecting clients
 
 Clients speak the versioned protocol in [`docs/protocol.md`](protocol.md) over Iroh. Point the
-terminal client at the server's **ticket** (printed at startup) with a minted key:
+terminal client at the server's **ticket** with a key:
 
 ```bash
-cd clients/tui && bun install
-bun run dev -- connect --host <ticket> --key <key> --name <name>
-# or just `loreweaver` (installed client) and paste the ticket + key in the connect screen
+cd clients/tui && bun run dev connect --host <ticket> --key <key> --name <name>
+# or just `bun run dev` and paste the ticket and key on the connect screen
 ```
 
 The connection is end-to-end encrypted; the server is key-gated, but treat keys as secrets.

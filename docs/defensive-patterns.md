@@ -1,102 +1,111 @@
 # Defensive patterns
 
-Hard-won implementation rules (instituted by M23 WS4). Read this before
-touching lifecycle, cleanup, locking, provider, or replay code. Each entry
-names where it bit us; the fix commit is the proof it was paid for.
+Hard-won implementation rules. Read this before touching lifecycle, cleanup, locking, provider, or
+replay code. Each entry names where it bit us; most were paid for in the 2.x Python server and are
+restated here against 3.0's code (`server/src/`), where the reason still holds. The numbers are
+stable: code cites them (`defensive pattern 6`), so a retired entry keeps its number.
 
-1. **The per-room turn lock is not reentrant, and it has two deadlock
-   shapes.** (a) Code already running under the transport choke points
-   (`net/session.py`, `gateway/runner.py`) must never re-acquire
-   `hub.turn_lock` — the `.undo`/`.save`-load command family deadlocked
-   exactly this way (fixed 2026-08-13). (b) `run_kp_turn` and the companion
-   director deliberately do NOT take the lock; adding it "for safety"
-   self-deadlocks every nested companion/director sub-turn. Rule home: the
-   AGENTS.md per-turn budget paragraph.
-2. **Replay reads the history tree, never a cached blob.** Join replay once
-   read a retired blob and replayed deleted content (fixed 91b9ca4). Any new
-   replay/export surface derives from `agent/history.load_chain` +
-   `trim_folded`.
+1. **The room's lock is not reentrant, and the lifecycle does not take it.** 2.x deadlocked twice
+   on its per-room turn lock: once when code already running under it took it again (the
+   `.undo`/load family), once when a nested sub-turn would have. In 3.0 the room
+   (`server/src/gateway/room.ts`) owns one lock (`infra/mutex.ts`, a plain queue): speech and
+   commands run under it in arrival order, and nothing that runs under it takes it again. Undo, reset
+   and import deliberately do NOT wait for it, and neither do the commands that wait on the network
+   or act on the server (`pack install`, `model`, `imagegen`, `key`): making them wait "for safety"
+   parks a destructive operation behind a model call, or a fetch behind every line of the table.
+   The old generation's work in flight ends as stale by itself (entry 7) — never build
+   cancel-and-wait.
+2. **Replay reads the stored log, never a copy.** 2.x once replayed a retired cached blob on join and
+   showed deleted content (fixed 91b9ca4). In 3.0 a join replays from the room's event log in the
+   store (`room.eventsAfter`, `server/src/net/session.ts`), and replay and join happen in one
+   uninterrupted stretch — the store is synchronous — so no live event can land between two replayed
+   ones or be missed. Any new replay or export surface reads the store, in the same block as the join
+   it serves.
 3. **Vendor constants are re-verified, never propagated.** The context-window
    table was 16x wrong because a number traveled from a stale table into a
    recommendation unchecked. A vendor constant (window size, error code,
    limit) enters code only with a same-day check against the vendor's own
    docs and a test pinning the shape it arrives in, **and the check is
-   per-endpoint, not per-vendor**. M23 WS2 is the worked example, including
-   its own correction: OpenAI's documented context-overflow body carries
+   per-endpoint, not per-vendor**. The worked example, including its own
+   correction: OpenAI's documented context-overflow body carries
    `code: None` on the EMBEDDINGS endpoint and `code:
    "context_length_exceeded"` on chat completions, and the first reading
-   generalised the wrong one for a day. Gemini documents no context-overflow
-   error at all, so that lane is left unclassified rather than guessed. When
-   the docs do not say it, the entry does not exist; `infra/llm_errors.py`
-   cites a page and a date per entry, and names the lanes it deliberately does
-   not cover.
+   generalised the wrong one for a day. When the docs do not say it, the entry
+   does not exist. In 3.0, `server/src/infra/llm/presets.ts` (presets and context
+   windows) and `errors.ts` (error classes) cite a page or the installed SDK per
+   entry; for a model the table does not know, nothing is guessed from a
+   similar name — the server falls back to a deliberately small window, says so
+   at start-up (`context_window_unknown`), and the operator states the real one.
 4. **Streaming usage is opt-in and silently absent.** Streaming providers
    only report usage when explicitly asked
-   (`stream_options={"include_usage": True}`); the chronicle fold was inert on
-   every streaming provider for exactly this reason (fixed 17ce768). Any
-   meter fed from a stream needs a test against a fake that omits usage.
+   (`stream_options: { include_usage: true }`); the chronicle fold was inert on
+   every streaming provider for exactly this reason (fixed 17ce768). Every
+   OpenAI-compatible call in 3.0 streams and asks
+   (`server/src/infra/llm/openai.ts`). Any meter fed from a stream needs a test
+   against a fake that omits usage.
 5. **Cleanup lists drift; the state owner must declare cleanup.** Reset,
-   restore, and import each kept a private enumeration, and they diverged
-   three times in one month (b23c450, 91b9ca4, 9069575) plus the stale undo
-   ring `import_room` left behind (M23 WS1). New room-scoped state is not
-   done until its lifecycle facet says how it resets, restores, deletes, and
-   exports.
+   restore, and import each kept a private enumeration in 2.x, and they diverged
+   three times in one month (b23c450, 91b9ca4, 9069575) plus a stale undo ring an
+   import left behind. In 3.0 the knowledge sits with the data
+   (`server/src/infra/lifecycle/declarations.ts`): a document type declares its
+   lifecycle, a room-state key IS its declaration (the store's state methods take
+   the key object, never a bare string), and an external storage — media, the
+   vector index — declares one when it registers (`infra/lifecycle/storages.ts`).
+   New room-scoped state is not done until its declaration says what each reset
+   scope does to it, or why it survives every scope.
 6. **"Truncated" is not one condition.** Every vendor has a way to end a
    response early, and they mean different things: Anthropic's
    `stop_reason: "model_context_window_exceeded"` is the window, while
-   OpenAI's `finish_reason: "length"`, Gemini's `finishReason: MAX_TOKENS`
-   and the Responses API's `incomplete_details.reason: "max_output_tokens"`
-   all document the CONFIGURED cap (the last one covers both causes under one
-   code, so it cannot distinguish them). Folding helps the first and nothing
-   else. Read the vendor's own definition before treating any of them as a
-   size signal — and remember that a truncated reply arrives as a SUCCESS, so
-   nothing downstream will flag it for you.
-7. **The Scribe is outside the turn lock; order is a coordinator, not a hope
-   — and ordering is not waiting.** Fire-and-forget hid bookkeeping latency
-   and also hid three races: same-room passes finishing out of LLM order,
-   undo/reset/import/delete restoring a room a still-running pass then wrote
-   back, and the end-of-turn snapshot being taken *before* the pass so its
-   writes sat in no rewind boundary. The per-room chain lives in
-   `agent/scribe_coord.py`. Fixing order is cheap; making anything WAIT on
-   that chain is not — the first draft had the next turn park on the previous
-   pass, which hauls the previous turn's Scribe + Director + image latency
-   onto the next turn's lock and hands the table the same delay one turn
-   later. Serialize the chain, never block a turn on it. Cancel-and-drain at
-   the mutation entries (`agent.undo.restore`, `net.room_backup`
-   reset/import/delete). Refresh the snapshot named by the *current*
-   chronicle counter, never the player turn's `result.turn` (companion
-   sub-turns have already photographed the later indexes) — and stand down
-   when that counter has moved past the turn the pass was scheduled on,
-   because a newer turn owns that boundary. Anything the pass shows the table
-   is placed by what was captured at scheduling, too: the Stage Director's
-   staging anchors in the join-replay lane at `ScribeEpoch.transcript_leaf`,
-   because the leaf at publish time is the next turn's player line whenever
-   the pass runs late. `CancelledError` is a
-   `BaseException`: `except Exception` never sees it, so a cancel cannot be
-   logged as a bookkeeping failure and an `except asyncio.CancelledError:
-   raise` beside one is dead code. Room delete and `.reset all` drop the
-   in-process slot.
-8. **Cancel is not cleanup, and a native `close()` is often awaitable.**
-   `IrohServer.close` used to `task.cancel()` without awaiting the children and
-   called `endpoint.close()` without `await`. The real iroh `Endpoint.close()`
-   is async (`accept_next` returns `None` only after that await), so the
-   accept loop stayed live and the process logged
-   `RuntimeWarning: coroutine Endpoint.close was never awaited`. Snapshot the
-   tracked-task set first (done callbacks mutate it), cancel, drain
-   `CancelledError`, then `await` the endpoint close. The same class of miss:
-   do not fold `asyncio.TimeoutError` into a silent `except Exception` on a
-   documented handshake — the protocol promises `error{code:'join_timeout'}`,
-   and swallowing it makes clients redial a half-alive QUIC connection.
-9. **A stop signal needs its own handler; `asyncio.run` is not one.** A server
-   started with a shell `&` (which is also how an agent backgrounds one for a
-   test) inherits SIGINT as *ignored*. Python then installs no SIGINT handler
-   and `asyncio.Runner` only hooks SIGINT over Python's default, so a plain
-   Ctrl-C / `kill -INT` did nothing at all. Where SIGINT did fire, the first
-   one only reached the clean path through `except CancelledError: pass`, and
-   the second raised `KeyboardInterrupt` from wherever the loop was, possibly
-   mid-`close()`. `app._serve_iroh` now hooks SIGTERM and SIGINT the same way
-   (cancel the serve task, then `await iroh_server.close()`), and removes both
-   hooks before `close()` so a second Ctrl-C is Python's default again — the
-   escape for a close that hangs (`tests/net/test_iroh_server.py` pins both,
-   including the inherited-ignore start). When you test shutdown, start the
-   process the way an operator does and check how its SIGINT was inherited.
+   OpenAI's `finish_reason: "length"` and the Responses API's
+   `incomplete_details.reason: "max_output_tokens"` document the CONFIGURED
+   cap (the last one covers both causes under one code, so it cannot
+   distinguish them). Folding helps the first and nothing else. Read the
+   vendor's own definition before treating any of them as a size signal — and
+   remember that a truncated reply arrives as a SUCCESS, so nothing downstream
+   will flag it for you. 3.0 normalises only the reasons each vendor documents
+   (`StopReason` in `server/src/infra/llm/types.ts`); everything else is
+   `unknown`.
+7. **Work after a turn is ordered by a chain, and ordering is not waiting.**
+   The Scribe and the Stage Director run after the turn, outside the room's
+   lock. Fire-and-forget in 2.x hid three races: same-room passes finishing out
+   of model order, a destructive operation restoring a room that a still-running
+   pass then wrote back into, and a pass's writes landing in no rewind boundary.
+   Fixing order is cheap; making anything WAIT on that chain is not — the first
+   2.x draft had the next turn park on the previous pass, which hauls the
+   previous turn's Scribe + Director + image latency onto the next turn and
+   hands the table the same delay one turn later. In 3.0
+   (`server/src/gateway/chain.ts`): at most one pass runs per room, passes land
+   in the order they were scheduled, and nothing ever waits for the chain. A
+   destructive operation does not cancel or drain it either. A pass keeps the
+   `RoomContext` it was scheduled with (`server/src/agent/context.ts`) and
+   commits in ONE synchronous block through the writer of the turn it was
+   scheduled on; a writer of a past generation is refused, so a pass whose room
+   was undone, reset or replaced meanwhile writes nothing. Never fetch a fresh
+   writer when a lane finishes, and never read a counter at commit time to
+   decide which turn a write belongs to — the turn is the one captured at
+   scheduling (2.x stamped late chronicle records with the wrong turn exactly
+   this way).
+8. **Cancel is not cleanup, and a close that returns a promise must be
+   awaited.** 2.x's iroh server cancelled its tasks without awaiting them and
+   called the endpoint's async `close()` without awaiting it, so the accept loop
+   stayed live after shutdown. In 3.0 `IrohServer.close`
+   (`server/src/net/iroh.ts`) closes every connection, awaits the endpoint's
+   close, then awaits the accept loop; the server's own `close`
+   (`server/src/cli/compose.ts`) awaits the transport, then the rooms, then
+   closes the store. The same class of miss: a server that has said its last
+   word (a fatal `error` frame) must give the peer time to read it before
+   closing the connection — QUIC drops unsent data on close, and the client
+   would see a dropped link where it should have read `bad_key`
+   (`CLOSE_GRACE_MS`).
+9. **A stop signal needs its own handler.** A process started with a shell `&`
+   (which is also how an agent backgrounds one for a test) can inherit SIGINT as
+   ignored; in 2.x a plain Ctrl-C or `kill -INT` then did nothing at all, and
+   where SIGINT did fire, a second one could interrupt the close half-way. In 3.0
+   `server/src/cli/main.ts` hooks SIGINT and SIGTERM to the same clean close and
+   ignores a repeated signal while that close runs. When you test shutdown, start
+   the process the way an operator does, and check how its SIGINT was
+   inherited.
+10. **A check read through a pipe reports the pipe's exit code.**
+    `bun run check | tail` exits with `tail`'s status, so a red run reads green
+    and gets pushed. Keep the full log in a file, read the exit code and the
+    failure count, and verify in one call and commit in another.

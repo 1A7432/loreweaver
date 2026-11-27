@@ -2,49 +2,67 @@
 
 # 部署 Loreweaver
 
-绝大多数桌都是**从一台笔记本上 p2p 开的**——一句 `python -m app --serve`，或者在连接屏点一下「本地开服」（见 [README](../README.zh.md)）。这一页讲的是**常驻服务器**：7×24 开着的公共局，加一个固定的 ticket。Loreweaver 走 **Iroh** 的点对点 QUIC，用 ticket 拨号，**不需要域名、证书、端口转发或者反向代理**。玩家拿部署者发的密钥进来，没有账号系统。（没有 Docker 镜像，也没有给玩家用的 WebSocket 通道——老的 TUI WebSocket 只留作离线测试。）
+绝大多数桌都是**从一台笔记本上 p2p 开的**——在终端客户端的连接界面点一下「本地开服并开玩」，或者跑一句 `bun server/src/cli/main.ts serve`（见 [README](../README.zh.md)）。这一页讲的是**常驻服务器**：7×24 开着的局，加一个固定的 ticket。Loreweaver 走 **Iroh** 的点对点 QUIC，用 ticket 拨号，**不需要域名、证书、端口转发或者反向代理**。玩家拿房间管理员发的钥匙进来，没有账号系统。没有 Docker 镜像，3.0 也没有 WebSocket 通道。
+
+3.0 还没有发布版本：服务器要从源码运行，机器上需要装好 [Bun](https://bun.sh)。
 
 ## 直接跑起来
 
-需要 Python 3.11 以上和 [uv](https://docs.astral.sh/uv/)。
-
 ```bash
 git clone https://github.com/1A7432/loreweaver && cd loreweaver
-cp .env.example .env          # 然后填 TRPG_LLM__*（留空就是离线示例守秘人）
-uv sync                       # 环境和依赖（iroh 是默认依赖）
-uv run python -m app --serve --keys ./data/keys.toml
+bun install
+cp .env.example .env          # 然后填 TRPG_LLM__*（不填也能启动，只是守秘人回不了话）
+bun server/src/cli/main.ts serve
 ```
 
-第一次启动时，服务器会**自动生成一个守秘人密钥**，并打印一个可以直接发出去的 **Iroh ticket**——这两样也会写在密钥文件旁边的 `keeper-key.txt` / `iroh-ticket.txt` 里。把 ticket 和守秘人密钥发给自己，连进去之后，剩下的邀请码和房间都在客户端的「房间与邀请」页里发，不用再碰服务器。数据（SQLite 和密钥）就存在 `--keys` 旁边。
+就绪时服务器打印一行 JSON，然后一直跑到被中断：
+
+```json
+{"ok":true,"version":"3.0.0","ticket":"endpoint…","notes":["recall_off"],"first_key":{"room":"main","key":"…"}}
+```
+
+数据目录是新的话，它会给房间 `main` 签一把**管理员钥匙**，只在这里打印这一次——`first_key` 以后不会再出现。用 ticket 和这把钥匙连进去，剩下的钥匙在客户端的「访问钥匙」屏里新建（或者用 `.key mint`），不用再碰服务器。`notes` 是启动时的提示，写成代码：`model_not_configured`、`context_window_unknown`、`recall_off`。有设置项用不了的话，服务器在打开任何东西之前就会停下：`{"ok":false,"code":"bad_settings","problems":[…]}` 会把出问题的变量一次全列出来。
+
+其他命令在 shell 里跑，每条都打印一个 JSON 对象，方便脚本读：
+
+```bash
+bun server/src/cli/main.ts key <room> <admin|player|observer> <name>   # 新签一把钥匙；它的值只打印这一次
+bun server/src/cli/main.ts import-world <room> <card-file>             # 把一张酒馆卡导入成房间的世界
+bun server/src/cli/main.ts packs                                       # 已安装的内容包
+bun server/src/cli/main.ts install <path|https-url|gh:owner/repo[@tag]> [--yes]
+bun server/src/cli/main.ts uninstall <id>
+bun server/src/cli/main.ts selftest                                    # 这个构建能不能把一个回合完整跑通
+bun server/src/cli/main.ts --version
+```
+
+`key` 和 `import-world` 要在服务器**停着**的时候跑：正在运行的服务器手里有一份自己的钥匙文件和房间。从 shell 装上或卸掉的内容包，正在运行的服务器要下次启动才看得到。钥匙上写着房间名；给一个还不存在的房间签钥匙，那个房间就开起来了。
+
+### 用一个文件代替整份源码
+
+`cd server && bun run build` 会把服务器编成一个可执行文件 `server/dist/loreweaver`，并跑一遍它的自检。命令都一样（`loreweaver serve`、`loreweaver key …`），运行它的机器上不需要装 Bun。设置用环境变量给它。把它放到 `<本地服务器目录>/server-bin/loreweaver`，终端客户端不在源码目录里运行时，「本地开服并开玩」跑的就是它。
 
 ### 重启后仍然有效的 ticket
 
-ticket 重启之后不变，而且是**直连**可达，不只是走中继。密钥文件旁边的两个小文件管着这件事：
-
-- `iroh-secret.key` 固定服务器的身份（ticket 的前半）。
-- `iroh-port.txt` 记着服务器绑定的 UDP 端口（ticket 里的直连地址）。第一次启动选一个端口存下来，之后每次启动都绑同一个。手里存着旧 ticket 的客户端（Loreweaver Studio 会记住上一桌）先拨这些地址，所以能很快重连，不用在中继上等几十秒。
-
-这两个文件都要留着（备份 `--keys` 所在目录就都带上了），删掉任何一个，服务器都会换一个新的 ticket。想自己定端口，比如要在云防火墙或安全组里只放行这一个端口，就设 `TRPG_TUI__IROH_PORT=<端口>`（优先于已保存的端口，并会被存下来）。如果启动时这个端口绑不上（被别的进程占着），服务器会在日志里给警告，改用一个随机端口，ticket 这一次会变，需要把新的重新发出去。只固定 IPv4 的端口；ticket 里 IPv6 的直连地址每次启动仍会变，没关系，IPv4 直连和中继会接住连接。
-
-> 用 SOCKS 代理连境外模型？装一下 `uv pip install socksio`。国内能直连的服务商（比如 DeepSeek）不用代理，干净环境跑就行。
+服务器的身份是数据目录里的 `transport.key`：同一个 key，重启之后还是同一个 ticket。留好它（复制数据目录就带上了）；删了它，服务器就换一个新 ticket，每个玩家都得拿新的。
 
 ## 让它一直开着（systemd）
 
 ```ini
-# /etc/systemd/system/loreweaver.service —— 把 YOU 换成你的用户名
+# /etc/systemd/system/loreweaver.service  —— 把 YOU 换成你的用户名
 [Unit]
-Description=Loreweaver Iroh server
+Description=Loreweaver server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=YOU
-WorkingDirectory=/home/YOU/loreweaver                 # .env 从这里读
-ExecStart=/home/YOU/.local/bin/uv run python -m app --serve --keys /home/YOU/loreweaver-data/keys.toml
+WorkingDirectory=/home/YOU/loreweaver
+EnvironmentFile=/home/YOU/loreweaver/.env
+Environment=TRPG_DATA_DIR=/home/YOU/loreweaver-data
+ExecStart=/home/YOU/.bun/bin/bun server/src/cli/main.ts serve
 Restart=on-failure
 RestartSec=10
-TimeoutStartSec=120                                   # Iroh 的中继握手要花一会儿
 
 [Install]
 WantedBy=multi-user.target
@@ -52,110 +70,113 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now loreweaver
-journalctl -u loreweaver -f       # 跟日志——ticket 和守秘人密钥在启动时打印
+journalctl -u loreweaver -f       # 跟日志——就绪那一行（ticket、第一把钥匙）启动时打印
 ```
+
+服务器收到 `SIGTERM` 和 `SIGINT` 都会干净地停下：先关掉所有连接和数据库，再退出。
 
 ## 更新
 
-管理员在客户端的「房间与邀请」页里就能更新服务器，不用 SSH。上面那种 git 部署**默认就是开着的**：只有管理员能看到服务端和客户端的版本，客户端比服务端新的时候会多出一个「更新服务器」按钮。按下去，服务器跑的是 `TRPG_TUI__UPDATE_COMMAND`（默认 `git pull --ff-only && uv sync`），然后把自己**换成新代码继续跑**——进程号不变，所以 Iroh ticket 不变，也不用 `systemctl restart`（和上面那个 `Restart=on-failure` 的配置是兼容的）。客户端会断一下再自己接上。
-
-`loreweaver update` 默认会先重装客户端，再用你保存的守秘人连接做同样的服务端更新，一条命令让两边同步；`loreweaver update --client-only` 只更新客户端。
-
-不是 git 部署的话可以换成自己的命令，也可以彻底关掉这个功能：
+3.0 没有自更新。手动更新：
 
 ```bash
-# 写在 ~/loreweaver/.env 里
-TRPG_TUI__UPDATE_COMMAND=git pull --ff-only && uv sync   # 默认（git 部署）
-# TRPG_TUI__UPDATE_COMMAND=docker compose pull && docker compose up -d   # 换成你自己的
-# TRPG_TUI__UPDATE_COMMAND=                              # 留空 -> 按钮消失，功能关闭
+cd ~/loreweaver && git pull && bun install && sudo systemctl restart loreweaver
 ```
 
-想手动更新，随时可以：
-
-```bash
-cd ~/loreweaver && git pull && uv sync && sudo systemctl restart loreweaver
-```
-
-安全性在于：那条命令是你自己在服务端配的，客户端只能请求服务器跑**它自己配好的**那条，永远递不进去一条命令。默认那条也只从这个 git 目录自己的远端拉。信任边界就是守秘人密钥，和 `.model`、密钥管理是同一条。要是你根本不想让它跑，把 `TRPG_TUI__UPDATE_COMMAND` 留空。
+ticket 不变。客户端的协议主版本号必须和服务器一致：太旧或太新的客户端会被拒绝，并告诉你是哪一边落后了——所以客户端也从同一份源码更新。
 
 ## 配置
 
-所有设置都用 `TRPG_` 前缀的环境变量，`__` 表示嵌套（见 `.env.example` 和 `infra/config.py`）。默认从工作目录的 `.env` 读；设了 `TRPG_ENV_FILE` 就从那个文件读。终端客户端一键本地开服会自动把 `TRPG_ENV_FILE` 指到 `<本地服务器目录>/.env`。
+所有设置都是 `TRPG_*` 环境变量，层级之间用 `__` 连接（读它们的只有 `server/src/infra/config.ts` 一处；[`.env.example`](../.env.example) 全列出来了）。用 `bun` 启动时，服务器还会读启动目录下的 `.env`。
 
-| 变量 | 作用 | 默认值 |
+| 变量 | 用途 | 默认 |
 |---|---|---|
-| `TRPG_LLM__PROVIDER` | `openai`（外加预设：`deepseek`、`groq`、`openrouter`、`together`、`ollama`、`lmstudio` 等）、双模式的 `chatgpt` / `gpt-subscription`、订阅制的 `supergrok`，或者原生的 `anthropic` / `gemini` | `openai` |
-| `TRPG_LLM__API_KEY` | 服务商或代理的 API key。订阅制的 OAuth 通道不用它；对普通的 API key 服务商来说，**留空就是离线示例守秘人** | *（空）* |
-| `TRPG_LLM__BASE_URL` | OpenAI 兼容接口的地址。对 `chatgpt` / `gpt-subscription` 来说，显式填了就走代理，留空就走订阅 OAuth | 按服务商预设 |
-| `TRPG_LLM__CHAT_MODEL` | 对话模型 id | `gpt-4o` |
-| `TRPG_LLM__EMBEDDING_MODEL` / `TRPG_LLM__EMBEDDING_DIM` | 检索用的 embedding | `text-embedding-3-small` / `1536` |
-| `TRPG_LOCALE` | 界面语言 `en` / `zh` | `en` |
-| `TRPG_ENV_FILE` | 启动前要读的 `.env` 文件 | 工作目录下的 `.env` |
-| `TRPG_DATA_DIR` | 战役和运行时数据目录（数据库在 `<data_dir>/loreweaver.db`） | `./data` |
-| `TRPG_TUI_KEYS` | 密钥文件路径（也可以用 `--keys` 覆盖；和 `TRPG_DATA_DIR` 无关） | `./keys.toml` |
-| `TRPG_LOCAL_SERVER_HOME` | 一键本地开服的根目录：服务器程序和源码缓存、`.env`、数据、密钥、ticket 都在这儿 | `TRPG_HOME`，没有就是 `<用户目录>/.loreweaver` |
-| `TRPG_RELEASE_TAG` | 把安装脚本、客户端和一键开服下载都钉到某个 GitHub Release，例如 `release-0.5.1.dev29+g0cf542b` | 最新的 release |
-| `TRPG_SERVER_RELEASE_TAG` | 只钉一键开服要下的服务器程序或源码；正式发布的安装脚本会自动写好 | 跟 `TRPG_RELEASE_TAG`，没有就是最新 |
-| `TRPG_ENABLE_VECTOR_DB` | 世界书和文档检索 | `true` |
-| `TRPG_TUI__JOIN_TIMEOUT` | 一个还没认证的连接必须在几秒内发出 `join`，否则关掉 | `10` |
-| `TRPG_TUI__IROH_PORT` | Iroh 绑定的 UDP 端口（IPv4）；要配防火墙规则时可以固定它。`0` = 沿用密钥旁 `iroh-port.txt` 里记的端口，第一次启动时选定。见[重启后仍然有效的 ticket](#重启后仍然有效的-ticket) | `0` |
-| `TRPG_CENSOR__WORDLIST_PATH` | 敏感词表文件：JSON 格式 `{"词": 等级, ...}`（等级 `1`–`5`，见 `gateway.ops.CensorLevel`）。说明在[内容过滤](#内容过滤) | *（空 = 过滤关闭）* |
-| `TRPG_CENSOR__WORDLIST` | 敏感词表，直接写在环境变量里：`词[:等级],词2[:等级2],...`。两个都设了就合并 | *（空 = 过滤关闭）* |
+| `TRPG_LOCALE` | 房间自己没设语言之前用的语言：`en` / `zh` | `en` |
+| `TRPG_DATA_DIR` | 数据目录：数据库、钥匙文件、服务器身份、媒体、已安装的内容包 | `./data` |
+| `TRPG_LLM__PROVIDER` | 预设——`openai`、`anthropic`、`deepseek`、`openrouter`、`moonshot`——或者你自己起的名字，配上 `TRPG_LLM__BASE_URL` | *（无）* |
+| `TRPG_LLM__BASE_URL` | 接口地址；优先于预设的地址 | 预设的 |
+| `TRPG_LLM__API_KEY` | 服务商的 API key | *（无：没有模型）* |
+| `TRPG_LLM__CHAT_MODEL` | 模型 id | *（无：没有模型）* |
+| `TRPG_LLM__WIRE` | `openai-compatible`、`anthropic` 或 `openai-responses` | 预设的，否则 `openai-compatible` |
+| `TRPG_LLM__REASONING_EFFORT` | `low`、`medium`、`high`、`xhigh` 或 `max` | 服务商的 |
+| `TRPG_LLM__CONTEXT_WINDOW` | 模型的上下文长度（token）；编年史折叠拿它当分母 | 认识的模型用它自己的；否则按 32000 算 |
+| `TRPG_LLM__MAX_OUTPUT_TOKENS` | 单次回复的上限 | 服务商的 |
+| `TRPG_LLM__TIMEOUT_MS` | 一次模型调用最多等多久 | SDK 的 |
+| `TRPG_LLM__PROMPT_CACHE_KEY` | 设成 `false`，两种 OpenAI 接口就不发 `prompt_cache_key` | `true` |
+| `TRPG_NPC__*`、`TRPG_SCRIBE__*`、`TRPG_DIRECTOR__*`、`TRPG_MEMORY__*` | 一条车道自己的那十项；只写模型或推理强度就沿用守秘人的接口和密钥，写了服务商或 base URL 就是一个单独的接口，要配自己的密钥 | 用守秘人的客户端 |
+| `TRPG_TURN__MAX_ROUNDS` | 守秘人一回合最多几轮工具调用 | `12` |
+| `TRPG_SCRIBE__ENABLED` | 书记官 | `true` |
+| `TRPG_DIRECTOR__ENABLED` | 演出导演 | `true` |
+| `TRPG_DIRECTOR__IMAGES` | `false`：导演只展示内容包里的图，从不生成 | `true` |
+| `TRPG_DIRECTOR__MAX_IMAGES` | 一段故事最多生成几张图 | `24` |
+| `TRPG_DIRECTOR__PREGEN_PER_BEAT` | 一个节拍最多预先准备几个接下来可能出场的对象 | `2` |
+| `TRPG_CHRONICLE__ENABLED` | 编年史折叠 | `true` |
+| `TRPG_CHRONICLE__FOLD_TRIGGER` / `__FOLD_FLOOR` / `__FOLD_EMERGENCY` | 上下文窗口的比例（下限 < 触发 ≤ 紧急） | `0.60` / `0.40` / `0.85` |
+| `TRPG_CHRONICLE__LAG_TURNS` | 最近几回合永远不折 | `4` |
+| `TRPG_CHRONICLE__SUMMARY_MAX_CHARS` | 战役摘要的长度上限 | `4000` |
+| `TRPG_IMAGEGEN__BASE_URL`、`__API_KEY`、`__MODEL` | 生图；三个都填，或者都不填 | *（关）* |
+| `TRPG_IMAGEGEN__SIZE` | `宽x高` 或 `auto` | `1024x1024` |
+| `TRPG_IMAGEGEN__DIALECT` | `openai` 或 `xai` | `openai` |
+| `TRPG_EMBEDDINGS__API_KEY`、`__MODEL`、`__DIMENSIONS` | 语义召回（一个 OpenAI 兼容的向量接口）；不配的话，设定只按关键词触发 | *（关）* |
+| `TRPG_EMBEDDINGS__BASE_URL` | 这个接口的地址 | OpenAI 的 |
+| `TRPG_CENSOR__WORDLIST` / `TRPG_CENSOR__WORDLIST_PATH` | 敏感词过滤：见[内容过滤](#内容过滤) | *（关）* |
+| `TRPG_STORE__UNDO_DEPTH` | `.undo` 最多能往回倒几回合 | `4` |
+| `TRPG_MODULES__CALL_TIMEOUT_MS` | 一次调用房间的模组 worker 最多等多久，超时就结束那个 worker | `5000` |
+| `TRPG_TUI__AUDIO_MAX_FILE_BYTES` | 单个音频的大小上限（字节） | 128 MiB |
+| `TRPG_TUI__AUDIO_ROOM_QUOTA_BYTES` | 一个房间所有音频加起来的上限（字节） | 2 GiB |
 
-ChatGPT 订阅不是 API key。要走订阅通道，先把服务器起起来，在私聊里发 `.model login chatgpt`，走完设备码流程，再 `.model set chatgpt [模型]`。这条路要把 `TRPG_LLM__BASE_URL` 留空；Loreweaver 用的是保存下来的 OAuth 授权，不是浏览器 cookie，也不是模拟网页操作。SuperGrok 同理：`.model login supergrok` 之后 `.model set supergrok [模型]`，同一份授权还能用来出图。
-
-已有的兼容网关照样支持：provider 填 `chatgpt` 或 `gpt-subscription`，显式设 `TRPG_LLM__BASE_URL=<网关的 /v1 地址>`，再给上网关的 API key。只要显式写了 `base_url`，走的就一定是这条经典代理通道，而不是订阅 OAuth。
-
-正式发布的每个客户端和服务端压缩包旁边都带一份 `.sha256`。安装脚本会先校验客户端的摘要再解压，一键开服也会校验它选中的那个服务端包。老版本的二进制没有这个附带文件、或者摘要读不到、格式不对时，一键开服会退回到源码方式。摘要拿到了但和包对不上，就直接终止——不解压，也不换个包接着装。没打 tag 的 `main` 构建和纯数字的 `v*` tag 都会成为 GitHub 上的 Latest；明确标了预发布的 tag 仍然是预发布。HTTP 镜像除了给一键安装留一份根目录的兼容副本，还会把每次发布固定存一份在 `releases/<tag>/`，所以一个正式版或者被钉住的安装脚本，它的备用包不会被后来的开发版顶掉。内嵌的摘要只在“选的 tag 就是安装脚本内嵌的那个 tag”时才用；换了别的版本就去读那个包自己的摘要文件。安装脚本默认用 `https://registry.npmjs.org`，只有你确实想换源时才去设 `TRPG_REGISTRY`。
+房间管理员可以在运行时改模型车道和生图（`.model`、`.imagegen`，或者「模型」屏）；这些改动存在数据库里，在 `.model reset` 之前优先于环境变量。
 
 ## 加密
 
-Iroh 的玩家连接**天生就是端到端加密的**（QUIC/TLS，每个对端用自己的公钥认证），也没有证书要管。它保护的是终端客户端到 Loreweaver 服务端这一段，和“服务端会往模型服务商那边发什么”是两回事。
+Iroh 的玩家连接是**端到端加密的，什么都不用配**（QUIC/TLS，每一端用自己的公钥认证），也没有证书要管。它保护的是客户端和 Loreweaver 服务器之间的流量；服务器发给你配置的模型服务商的内容，不归它管。
 
-## 数据流向和信任边界
+## 数据流向与信任边界
 
-- 确定性规则引擎、SQLite 里的战役状态、媒体文件、房间密钥和备份，都留在你自己运营的这台服务器上。需要 Iroh 中继的时候，中继只转发加密流量，不会解开你的会话。
-- **远程**大模型接口是另一家数据处理方。它会收到用于分析的模组正文、守秘人的系统提示（按设计就带着模组的守秘人材料）、相关的历史对话，以及这一轮玩家的输入。默认配置用的是本地哈希 embedding；只有你自己刻意换成了远程的 embedding 后端，文档分块才会一起发过去。这些东西必须留在你自己掌控的机器上的话，就选 Ollama、LM Studio 这类本地接口。
-- 玩家知识池和每个 NPC、同伴，在结构上就是各管各的：一个子角色只由它自己的档案和卡表拼出来。主守秘人是故意不一样的——它得看得见秘密，才主持得了谜案。提示里的约束和每晚的真模型红线评测能降低并测量泄漏风险，但证明不了任何模型都不会说漏嘴。
-- 玩家密钥只对一个房间有效。守秘人密钥能读守秘人那一侧的状态，也只能管自己房间的密钥；但模型和服务商的配置是整台部署共用的。所以守秘人密钥只发给你完全信得过的共管人。有人填了一个新的自定义服务商地址时，系统不会把之前存的 API key 顺手带到新地址去，除非他自己为新地址填了 key。
-- 服务商的 API key 和订阅 OAuth 授权，**以明文存在本地 SQLite 里**，这样运行时改的配置能扛住重启。它们只作为鉴权信息发给你选的那个服务商，不会发给玩家。宿主账号和它的备份都算在可信范围里。
+- 确定性的规则引擎、SQLite 里的战役状态、媒体、房间钥匙和备份，都留在你运营的那台服务器上。需要用到 Iroh 中继时，中继转的是加密流量，不会终结应用层会话。
+- **远程**大模型接口是另一个数据处理方。它会收到守秘人的提示（按设计里面就有世界的守秘人专属设定）、相关的对话历史，以及当前这条玩家输入；按描述生成角色、导入角色卡时，那段文字也会发过去。语义召回默认关闭；你配了向量接口的话，设定条目和编年史记录会发到那里。这些内容必须留在你自己掌控的机器上的话，就选 Ollama 或 LM Studio 这类本地接口。
+- 玩家和每一个 NPC 都靠代码本身和守秘人材料隔开：NPC 只用它自己的档案和卡表拼出来，演出导演只拿桌上已经看到过的东西。主守秘人是故意不一样的——它要看到秘密才能主持谜案。提示里的要求和真模型实测能降低、也能量出它泄密的风险，但证明不了每个模型都守规矩。
+- 模组是真代码，在房间的 worker 线程里跑，没有安全沙箱：装一个内容包，就是决定让它的代码在这台机器上跑。写入任何东西之前，信任卡会先把这一点说清楚。内容包由跑服务器的人安装，或者由房间管理员在牌桌上装（`.pack install`）。
+- 钥匙按房间划分。管理员钥匙能读守秘人级别的状态、能管的钥匙也只限自己的房间，但模型配置和内容包安装是整个服务器的。管理员钥匙只发给完全信得过的共同管理者。
+- 运行时设的 API key 以明文存在本地 SQLite 里，好让它们扛住重启。它们只作为授权发给选定的服务商接口，从不发给玩家。请把主机账号和它的备份当成可信计算基的一部分来看待。
 
 ## 内容过滤
 
-`gateway.ops.Censor` 是一个真的、不容易被绕过的词表匹配器（NFKC 归一化加大小写折叠、能识破加空格/加标点/用全角写的变体、按整词边界匹配、掩码时保持原有位置）——但**它默认不带词表，也默认是关的。** Loreweaver 故意不随包带脏话和辱骂词表：维护一份词表、还要做好多语言覆盖，这是每个部署者自己的政策选择，不该写死在引擎里。没配词表的时候，`Censor` 每次调用都明确走一条什么都不做的路径——它不会在你不知道的情况下悄悄过滤任何东西。
+敏感词过滤（`server/src/gateway/review.ts`）是一个实打实、不好绕过的匹配器——NFKC 和大小写归一，词里的字母之间可以夹空格、点、星号、连字符、间隔号或零宽字符，整词匹配，打码落在原文字符上——但它**不自带词表，默认关闭。** Loreweaver 故意不内置脏话/歧视词表：维护一份词表、把多语言覆盖做对，是每个运营者自己该拿主意的政策问题，不该写死在引擎里。没配词表时，过滤是一个明确的空操作——它没有在悄悄过滤任何东西。
 
-要打开它，`TRPG_CENSOR__WORDLIST_PATH`（JSON 文件）和 `TRPG_CENSOR__WORDLIST`（直接写在环境变量里）选**一个**——见上面的[配置](#配置)表。文件长这样：
+要打开它，设 `TRPG_CENSOR__WORDLIST`（直接写：`词[:等级],词2[:等级2],…`）或 `TRPG_CENSOR__WORDLIST_PATH`（一个文本文件，每行一个 `词[:等级]`），两个都设就合在一起用。词表文件读不了，服务器就不启动：运营者要了过滤，就不能给他一台不过滤的服务器。
 
-```json
-{ "some-slur": 5, "some-mild-word": 2 }
+```
+某个脏词:5
+某个轻微的词:2
 ```
 
-等级从 `1`（`NOTICE`）到 `5`（`FORBIDDEN`）。命中 `DANGER`（`4`）及以上会拦下整条消息（回复被替换掉），低于这个等级就地打码。匹配和语言无关——需要过滤什么词、什么文字，写进去就是。
+等级从 `1`（提示）到 `5`（禁止）；不写等级就是 `1`。命中一律打码；命中等级 `4`（危险）及以上，守秘人的这条回复就不发出去，这一回合改成一条提示结束。匹配和语言无关——要过滤什么文字就写什么。
 
-**它现在管到哪，指望它之前先看清：**
+**目前的范围——依赖它之前先看完：**
 
-- 它只检查 **AI 守秘人自己说的话**（`agent.loop.run_kp_turn` 里的 `output_review`，在 `gateway.runner.GatewayRunner` 和 `net.tui_server.TuiServer` 里接上）。**玩家输入不检查。** 玩家想打什么打什么，被检查的只有守秘人回的内容。
-- 它是词表匹配，不是语义分类器——它抓的是你列出来的词（以及这些词的简单变形），你没告诉它的东西它一概不管。
+- 它只筛引擎自己摆到桌上的文字：守秘人的叙事、模组发到桌上的事实，以及模型给新角色写的文字（`.genchar`、导入角色卡）。**玩家输入不过滤。**
+- 管理员启用了成人内容技能的房间，完全不过滤。
+- 它是词表匹配，不是语义分类——只抓词表里有的词（以及它们简单的变形），没告诉它的一概不管。
 
-所以别把它当成开箱即用的审核方案——它是一块可配置的积木，你不给词表，它就什么都不做。
+别把它当成开箱即用的审核方案——它是一个可配置的零件，你不给词表它就什么都不做。
 
-## 密钥和数据
+## 钥匙和数据
 
-- **密钥**把一串随机串绑定到一个房间（共享的 `chat_key`）和一个角色上。用 `--tui-key add` 生成；不认识的密钥在进房间时就被拒。密钥存在一个 TOML 文件里（`keys.toml`）——永远别提交它。
-- **数据**是一个 SQLite 文件（`loreweaver.db`），按房间分隔，装着全部战役状态。想保住进度，就保住 `/data` 这个目录。
-- **运行时填的服务商凭据**（包括订阅 OAuth 的 access / refresh 授权）以明文存在同一个 SQLite 文件里，这样重启之后还能接着用。请像保护 `.env` 和 `keys.toml` 一样保护这个数据库。
-- **房间备份**是管理员在管理界面里生成的服务端 JSON 快照，固定写在 `<data_dir>/room_backups/` 下面；就算填了路径，也只当成这个目录里的一个文件名。备份里有原始的访问密钥、房间状态、向量数据和内嵌的媒体，所以要按 `keys.toml` 的标准来保护。
-- **本地权限**：在支持 POSIX 权限的文件系统上，新建的敏感文件会收紧到 `0600`，专用的数据和备份目录收紧到 `0700`。Windows 或者不支持 POSIX 权限的文件系统上只能尽力而为，它不是一个 ACL 管理器。
-- **秘密文件**（`.env`、`keys.toml`、`keeper-key.txt`、`*.db`、备份）都在 git 忽略列表里，只有 `*.example.*` 会被跟踪。永远别提交它们。
+- **钥匙**把一个随机密钥绑到一个房间和一个角色（`player`、`admin` 或 `observer`）。它们存在数据目录的 `keys.json` 里。用客户端的「访问钥匙」屏或 `.key mint` 新建；服务器停着的时候，也可以用 `loreweaver key`。钥匙的值只在新建时显示一次，列表里一律打码。吊销一把钥匙，持有者的连接会立刻断开。房间最后一把管理员钥匙不能吊销，也不能降级。
+- **数据**是一个 SQLite 文件 `loreweaver.db`，装着所有房间的状态。留住数据目录，进度就在。
+- **运行时凭证**（用 `.model`、`.imagegen` 设的 API key）以明文存在这个文件里，好让它们扛住重启。像保护 `.env`、`keys.json` 一样保护这个数据库。
+- **用 `.save` 导出的房间存档**里有这个房间的全部秘密，像保护数据库一样保护它们。
+- **本地权限：**在支持 POSIX 权限的文件系统上，数据目录建成 `0700`，数据库、钥匙文件和服务器身份是 `0600`。在 Windows 或不支持 POSIX 权限的文件系统上只是尽力而为，它不是 ACL 管理器。
+- **密钥类文件**（`.env`、`data/` 目录）已经被 git 忽略。永远不要提交它们。
 
 ## 让客户端连进来
 
-客户端走 [`docs/protocol.zh.md`](protocol.zh.md) 里那份带版本的协议，经 Iroh 连接。把终端客户端指向服务器启动时打印的 **ticket**，再配一个生成好的密钥：
+客户端在 Iroh 上说 [`docs/protocol.md`](protocol.md) 里那套带版本的协议。用服务器的 **ticket** 和一把钥匙让终端客户端连进来：
 
 ```bash
-cd clients/tui && bun install
-bun run dev -- connect --host <ticket> --key <key> --name <name>
-# 或者直接跑装好的 `loreweaver`，在连接屏粘 ticket 和密钥
+cd clients/tui && bun run dev connect --host <ticket> --key <key> --name <名字>
+# 或者直接 `bun run dev`，在连接界面里贴 ticket 和钥匙
 ```
 
-连接是端到端加密的；服务器靠密钥把门，所以密钥要当机密对待。
+连接是端到端加密的；服务器靠钥匙把门，但钥匙要当成机密对待。

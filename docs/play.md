@@ -14,39 +14,46 @@ corner mean.
 
 ## 1. Get in
 
-Install a client ([see the README](../README.md#1-install-the-client)): **Loreweaver Studio**, the
-desktop app, is the recommended one — the graphical play surface with live panels and the admin
-screens; the **terminal client** is one line to install and runs anywhere with a terminal. Open
-Studio, or run `loreweaver`, and paste the two things your room admin sent you:
+Loreweaver 3.0 has no published release yet, so the client runs from a checkout of the repository
+([see the README](../README.md#1-get-the-code)), with [Bun](https://bun.sh) installed:
+
+```bash
+cd clients/tui && bun run dev
+```
+
+The desktop client, Loreweaver Studio, cannot connect to a 3.0 server yet; this terminal client is
+the one to use. On the connect screen, paste the two things your room admin sent you:
 
 - a **ticket** — the server's peer-to-peer address, a long string starting with `endpoint`;
-- an **invite key** — yours alone, and it is also your identity: there are no accounts and no
+- an **access key** — yours alone, and it is also your identity: there are no accounts and no
   passwords.
 
 Pick a nickname, press Enter. If the connection drops it reconnects on its own and picks up where it
-left off, so a flaky café Wi-Fi costs you a few seconds, not the session.
+left off, so a flaky café Wi-Fi costs you a few seconds, not the session. The connect screen
+remembers the servers you used; click one to fill it in again.
 
 > If the screen looks broken on Windows — mangled borders, wrong colours, no mouse — you are in the
-> legacy console host. Run `loreweaver` inside **Windows Terminal** or **WezTerm** instead.
+> legacy console host. Run the client inside **Windows Terminal** or **WezTerm** instead.
 
 ## 2. Make a character
 
-The character screen offers four routes, and they all end in the same place: the rules validate the
-sheet, and an invalid one does not get saved no matter where it came from.
+Open **My character** from the main menu. Whatever route a character takes, the rules check the
+sheet: a number the system does not allow is brought back into range, and you are told so.
 
 | Route | What it does |
 |---|---|
-| **Auto roll** | rolls attributes by the system's own creation formulas |
-| **Manual** | you type the numbers; over-budget stats are blocked as you type |
-| **From a description** | write a sentence ("calm doctor investigating disappearances in a foggy port") and the AI drafts a sheet, which the rules then check |
-| **Import a card** | a SillyTavern V2/V3 card, PNG or JSON — see [cards.md](cards.md) |
+| **New character** | the server rolls one by the rule system's own creation rules; you pick the system and, if you like, a name |
+| **Claim a ready-made character** | take one the room offers — a pack's pregens, for example |
+| **Import a character card** | a SillyTavern card, PNG or JSON — only the character comes in, see [cards.md](cards.md); the sheet is rolled for the room's rule system, leaning toward the card's persona when a model is configured |
+| **From a description** | type `.genchar <description>` ("a calm doctor investigating disappearances in a foggy port"): the model proposes a concept, and the dice and the rule system make the numbers |
 
-If the room admin has imported a module with a pre-generated cast, there is a fifth route: claim one.
+The same screen edits the sheet, renames the character, re-derives its vitals, releases it or
+deletes it. From the input line, the roster of ready-made characters is:
 
 ```
-.pc                    list the module's cast and who has claimed whom
+.pc                    list the characters on offer and who plays whom
 .pc claim 顾晚棠        take that character as yours
-.pc release            give it back (the sheet resets to pristine)
+.pc release            give it back
 ```
 
 ## 3. Six things worth knowing
@@ -55,7 +62,7 @@ If the room admin has imported a module with a pre-generated cast, there is a fi
 
 ```
 .r 3d6+2
-Roll: 3d6+2 = [4, 4, 1]+2 = 11
+⚄ Alice 3d6+2 11
 ```
 
 `4d6kh3` keeps the highest three; `2d20kl1` keeps the lowest; `5d6!` explodes; `7d10>=8` counts
@@ -66,15 +73,15 @@ your table is running:
 
 ```
 .ra spot hidden
-Check Spot Hidden: target 25 (effective 25), roll 13 -> Success
+⚄ Alice 1d100 13 vs 25 -> Success
 ```
 
-A difficulty word in front raises the bar — the target you must beat shrinks, and the line tells you
-so:
+A difficulty word in front raises the bar — the target you must beat shrinks, and the line shows the
+target you actually rolled against (here with Spot Hidden at 70):
 
 ```
 .ra hard spot hidden
-Check Spot Hidden: target 70 (effective 35), roll 13 -> Extreme Success
+⚄ Alice 1d100 13 vs 35 -> Extreme Success
 ```
 
 Skill names accept aliases in both languages: `spot hidden`, `spot`, `notice`, `perception`, `侦查`,
@@ -100,23 +107,16 @@ system.
 **A failed check should move the story, not stop it.** If you are stuck after a failure, say what
 you try instead. Being pushed onto a worse plan is the game working, not the game breaking.
 
-**Your sheet.** `.st` shows it; `.st <skill>=<value>` edits it, if your table allows edits:
+**Your sheet.** `.st` shows it; `.st <name>=<value>` edits it:
 
 ```
 .st 力量=60             = assigns exactly that number
 .st HP-=4              -= subtracts, += adds
-.st mod=-3             = is the only way to write a negative value
-.st STR60              the older glued form still works
-.st spot hidden 70     so do spelled-out skill aliases
-.st 侦查70              and canonical names
+.st 力量60 敏捷50        the dice-bot form, several at once
 ```
 
-In the older form a leading `+`/`-` on the number means relative (`HP-4` takes four off), which is
-why an absolute negative needs the `=` form. One `.st` uses one form — don't mix `=` assignments and
-glued ones in the same command.
-
-Everything you write is validated against the rule system — the engine will refuse a number the
-system does not permit, whoever asked for it.
+A value may be dice. Everything you write is checked against the rule system — the engine brings a
+number the system does not permit back into range, whoever asked for it, and says so.
 
 **Catch up on the story.** `.recap` prints the campaign so far, spoiler-free:
 
@@ -124,51 +124,58 @@ system does not permit, whoever asked for it.
 .recap
 ```
 
-The recap is a real document the room admin can edit, and its player view is produced by the same
-projection that keeps every other secret out of your client — keeper annotations about what you
-*missed* are not in there at all. Just joined a campaign in progress? Start here.
+The recap is made from the campaign's chronicle by the same projection that keeps every other
+secret out of your client — keeper annotations about what you *missed* are not in there at all.
+Just joined a campaign in progress? Start here.
 
 ## 4. The screen
 
 ```
-┌─ ◷ 03:12 · scene · round 2 ────────── ● online · ctx 34% · cache 71% ─┐
-│                                                    │ sidebar          │
-│  the story log — narration, NPC                    │ party roster     │
-│  lines, dice results, handouts                     │ your resources   │
-│                                                    │ module panels    │
-└────────────────────────────────────────────────────┴──────────────────┘
-  > type here
+┌─ joined main · scene ◷ dusk · round 2 ──────── ● · last turn ↑2.0k ↓120 · cache 75% ─┐
+│                                                    │ sidebar                          │
+│  the story log — narration, NPC                    │ party · your character · scene   │
+│  lines, dice results, handouts                     │ trackers · module panels         │
+└────────────────────────────────────────────────────┴──────────────────────────────────┘
+  > say or command
 ```
 
-- The **top bar** carries the in-game clock and scene, the combat round, a connection light, and the
-  table's token spend. `ctx` is how full the Keeper's context window is right now — when it climbs,
-  the engine folds old history into a summary on its own, so you do not have to care. `cache` is the
-  share of the prompt that was served from the provider's prompt cache; higher is cheaper.
-- The **sidebar** shows who is at the table (AI companions included), your own vitals as live meters,
-  and any panels the module ships — a festival calendar, a tide gauge, a case board. Panels are drawn
-  from the same data the server sent you, so nothing appears there that you were not meant to see.
-- **Media** — handouts, portraits, maps — arrive inline. Select one and press `o` to open it in your
-  system viewer. Some modules hide real clues in pictures; that is intended.
+- The **top bar** carries the room, the scene, the in-game clock and the combat round, the state of
+  the connection, and the last turn's token figures: `↑` what the Keeper read, `↓` what it wrote, and
+  `cache` — the share of the prompt that was served from the provider's prompt cache; higher is
+  cheaper.
+- The **sidebar** shows who is at the table and the initiative order, your own character, the scene
+  and the facts it has established, the trackers you may see, and any panels the module ships — a
+  festival calendar, a tide gauge, a case board. Panels are drawn from the same data the server sent
+  you, so nothing appears there that you were not meant to see. A panel that needs a richer client
+  says so in one line.
+- **Pictures** — handouts, portraits — arrive inline. Press `Tab` to reach them, then `Enter` (or
+  click one) to view it; a terminal that cannot draw it opens your system's image viewer. Some
+  modules hide real clues in pictures; that is intended. `F8` shares a picture of your own with the
+  table.
+- **Sound** — the room's music, ambience and effects play through a player on your computer (mpv,
+  ffplay, afplay, paplay or aplay). `F9` mutes it.
 
 ## 5. Keys
 
 | Key | Does |
 |---|---|
 | `?` | open / close the help overlay |
-| `Esc` | back to the menu (from the menu, nothing — the menu is the top level) |
-| `PgUp` / `PgDn` | scroll the story log |
+| `Esc` | back to the menu |
+| `PgUp` / `PgDn` | scroll the story log; `PgUp` at the top loads older history |
 | `↑` / `↓` | recall what you typed before |
-| `Tab` | cycle focus: input → inline choice buttons → party roster → input |
+| `Tab` | cycle focus: input → choice buttons → pictures → party roster → panels → input |
 | `F1`–`F5` | themes: lamplight · df16 · phosphor · amber · paperwhite |
 | `F6` | show / hide the sidebar on a narrow terminal |
-| `Ctrl+S` | save the session log to a file |
-| `Ctrl+L` | clear the on-screen log (the server keeps the campaign) |
-| `o` | open the selected image/audio in your system viewer |
+| `F7` | the command list — everything you can type, with its usage |
+| `F8` | share a picture with the table |
+| `F9` | sound on / off |
+| `Ctrl+S` | save the session log to a file (`~/.loreweaver/transcripts`) |
+| `Ctrl+L` | clear the on-screen log (the server keeps the campaign; `PgUp` at the top shows it again) |
 | `Ctrl+C` | copy the selection — or quit when nothing is selected. On macOS, select with `Option`-drag and copy with `Cmd+C`; the terminal owns those |
 
 ## 6. Commands you might actually want
 
-`.help` lists every command your table has. These are the ones players reach for:
+`.help` (or `F7`) lists every command your table has. These are the ones players reach for:
 
 | Command | Does |
 |---|---|
@@ -176,23 +183,25 @@ projection that keeps every other secret out of your client — keeper annotatio
 | `.rh <expr>` | roll privately — only you see it |
 | `.ra <skill>` | a skill check |
 | `.ra hard <skill>` | a check at a raised difficulty |
-| `.rav <mine> <theirs>` | an opposed check — `.rav 侦查 隐匿` → `Opposed Spot Hidden roll 13 Success vs Stealth roll 94 Failure: left` |
+| `.rav <skill>, <other skill>` | an opposed check, in systems that have one |
 | `.st` | show your sheet |
-| `.st <skill>=<value>` | edit a stat (validated); the glued `.st <skill><value>` still works |
+| `.st <name>=<value>` | edit a value (checked against the rules) |
 | `.sc <success>/<failure>` | a sanity check, in systems that have one — `.sc 1/1d6` |
-| `.ri` | roll into the initiative order, or show it |
-| `.pc` | the module's pre-generated cast |
-| `.act` | the module's own player actions, if it has any; `.act <name> [args]` runs one — no wait for the Keeper, and the whole table sees the result |
+| `.ri` | show the initiative order; `.ri roll` rolls you into it |
+| `.pc` | the characters on offer |
+| `.genchar <description>` | a character from a description |
+| `.<module>/<command> {…}` | a module's own command, with its arguments as JSON — the command list shows what your table's modules offer |
 | `.recap` | the spoiler-free story so far |
-| `.report` | export a session report — the scoreboard; `.report full` adds every dice roll and the whole conversation |
-| `.report html` | the same keepsake as a printable, self-contained web page, sent to **your** client only — the terminal client saves it (`~/Downloads/loreweaver`, else `~/.loreweaver/reports`) for you to open in a browser |
-| `.report html reveal` | admin only: the reveal edition — the player page plus a spoiler section behind the screen (hidden rolls, the Keeper's chronicle margins, the module's secrets, hidden variables). Delivered to the admin's connection alone |
+| `.report` | the session's scoreboard |
+| `.report html` | the whole session as one self-contained web page, sent to **your** client only — the terminal client saves it under `~/.loreweaver/reports` for you to open in a browser |
+| `.report html reveal` | admin only: the reveal edition, which also prints what was hidden from the players. Delivered to the admin's connection alone |
 | `.jrrp` | today's luck, for no mechanical reason whatsoever |
+| `.draw` | draw a card from a shuffled deck |
 
 Both dialects work at once: the Chinese SealDice style (`.ra 侦查`, `.st 力量50`, `.sc 1/1d6`) and
 the English Avrae style (`/roll 4d6kh3`, `/check`). Use whichever your fingers know. The complete
-reference, including everything the room admin can do, is the
-[player command manual](https://1a7432.site/commands-en.html).
+reference, including everything the room admin can do, is
+[the protocol's command table](protocol.md#68-the-engines-commands).
 
 ## 7. What the AI can and cannot do to you
 
@@ -200,18 +209,16 @@ Worth knowing, because it changes how you play:
 
 - **It cannot fake a roll.** Every check goes through the dice engine. The Keeper narrates the
   result; it does not choose it.
-- **It cannot quietly change your sheet.** Every write is validated against the rule system, whoever
+- **It cannot quietly change your sheet.** Every write is checked against the rule system, whoever
   requested it — you, the room admin, or the model.
-- **NPCs do not have X-ray vision.** An NPC or AI companion is built from its own record and sheet
-  and nothing else, so it cannot know a secret it was never given. The Keeper itself *is* shown the
-  module's secrets — it has to be, to run a mystery — and is instructed not to repeat them. That last
-  part is a behavioural constraint, measured by a
-  [nightly evaluation](https://github.com/1A7432/loreweaver/actions/workflows/redline-eval.yml), not
-  a structural guarantee. If a Keeper ever hands you something it obviously should not have, that is
-  a bug worth reporting.
+- **NPCs do not have X-ray vision.** An NPC is built from its own record and sheet and nothing else,
+  so it cannot know a secret it was never given. The Keeper itself *is* shown the module's
+  secrets — it has to be, to run a mystery — and is instructed not to repeat them. That last part is
+  a behavioural constraint, measured by live-model play-tests, not a structural guarantee. If a
+  Keeper ever hands you something it obviously should not have, that is a bug worth reporting.
 - **The dice do not care about the plot.** You can lose, and a lot of the tension comes from that.
 
 ---
 
 *Next: [running a table](operating.md) · [authoring a module](authoring.md) ·
-[the full command manual](https://1a7432.site/commands-en.html)*
+[the full command table](protocol.md#68-the-engines-commands)*
