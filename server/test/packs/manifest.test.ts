@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { MAX_ASSETS, MAX_MODULES, parseManifest, versionAtLeast } from "../../src/core/packs/index.ts";
+import { MAX_MANIFEST_BYTES } from "../../src/core/packs/manifest.ts";
 import { manifestYaml } from "./fixture.ts";
 
 function problems(text: string): { code: string; path: string; detail?: string }[] {
@@ -149,4 +150,11 @@ test("engine minimums compare as integer tuples, ignoring the runtime's suffix",
   expect(versionAtLeast("3.0.0-alpha.0", "3.0")).toBe(true);
   expect(versionAtLeast("3.0", "3.0.1")).toBe(false);
   expect(versionAtLeast("3.10", "3.9")).toBe(true);
+});
+
+test("the manifest's size limit is counted in bytes, whatever the script", () => {
+  // 100,000 Chinese characters are 300,000 bytes: over the 256 KiB limit, though under it in characters.
+  const text = `manifest_version: 3\nid: big\nname: Big\nversion: 1.0.0\ndescription: ${"雾".repeat(100_000)}\n`;
+  expect(text.length).toBeLessThan(MAX_MANIFEST_BYTES);
+  expect(parseManifest(text)).toEqual({ ok: false, problems: [{ code: "manifest_too_large", path: "" }] });
 });

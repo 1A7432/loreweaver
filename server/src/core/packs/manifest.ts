@@ -440,7 +440,9 @@ export function checkManifest(document: unknown): ManifestParse {
 
 /** Parse `pack.yaml` text. */
 export function parseManifest(text: string): ManifestParse {
-  if (charCount(text) > MAX_MANIFEST_BYTES) return { ok: false, problems: [{ code: "manifest_too_large", path: "" }] };
+  // Bytes, as the name says and as the pack reader counts: a manifest written in Chinese has
+  // about three bytes to the character.
+  if (new TextEncoder().encode(text).length > MAX_MANIFEST_BYTES) return { ok: false, problems: [{ code: "manifest_too_large", path: "" }] };
   let document: unknown;
   try {
     document = loadYaml(text);
