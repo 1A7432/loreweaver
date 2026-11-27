@@ -33,8 +33,10 @@ export const MAX_OFFER_NAME_CHARS = 255;
  * What an upload is for. `share` (the default): the file becomes room media and every member
  * sees it arrive as a `media` event. `import`: a card file brought for the `import`
  * command — stored unlisted (no member but an admin can fetch it), announced to nobody.
+ * `audio` (admins only, sounds only): a sound for the room's audio library — fetchable by
+ * every member, announced by no event; the `audio` view lists it.
  */
-export const UPLOAD_PURPOSES = ["share", "import"] as const;
+export const UPLOAD_PURPOSES = ["share", "import", "audio"] as const;
 export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
 /** The params of `call media.offer`. */

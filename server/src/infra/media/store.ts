@@ -197,6 +197,7 @@ export class MediaStore {
   readonly #insert: Statement<unknown>;
   readonly #roomHashes: Statement<{ hash: string }>;
   readonly #deleteRoom: Statement<unknown>;
+  readonly #deleteOne: Statement<unknown>;
   readonly #isOff: Statement<{ room: string }>;
   readonly #setOff: Statement<unknown>;
   readonly #setOn: Statement<unknown>;
@@ -217,6 +218,7 @@ export class MediaStore {
     this.#insert = db.prepare(`INSERT INTO media (${COLUMNS}, family) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     this.#roomHashes = db.prepare("SELECT hash FROM media WHERE room = ?");
     this.#deleteRoom = db.prepare("DELETE FROM media WHERE room = ?");
+    this.#deleteOne = db.prepare("DELETE FROM media WHERE room = ? AND hash = ?");
     this.#isOff = db.prepare("SELECT room FROM media_uploads_off WHERE room = ?");
     this.#setOff = db.prepare("INSERT OR IGNORE INTO media_uploads_off (room) VALUES (?)");
     this.#setOn = db.prepare("DELETE FROM media_uploads_off WHERE room = ?");
@@ -503,6 +505,19 @@ export class MediaStore {
     });
     for (const hash of hashes) this.#removeIfUnreferenced(hash);
     return hashes.length;
+  }
+
+  /**
+   * Remove one blob from `room`'s index (an audio library sound its admin removed), and its
+   * file when no other row names it. Same order as `deleteRoom`: the row first, then the
+   * file; a file that cannot be removed is left for `sweep`. True when the room held it.
+   */
+  remove(room: string, hash: string): boolean {
+    if (typeof room !== "string" || typeof hash !== "string" || !ID_RE.test(room) || !HASH_RE.test(hash)) return false;
+    if (this.#get.get(room, hash) === null) return false;
+    this.#deleteOne.run(room, hash);
+    this.#removeIfUnreferenced(hash);
+    return true;
   }
 
   /**

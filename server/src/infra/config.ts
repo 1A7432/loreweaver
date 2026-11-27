@@ -74,6 +74,17 @@ export interface Settings {
     /** How many turns back an undo may reach. */
     readonly undoDepth: number;
   };
+  /**
+   * The limits on sounds (the media store's `audio` budget: an admin's audio-library uploads,
+   * shared sounds, an enabled pack's sounds). The variables keep the reference server's
+   * names, so an operator's `.env` keeps working.
+   */
+  readonly media: {
+    /** One sound, in bytes. */
+    readonly audioMaxFileBytes: number;
+    /** All of a room's sounds together, in bytes. */
+    readonly audioRoomQuotaBytes: number;
+  };
   readonly modules: {
     /** How long one call into a room's worker may take before the worker is ended. */
     readonly callTimeoutMs: number;
@@ -109,6 +120,9 @@ const DEFAULT_MAX_IMAGES = 24;
 const DEFAULT_PREGEN_PER_BEAT = 2;
 const DEFAULT_UNDO_DEPTH = 4;
 const DEFAULT_IMAGE_SIZE = "1024x1024";
+/** The reference server's sound limits: 128 MiB a file, 2 GiB a room. */
+const DEFAULT_AUDIO_MAX_FILE_BYTES = 128 * 1024 * 1024;
+const DEFAULT_AUDIO_ROOM_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_CHRONICLE = { trigger: 0.6, floor: 0.4, emergency: 0.85, lagTurns: 4, summaryMaxChars: 4000 } as const;
 const LANES = ["npc", "scribe", "director", "memory"] as const;
 
@@ -305,6 +319,10 @@ export function loadSettings(env: Environment): Settings {
   const wordlistPath = text("TRPG_CENSOR__WORDLIST_PATH");
   const undoDepth = positiveInt("TRPG_STORE__UNDO_DEPTH") ?? DEFAULT_UNDO_DEPTH;
   const callTimeoutMs = positiveInt("TRPG_MODULES__CALL_TIMEOUT_MS") ?? DEFAULT_CALL_TIMEOUT_MS;
+  const media = {
+    audioMaxFileBytes: positiveInt("TRPG_TUI__AUDIO_MAX_FILE_BYTES") ?? DEFAULT_AUDIO_MAX_FILE_BYTES,
+    audioRoomQuotaBytes: positiveInt("TRPG_TUI__AUDIO_ROOM_QUOTA_BYTES") ?? DEFAULT_AUDIO_ROOM_QUOTA_BYTES,
+  };
   const locale = text("TRPG_LOCALE") ?? "en";
   const dataDir = text("TRPG_DATA_DIR") ?? "./data";
 
@@ -325,6 +343,7 @@ export function loadSettings(env: Environment): Settings {
       ...(wordlistPath !== undefined ? { wordlistPath } : {}),
     },
     store: { undoDepth },
+    media,
     modules: { callTimeoutMs },
   };
 }

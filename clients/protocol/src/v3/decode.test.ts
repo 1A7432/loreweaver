@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { decodeEventFrame, decodeServerFrame, inspectServerFrame, MAX_BLOCKS, MAX_SHORT_CHARS, MAX_TEXT_CHARS } from "./decode";
 import { matchesSchema } from "./schema";
-import { ME_VIEW_SCHEMA, PARTY_VIEW_SCHEMA } from "./views";
+import { AUDIO_VIEW_SCHEMA, ME_VIEW_SCHEMA, PARTY_VIEW_SCHEMA } from "./views";
 
 const welcome = {
   type: "welcome",
@@ -40,6 +40,8 @@ test("every known frame decodes, and unknown fields are dropped", () => {
     { type: "signal", kind: "turn", data: { status: "busy", actor: "Ada", activity: "dice", round: 2 } },
     { type: "signal", kind: "turn", data: { status: "idle" } },
     { type: "signal", kind: "audio", data: { id: "a", action: "play", layer: "bgm", hash: "h", loop: true, volume: 0.5 } },
+    { type: "signal", kind: "audio", data: { id: "a2", action: "play", layer: "ambience", sound: "harbor/bell", hash: "h", mime: "audio/ogg", size: 120, title: "Bell", loop: true, volume: 1, fadeMs: 800 } },
+    { type: "signal", kind: "audio", data: { id: "a3", action: "volume", layer: "bgm", sound: "harbor/bell", volume: 0.2 } },
     { type: "signal", kind: "notice", data: { level: "warn", code: "turn_failed", text: "Oops", spinner: false } },
     { type: "view", name: "me", rev: 1, at: 0, data: null },
     { type: "result", rid: "r1", ok: true },
@@ -108,6 +110,11 @@ test("every malformed shape is refused", () => {
     { type: "signal", kind: "turn", data: { status: "napping" } },
     { type: "signal", kind: "audio", data: { id: "a", action: "scratch", layer: "bgm" } },
     { type: "signal", kind: "audio", data: { id: "a", action: "play", layer: "bgm", volume: "loud" } },
+    // A layer or an action this version does not know gates playback: the frame is dropped, not played wrongly.
+    { type: "signal", kind: "audio", data: { id: "a", action: "play", layer: "voice", hash: "h" } },
+    { type: "signal", kind: "audio", data: { id: "a", action: "seek", layer: "bgm" } },
+    { type: "signal", kind: "audio", data: { id: "a", action: "play", layer: "bgm", size: -1 } },
+    { type: "signal", kind: "audio", data: { id: "a", action: "play", layer: "bgm", sound: 7 } },
     { type: "signal", kind: "notice", data: { level: "error", text: "x" } },
     { type: "signal", kind: "notice", data: "x" },
     { type: "signal", data: {} },
@@ -145,4 +152,22 @@ test("the view schema checker takes extra fields and refuses missing or mistyped
   expect(matchesSchema({ member: me.member }, ME_VIEW_SCHEMA)).toBe(false);
   expect(matchesSchema({ members: [], characters: [], initiative: { round: 1.5, acting: null, order: [] } }, PARTY_VIEW_SCHEMA)).toBe(false);
   expect(matchesSchema({ members: [], characters: [], initiative: null }, PARTY_VIEW_SCHEMA)).toBe(true);
+});
+
+test("the audio view: an admin's named library, a player's fetch-only one, and the layers that play", () => {
+  const playing = { bgm: { id: "harbor/rain", title: "Rain", hash: "h1", mime: "audio/ogg", size: 10, loop: true, volume: 0.5, paused: false } };
+  const admin = {
+    library: [
+      { hash: "h1", mime: "audio/ogg", size: 10, id: "harbor/rain", title: "Rain", layer: "ambience", tags: [], source: { kind: "pack", id: "harbor" } },
+      { hash: "h2", mime: "audio/mpeg", size: 20, id: "h2", title: "Tavern", layer: null, tags: ["inn"], source: { kind: "upload", id: null } },
+    ],
+    playing,
+  };
+  expect(matchesSchema(admin, AUDIO_VIEW_SCHEMA)).toBe(true);
+  expect(matchesSchema({ library: [{ hash: "h1", mime: "audio/ogg", size: 10 }], playing }, AUDIO_VIEW_SCHEMA)).toBe(true);
+  expect(matchesSchema({ library: [], playing: {} }, AUDIO_VIEW_SCHEMA)).toBe(true);
+  expect(matchesSchema({ library: [], playing: { bgm: { ...playing.bgm, volume: "loud" } } }, AUDIO_VIEW_SCHEMA)).toBe(false);
+  expect(matchesSchema({ library: [{ hash: "h1", mime: "audio/ogg" }], playing: {} }, AUDIO_VIEW_SCHEMA)).toBe(false);
+  expect(matchesSchema({ library: [{ ...admin.library[1], layer: "voice" }], playing: {} }, AUDIO_VIEW_SCHEMA)).toBe(false);
+  expect(matchesSchema({ library: [] }, AUDIO_VIEW_SCHEMA)).toBe(false);
 });

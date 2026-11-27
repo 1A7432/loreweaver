@@ -1,4 +1,5 @@
 {
+  "net.error.audio_library_full": "本房间的音频库已满：请先移除一段音频。",
   "net.error.bad_frame": "无法识别这条数据。",
   "net.error.bad_key": "钥匙无效。",
   "net.error.bad_name": "名字太长了（上限 {limit}）。",

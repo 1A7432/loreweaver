@@ -22,6 +22,7 @@ import {
   type PresentationKit,
   type RoomKit,
 } from "../../../src/agent/lanes/presentation.ts";
+import { readPlaying } from "../../../src/core/audio/index.ts";
 import { DocumentTypes } from "../../../src/core/documents/model.ts";
 import { documentCatalog, RawDocuments } from "../../../src/core/documents/raw.ts";
 import { DocumentViews } from "../../../src/core/documents/views.ts";
@@ -374,7 +375,11 @@ describe("the commit", () => {
     const commit = commitDirector(scheduled, proposal, null, { clock: services.clock });
     if (commit.status !== "committed") throw new Error("stale");
     expect(commit.event).toMatchObject({ kind: "blocks", turn: 1, data: { blocks: [{ kind: "text", text: "Nine lanterns.", style: "quote" }] } });
-    expect(commit.audio).toEqual([{ id: expect.any(String), action: "play", layer: "bgm", hash: ASSETS["assets/tide.mp3"]?.hash, mime: "audio/mpeg", title: "Tide", loop: true }]);
+    expect(commit.audio).toEqual([
+      { id: expect.any(String), action: "play", layer: "bgm", sound: "pack/tide", hash: ASSETS["assets/tide.mp3"]?.hash, mime: "audio/mpeg", size: 200, title: "Tide", loop: true, volume: 1 },
+    ]);
+    // The cue went through the room's audio state: what the `audio` view shows.
+    expect(readPlaying(store, ROOM).bgm).toEqual({ sound: { id: "pack/tide", hash: "b".repeat(64), mime: "audio/mpeg", size: 200, title: "Tide" }, loop: true, volume: 1, paused: false });
   });
 
   test("after a reset or an undo the commit is stale and writes nothing", async () => {

@@ -42,6 +42,10 @@
 // between them, which is the fold rule; a document that comes into existence always opens
 // a new entry, because where a document is created fixes its position.
 //
+// A room-state key declared `keptOnUndo` is not journaled at all: an undo neither restores
+// nor removes it. It still belongs to the generation (a stale writer cannot write it) and
+// to its reset scope; only the rewind passes it by.
+//
 // The window: `undoDepth` turns (default 4, the chronicle's no-future lag window, so an
 // undo can never reach a turn the rolling summary has already absorbed). Beginning turn T
 // moves the oldest reachable turn (`floor`) to T − depth and prunes the journal entries
@@ -490,11 +494,11 @@ export class Store {
         }),
       statePut: (key, value) => {
         assertDeclared(key as StateKey<unknown>);
-        this.#write(self, { kind: "state", k1: key.name, k2: "" }, key.encode(value));
+        this.#write(self, { kind: "state", k1: key.name, k2: "" }, key.encode(value), key.keptOnUndo === undefined);
       },
       stateDelete: (key) => {
         assertDeclared(key as StateKey<unknown>);
-        return this.#write(self, { kind: "state", k1: key.name, k2: "" }, null);
+        return this.#write(self, { kind: "state", k1: key.name, k2: "" }, null, key.keptOnUndo === undefined);
       },
       setModuleState: (module, snapshot) => {
         this.#write(self, { kind: "module", k1: module, k2: "" }, JSON.stringify(snapshot));
@@ -715,20 +719,21 @@ export class Store {
   }
 
   /**
-   * Write one key (`after` null deletes it) for `writer`, journaling it. Returns whether
-   * there was something at the key before.
+   * Write one key (`after` null deletes it) for `writer`, journaling it unless the key is
+   * one an undo leaves alone (`StateKey.keptOnUndo`). Returns whether there was something
+   * at the key before.
    *
    * Deleting an absent key changes nothing now and is journaled all the same: a late lane
    * may delete a document that a LATER turn already deleted, and when an undo removes that
    * later turn and puts the document back, the late delete must be re-applied on top.
    */
-  #write(writer: RoomWriter, ref: KeyRef, after: string | null): boolean {
+  #write(writer: RoomWriter, ref: KeyRef, after: string | null, journaled = true): boolean {
     return this.#db.transaction(() => {
       const record = this.#check(writer);
       const room = writer.room;
       const before = this.#image(room, ref);
       if (before !== null || after !== null) this.#apply(room, ref, after);
-      this.#journal(room, record, writer.turn, ref, before, after);
+      if (journaled) this.#journal(room, record, writer.turn, ref, before, after);
       return before !== null;
     });
   }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { textStateKey } from "../../src/infra/lifecycle/declarations.ts";
 import { LifecycleError } from "../../src/infra/lifecycle/errors.ts";
 import { Store, type RoomWriter } from "../../src/infra/store.ts";
 import { dump, journalRows, KEYS, memoryStore, random, STORY_KEY } from "./lifecycle/support.ts";
@@ -362,5 +363,30 @@ describe("undo: cutting the log", () => {
     const last = seen[seen.length - 1]?.seq ?? 0;
     expect(store.eventsAfter(ROOM, last, 10).map((entry) => entry.id)).toEqual(["d"]);
     expect(seen.map((entry) => entry.seq)).toEqual([1, 3]);
+  });
+});
+
+describe("a key an undo leaves alone", () => {
+  const KEPT = textStateKey("store_undo_test.kept", { reset: "all" }, { keptOnUndo: "the test's present, not its past" });
+
+  test("is written by its turn's writer, never journaled, and neither restored nor removed by an undo", () => {
+    const { store, db } = memoryStore();
+    store.beginTurn(ROOM);
+    const second = store.beginTurn(ROOM);
+    second.statePut(KEPT, "first");
+    second.statePut(STORY_KEY, "story");
+    const journaled = journalRows(db, ROOM);
+    const third = store.beginTurn(ROOM);
+    third.statePut(KEPT, "second");
+    expect(journalRows(db, ROOM)).toBe(journaled);
+    store.undoTo(ROOM, 1);
+    expect(store.stateGet(ROOM, KEPT)).toBe("second");
+    expect(store.stateGet(ROOM, STORY_KEY)).toBeNull();
+    // Still the generation's: a writer of the undone turns is refused.
+    expect(code(() => third.statePut(KEPT, "late"))).toBe("stale_generation");
+  });
+
+  test("its reason may not be blank", () => {
+    expect(code(() => textStateKey("store_undo_test.blank", { reset: "all" }, { keptOnUndo: " " }))).toBe("invalid_lifecycle");
   });
 });

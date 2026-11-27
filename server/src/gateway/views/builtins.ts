@@ -5,6 +5,7 @@
 // out of a projection, so a field a projection adds later stays out of every view until
 // one names it; and a view cannot show what the projection withheld (iron rule 3).
 import {
+  type AudioView,
   BUILT_IN_VIEW_SCHEMAS,
   type BuiltInViewName,
   type BuiltInViews,
@@ -49,6 +50,9 @@ import { MODULE_VARIABLES_ID, MODULE_VARIABLES_TYPE, type ModuleVariablesView, V
 import { translate } from "../../infra/i18n.ts";
 import type { CommandRegistry } from "../commands/index.ts";
 import { localText } from "../../core/packs/index.ts";
+import { readPlaying } from "../../core/audio/index.ts";
+import type { MediaStore } from "../../infra/media/index.ts";
+import { audioView, roomLibrary } from "../audio.ts";
 import type { RoomPacks } from "../packs.ts";
 import { KEEPER_MUTED, ROOM_LOCALE, ROOM_RULE_VARIANT } from "../commands/index.ts";
 import { VIEWS_CATALOG } from "./catalog.ts";
@@ -83,6 +87,8 @@ export interface ViewSource {
   readonly uploads?: boolean;
   /** The installed packs; absent: none. */
   readonly packs?: RoomPacks;
+  /** The media store; absent or null (a server that keeps no files): the audio library is empty. */
+  readonly media?: MediaStore | null;
 }
 
 export interface BuiltInView<N extends BuiltInViewName = BuiltInViewName> {
@@ -363,6 +369,12 @@ function panels(source: ViewSource, viewer: ViewerContext): PanelsView {
   return { panels: source.packs.panelsFor(source.services.store, source.room, viewer.member.role, viewer.locale) };
 }
 
+/** The room's audio library and what each looping layer plays (`gateway/audio.ts` decides what each role sees). */
+function audio(source: ViewSource, viewer: ViewerContext): AudioView {
+  const store = source.services.store;
+  return audioView(roomLibrary(store, source.room, source.packs ?? null, source.media ?? null), readPlaying(store, source.room), viewer.member.role);
+}
+
 function builtIn<N extends BuiltInViewName>(name: N, compute: BuiltInView<N>["compute"]): BuiltInView<N> {
   return { name, schema: BUILT_IN_VIEW_SCHEMAS[name], admin: false, compute };
 }
@@ -379,6 +391,7 @@ export const BUILT_IN_VIEWS: readonly BuiltInView[] = [
   builtIn("usage", usage),
   builtIn("packs", packs),
   builtIn("panels", panels),
+  builtIn("audio", audio),
 ] as readonly BuiltInView[];
 
 /** Who may see a view listed and subscribe to it. */

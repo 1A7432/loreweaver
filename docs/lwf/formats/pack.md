@@ -187,6 +187,11 @@ never sent to image generation; `generation: pack_only` disables generation, and
 several packs share a room one `pack_only` disables it for the room while their
 `templates` allowlists intersect.
 
+The `audio` cues are the sounds the runtime's presentation layer may play for the pack. A
+runtime that lets a room's admin play sounds by name SHOULD offer the cues of the packs a room
+enabled, read-only, named `<pack id>/<cue id>` (Loreweaver's room audio library), and a cue's
+`title` is shown to that admin only: a title may tell the story before the table hears it.
+
 ## 5. The archive
 
 A pack archive is a ZIP file with these properties; a runtime refuses one that has

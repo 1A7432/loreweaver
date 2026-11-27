@@ -412,6 +412,14 @@ test("views: subscribe, latest value per name, a stale rev ignored, typed and mo
   expect(session.moduleView("mod/clock")?.data).toEqual({ hour: 3 });
   expect(session.getSnapshot().views.has("party")).toBe(false);
 
+  // The audio view is a built-in: typed, and checked against its schema like the others.
+  const audio = { library: [{ hash: "h", mime: "audio/ogg", size: 3 }], playing: { ambience: { id: "harbor/bell", title: "Bell", hash: "h", mime: "audio/ogg", size: 3, loop: true, volume: 1, paused: false } } };
+  void session.viewSubscribe(["audio"]);
+  session.receive({ type: "view", name: "audio", rev: 1, at: 5, data: audio });
+  expect(session.view("audio")?.data.playing.ambience?.title).toBe("Bell");
+  session.receive({ type: "view", name: "audio", rev: 2, at: 6, data: { library: "all of it", playing: {} } });
+  expect(session.view("audio")?.rev).toBe(1);
+
   // A built-in view that does not fit its schema never reaches the UI.
   session.receive({ type: "view", name: "me", rev: 3, at: 6, data: { member: "Ada" } });
   expect(session.view("me")?.rev).toBe(2);

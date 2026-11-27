@@ -178,6 +178,53 @@ export interface PacksView {
   }[];
 }
 
+/**
+ * One sound of the room's audio library. Every viewer gets `hash`, `mime` and `size` — what
+ * fetching it over the byte channel needs, to prefetch it. The rest names it and is an
+ * admin's only: a pack's cue titles and an admin's uploads may give the story away before
+ * the table hears them.
+ */
+export interface ViewAudioSound {
+  hash: string;
+  mime: string;
+  /** Bytes. */
+  size: number;
+  /** Admin only: the library id (`<pack>/<cue>` for a pack's cue, the hash for an upload). */
+  id?: string;
+  /** Admin only. */
+  title?: string;
+  /** Admin only: the layer it is meant for; null when nobody said. */
+  layer?: "bgm" | "ambience" | "sfx" | null;
+  /** Admin only. */
+  tags?: string[];
+  /** Admin only: an upload, or a cue of the enabled pack `id`. */
+  source?: { kind: "upload" | "pack"; id: string | null };
+}
+
+/** What one layer plays now. */
+export interface ViewAudioLayer {
+  /** The library id of the sound. */
+  id: string;
+  title: string;
+  hash: string;
+  mime: string;
+  size: number;
+  loop: boolean;
+  /** 0..1. */
+  volume: number;
+  paused: boolean;
+}
+
+/**
+ * `audio`: the room's audio library and what each looping layer plays. A layer with nothing
+ * playing is absent; `sfx` is one-shot and never here. This view is the truth: on connect a
+ * client starts what it says is playing, then follows the `audio` signals.
+ */
+export interface AudioView {
+  library: ViewAudioSound[];
+  playing: { bgm?: ViewAudioLayer; ambience?: ViewAudioLayer };
+}
+
 /** Every built-in view by name. */
 export interface BuiltInViews {
   me: MeView;
@@ -190,6 +237,7 @@ export interface BuiltInViews {
   usage: UsageView;
   packs: PacksView;
   panels: PanelsView;
+  audio: AudioView;
 }
 
 export type BuiltInViewName = keyof BuiltInViews;
@@ -362,6 +410,28 @@ export const PANELS_VIEW_SCHEMA: ViewSchema = record({
   ),
 });
 
+const AUDIO_LAYER = { type: "string", enum: ["bgm", "ambience", "sfx"] } as const;
+const AUDIO_PLAYING_LAYER = record({ id: STRING, title: STRING, hash: STRING, mime: STRING, size: INTEGER, loop: BOOLEAN, volume: NUMBER, paused: BOOLEAN });
+
+export const AUDIO_VIEW_SCHEMA: ViewSchema = record({
+  library: list(
+    record(
+      {
+        hash: STRING,
+        mime: STRING,
+        size: INTEGER,
+        id: STRING,
+        title: STRING,
+        layer: { anyOf: [AUDIO_LAYER, { type: "null" }] },
+        tags: list(STRING),
+        source: record({ kind: { type: "string", enum: ["upload", "pack"] }, id: NULLABLE_STRING }),
+      },
+      ["id", "title", "layer", "tags", "source"],
+    ),
+  ),
+  playing: record({ bgm: AUDIO_PLAYING_LAYER, ambience: AUDIO_PLAYING_LAYER }, ["bgm", "ambience"]),
+});
+
 /** The schema of every built-in view, by name. */
 export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchema } = {
   me: ME_VIEW_SCHEMA,
@@ -374,6 +444,7 @@ export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchem
   usage: USAGE_VIEW_SCHEMA,
   packs: PACKS_VIEW_SCHEMA,
   panels: PANELS_VIEW_SCHEMA,
+  audio: AUDIO_VIEW_SCHEMA,
 };
 
 /** One entry of `view.list`. */

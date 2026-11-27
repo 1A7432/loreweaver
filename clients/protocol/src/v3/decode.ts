@@ -313,8 +313,10 @@ function audio(raw: Raw): SignalPayloads["audio"] | null {
   const extra = out as unknown as Record<string, unknown>;
   const flag = (value: unknown): value is boolean => typeof value === "boolean";
   if (
+    !optional(raw, extra, "sound", shortStr) ||
     !optional(raw, extra, "hash", shortStr) ||
     !optional(raw, extra, "mime", shortStr) ||
+    !optional(raw, extra, "size", count) ||
     !optional(raw, extra, "title", shortStr) ||
     !optional(raw, extra, "loop", flag) ||
     !optional(raw, extra, "volume", finite) ||

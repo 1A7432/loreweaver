@@ -65,6 +65,14 @@ export const MODULE_STATE_LIFECYCLE: Lifecycle = { reset: "all" };
 export interface StateKey<T> {
   readonly name: string;
   readonly lifecycle: Lifecycle;
+  /**
+   * Present when an undo leaves this key as it is, with the reason: its writes are not
+   * journaled, so `undoTo` neither puts back what was there nor removes what was written
+   * (see `infra/store.ts`). For values that describe the table's present rather than the
+   * story's past — what is playing, the files the room was given — which a rewind of the
+   * story must not take back. Absent: an undo rewinds it like any other write.
+   */
+  readonly keptOnUndo?: string;
   encode(value: T): string;
   /** The stored text read back; null when it cannot be read as this key's value. */
   decode(text: string): T | null;
@@ -80,6 +88,8 @@ const byName = new Map<string, StateKey<unknown>>();
 export interface StateKeySpec<T> {
   readonly name: string;
   readonly lifecycle: Lifecycle;
+  /** See `StateKey.keptOnUndo`: the reason an undo leaves this key alone. */
+  readonly keptOnUndo?: string;
   readonly encode: (value: T) => string;
   readonly decode: (text: string) => T | null;
 }
@@ -92,10 +102,12 @@ export interface StateKeySpec<T> {
 export function defineStateKey<T>(spec: StateKeySpec<T>): StateKey<T> {
   if (typeof spec.name !== "string" || spec.name === "") throw new LifecycleError("undeclared_state_key", "");
   checkLifecycle(spec.lifecycle, spec.name);
+  if (spec.keptOnUndo !== undefined && (typeof spec.keptOnUndo !== "string" || spec.keptOnUndo.trim() === "")) throw new LifecycleError("invalid_lifecycle", spec.name);
   if (byName.has(spec.name)) throw new LifecycleError("state_key_conflict", spec.name);
   const key: StateKey<T> = Object.freeze({
     name: spec.name,
     lifecycle: Object.freeze({ ...spec.lifecycle }),
+    ...(spec.keptOnUndo === undefined ? {} : { keptOnUndo: spec.keptOnUndo }),
     encode: spec.encode,
     decode: spec.decode,
   });
@@ -104,16 +116,17 @@ export function defineStateKey<T>(spec: StateKeySpec<T>): StateKey<T> {
   return key;
 }
 
-/** A key whose value is plain text. */
-export function textStateKey(name: string, lifecycle: Lifecycle): StateKey<string> {
-  return defineStateKey({ name, lifecycle, encode: (value) => value, decode: (text) => text });
+/** A key whose value is plain text. `keptOnUndo`: see `StateKey`. */
+export function textStateKey(name: string, lifecycle: Lifecycle, options: { readonly keptOnUndo?: string } = {}): StateKey<string> {
+  return defineStateKey({ name, lifecycle, ...(options.keptOnUndo === undefined ? {} : { keptOnUndo: options.keptOnUndo }), encode: (value) => value, decode: (text) => text });
 }
 
-/** A key whose value is JSON, checked by `guard` when read back. */
-export function jsonStateKey<T>(name: string, lifecycle: Lifecycle, guard: (value: unknown) => value is T): StateKey<T> {
+/** A key whose value is JSON, checked by `guard` when read back. `keptOnUndo`: see `StateKey`. */
+export function jsonStateKey<T>(name: string, lifecycle: Lifecycle, guard: (value: unknown) => value is T, options: { readonly keptOnUndo?: string } = {}): StateKey<T> {
   return defineStateKey({
     name,
     lifecycle,
+    ...(options.keptOnUndo === undefined ? {} : { keptOnUndo: options.keptOnUndo }),
     encode: (value) => JSON.stringify(value),
     decode: (text) => {
       try {

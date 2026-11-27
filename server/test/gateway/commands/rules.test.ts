@@ -13,7 +13,7 @@ describe("roles", () => {
   test("every admin command is refused to a player, with nothing for the table", async () => {
     const b = bench();
     const admin = b.registry.specs(b.context(ADA)).filter((spec) => spec.role === "admin");
-    expect(admin.map((spec) => spec.id).sort()).toEqual(["chronicle", "habits", "language", "npc", "reset", "save", "skill", "undo", "var"]);
+    expect(admin.map((spec) => spec.id).sort()).toEqual(["ambience", "audio", "bgm", "chronicle", "habits", "language", "npc", "reset", "save", "sfx", "skill", "undo", "var"]);
     for (const spec of admin) {
       const outcome = await b.run(ADA, spec.id, {});
       expect([spec.id, code(outcome)]).toEqual([spec.id, "forbidden"]);

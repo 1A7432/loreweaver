@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import { jsonFile, plainCard, sha256, upload } from "../card_files.ts";
 import { ADA, ADMIN, bench, type Bench, type Member, ok, ROOM } from "./bench.ts";
-import { seedChronicle, seedHabits, seedLore, seedNpc, seedRoster, seedVariables } from "./seed.ts";
+import { seedChronicle, seedHabits, seedLore, seedNpc, seedRoster, seedSounds, seedVariables } from "./seed.ts";
 
 interface Case {
   readonly line: string;
@@ -56,6 +56,10 @@ const CASES: readonly Case[] = [
   { line: ".pack", id: "pack", args: { op: "list" } },
   { line: ".面板", id: "panels", args: { op: "list" } },
   { line: ".skill enable mature-mode", id: "skill", args: { op: "enable", id: "mature-mode" }, member: ADMIN },
+  { line: '.audio set rain title="Rain at night" layer=ambience tags=weather,night', id: "audio", args: { op: "set", query: "rain", title: "Rain at night", layer: "ambience", tags: ["weather", "night"] }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
+  { line: ".bgm play tavern --volume 70% --fade 1500", id: "bgm", args: { op: "play", query: "tavern", volume: 0.7, fadeMs: 1500 }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
+  { line: ".环境音 播放 Rain Night --once", id: "ambience", args: { op: "play", query: "Rain Night", loop: false }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
+  { line: ".sfx tavern", id: "sfx", args: { op: "play", query: "tavern" }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
   { line: ".jrrp", id: "jrrp", args: {} },
   { line: ".draw", id: "draw", args: {} },
   { line: ".help r", id: "help", args: { id: "r" } },

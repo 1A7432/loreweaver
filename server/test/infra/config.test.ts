@@ -12,6 +12,7 @@ const DEFAULTS = {
   chronicle: { enabled: true, trigger: 0.6, floor: 0.4, emergency: 0.85, lagTurns: 4, summaryMaxChars: 4000 },
   review: {},
   store: { undoDepth: 4 },
+  media: { audioMaxFileBytes: 128 * 1024 * 1024, audioRoomQuotaBytes: 2 * 1024 * 1024 * 1024 },
   modules: { callTimeoutMs: 5000 },
 };
 
@@ -168,4 +169,9 @@ test("embeddings need a key, a model and the vector size", () => {
   expect(
     loadSettings({ TRPG_EMBEDDINGS__API_KEY: "k", TRPG_EMBEDDINGS__MODEL: "e", TRPG_EMBEDDINGS__DIMENSIONS: "1024" }).embeddings,
   ).toEqual({ apiKey: "k", model: "e", dimensions: 1024 });
+});
+
+test("the sound limits keep the reference server's variables and defaults, read strictly", () => {
+  expect(loadSettings({ TRPG_TUI__AUDIO_MAX_FILE_BYTES: "1048576", TRPG_TUI__AUDIO_ROOM_QUOTA_BYTES: "4194304" }).media).toEqual({ audioMaxFileBytes: 1_048_576, audioRoomQuotaBytes: 4_194_304 });
+  expect(problems({ TRPG_TUI__AUDIO_MAX_FILE_BYTES: "128MiB", TRPG_TUI__AUDIO_ROOM_QUOTA_BYTES: "0" })).toEqual(["TRPG_TUI__AUDIO_MAX_FILE_BYTES:invalid", "TRPG_TUI__AUDIO_ROOM_QUOTA_BYTES:invalid"]);
 });

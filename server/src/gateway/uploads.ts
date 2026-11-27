@@ -8,10 +8,14 @@
 // it — a character card may carry world machinery the import strips, and an admin's world
 // card is keeper-side content by definition) and announced to nobody. The server reads it
 // back as an admin would; the member who brought it is remembered, so that `import` takes
-// only a file its caller uploaded.
+// only a file its caller uploaded. An `audio` upload is a sound for the room's audio library:
+// an admin's only, sounds only, stored unlisted under `members` (every member must be able
+// to fetch what plays), announced to nobody — the room puts it in the library
+// (`gateway/audio.ts`) and the `audio` view shows it.
 import type { MediaData, Role, UploadPurpose } from "loreweaver-protocol/v3";
 
-import { CARD_JSON_MIME, type Audience, type MediaRecord, type MediaStore } from "../infra/media/index.ts";
+import { CARD_JSON_MIME, isAudioMime, type Audience, type MediaRecord, type MediaStore } from "../infra/media/index.ts";
+import { AUDIO_AUDIENCE } from "./audio.ts";
 
 /** Who may fetch an import file: the room's admins (and the server, reading it for `import`). */
 export const IMPORT_AUDIENCE: Audience = "admin";
@@ -38,13 +42,13 @@ export interface Uploader {
 
 export type OfferOutcome =
   | { readonly ok: true; readonly kind: "upload"; readonly uploadId: string }
-  /** The room already holds the bytes: nothing to send. `share`: announce it to the table. */
-  | { readonly ok: true; readonly kind: "existing"; readonly record: MediaRecord; readonly share: boolean }
+  /** The room already holds the bytes: nothing to send. `share`: announce it to the table. `audio`: put it in the audio library. */
+  | { readonly ok: true; readonly kind: "existing"; readonly record: MediaRecord; readonly share: boolean; readonly audio: boolean }
   | { readonly ok: false; readonly code: string };
 
 export type ReceiveOutcome =
-  /** `share`: listed room media, to announce to the table. */
-  | { readonly ok: true; readonly record: MediaRecord; readonly share: boolean }
+  /** `share`: listed room media, to announce to the table. `audio`: a sound for the audio library. */
+  | { readonly ok: true; readonly record: MediaRecord; readonly share: boolean; readonly audio: boolean }
   | { readonly ok: false; readonly code: string };
 
 /** A record as the `media` event (and the offer's `existing`) state it. */
@@ -73,6 +77,16 @@ export class Uploads {
   /** `media.offer`: accept, answer that the bytes are already here, or refuse with the store's code. */
   offer(room: string, member: Uploader, offer: UploadOffer): OfferOutcome {
     if (member.role === "observer") return { ok: false, code: "observer_upload" };
+    if (offer.purpose === "audio") {
+      if (member.role !== "admin") return { ok: false, code: "forbidden" };
+      if (!isAudioMime(offer.mime)) return { ok: false, code: "media_bad_mime" };
+      // Bytes every member can already fetch (a shared sound, a pack's, an earlier upload)
+      // need not travel again; the room's switch still governs, as for any upload.
+      const held = this.media.find(room, offer.sha256, "admin");
+      if (held !== undefined && held.audience !== IMPORT_AUDIENCE && isAudioMime(held.mime) && this.media.uploadsEnabled(room)) {
+        return { ok: true, kind: "existing", record: held, share: false, audio: true };
+      }
+    }
     if (offer.purpose === "import") {
       if (!IMPORT_MIMES.includes(offer.mime)) return { ok: false, code: "media_bad_mime" };
       // Bytes this member may already see (or brought before) need not travel again; a copy
@@ -81,7 +95,7 @@ export class Uploads {
       const seen = this.media.find(room, offer.sha256, member.role) ?? this.#ownImport(room, member.id, offer.sha256);
       if (seen !== undefined && this.media.uploadsEnabled(room)) {
         this.#claim(room, member.id, seen.hash);
-        return { ok: true, kind: "existing", record: seen, share: false };
+        return { ok: true, kind: "existing", record: seen, share: false, audio: false };
       }
     }
     const begun = this.media.beginUpload({
@@ -91,10 +105,10 @@ export class Uploads {
       mime: offer.mime,
       size: offer.size,
       sha256: offer.sha256,
-      audience: offer.purpose === "import" ? IMPORT_AUDIENCE : "room",
+      audience: offer.purpose === "import" ? IMPORT_AUDIENCE : offer.purpose === "audio" ? AUDIO_AUDIENCE : "room",
     });
     if (!begun.ok) return begun;
-    if (begun.kind === "existing") return { ok: true, kind: "existing", record: begun.record, share: true };
+    if (begun.kind === "existing") return { ok: true, kind: "existing", record: begun.record, share: true, audio: false };
     return begun;
   }
 
@@ -115,7 +129,8 @@ export class Uploads {
     const record = stored.record;
     if (record.room !== room) return { ok: false, code: "media_unknown_upload" };
     if (record.audience === IMPORT_AUDIENCE) this.#claim(room, member.id, record.hash);
-    return { ok: true, record, share: record.audience === "room" };
+    // Only an admin's audio upload is stored under `members` by a member (a pack's files are the server's).
+    return { ok: true, record, share: record.audience === "room", audio: record.audience === AUDIO_AUDIENCE };
   }
 
   /** A fetch: the bytes when the room holds `hash` under an audience `role` may see. */

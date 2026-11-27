@@ -1,4 +1,6 @@
 // Room content for the command tests, written the way the engine's own code writes it.
+import { createHash } from "node:crypto";
+
 import { characterData, claimableData, createCharacter, EMPTY_CLAIMABLE, offerCharacter, CHARACTER_TYPE, CLAIMABLE_ID, CLAIMABLE_TYPE } from "../../../src/core/characters/index.ts";
 import {
   CAMPAIGN_SUMMARY_ID,
@@ -18,6 +20,7 @@ import { createNpc, NPC_TYPE, npcData, npcSlug } from "../../../src/core/npcs/in
 import { newSheet } from "../../../src/core/sheets/index.ts";
 import { fromPlain, VARIABLE_TREE_ID, VARIABLE_TREE_TYPE, variableTreeData, type VarMap } from "../../../src/core/variables/index.ts";
 import type { JsonObject } from "../../../src/core/documents/index.ts";
+import { addUpload } from "../../../src/gateway/audio.ts";
 import { type Bench, ROOM } from "./bench.ts";
 
 function put(bench: Bench, type: string, id: string, data: JsonObject, meta?: JsonObject): void {
@@ -89,4 +92,31 @@ export function seedRoster(bench: Bench): void {
   const offered = offerCharacter(EMPTY_CLAIMABLE, { id: "pregen-holmes", name: "Holmes", blurb: "A detective.", source: { kind: "pack", id: "demo" }, keeperNote: "PREGEN-KEEPER-NOTE" });
   if (!offered.ok) throw new Error(offered.code);
   put(bench, CLAIMABLE_TYPE, CLAIMABLE_ID, claimableData(offered.data));
+}
+
+/** An OGG file: the signature the media store checks, then `tag`. */
+export function oggFile(tag: string): Uint8Array {
+  return new Uint8Array([0x4f, 0x67, 0x67, 0x53, ...new TextEncoder().encode(tag)]);
+}
+
+/**
+ * Sounds in the room's audio library, uploaded by the admin as the room does it: the bytes
+ * through `Uploads` with purpose `audio`, then the library entry. Needs a bench with media.
+ * Returns their hashes, in order.
+ */
+export async function seedSounds(bench: Bench, names: readonly string[] = ["Rain Night.ogg", "Tavern.ogg"]): Promise<string[]> {
+  const uploads = bench.uploads;
+  if (uploads === null) throw new Error("the bench keeps no files");
+  const hashes: string[] = [];
+  for (const name of names) {
+    const bytes = oggFile(name);
+    const offered = uploads.offer(ROOM, { id: "m-root", role: "admin" }, { name, mime: "audio/ogg", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), purpose: "audio" });
+    if (!offered.ok) throw new Error(offered.code);
+    const record = offered.kind === "existing" ? offered.record : await uploads.receive(ROOM, { id: "m-root", role: "admin" }, offered.uploadId, bytes).then((received) => (received.ok ? received.record : null));
+    if (record === null) throw new Error("sound not stored");
+    const writer = bench.store.writer(ROOM);
+    bench.store.transaction(() => addUpload(writer, bench.store, record, "m-root", 1));
+    hashes.push(record.hash);
+  }
+  return hashes;
 }

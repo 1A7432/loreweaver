@@ -1,7 +1,7 @@
 // The parameter schemas of commands: a small subset of JSON Schema, written as plain
 // objects so the `commands` view can hand them to a client as they are, and checked here
 // strictly — an argument the schema does not name is refused, an integer must be a whole
-// number (never the text "5"), every text is capped in code points.
+// number and a number a JSON number (never the text "5"), every text is capped in code points.
 import { charCount } from "loreweaver-protocol/v3";
 
 /** The longest text any argument may carry, unless its schema sets a lower cap. */
@@ -20,6 +20,13 @@ export interface StringSchema {
 
 export interface IntegerSchema {
   readonly type: "integer";
+  readonly minimum?: number;
+  readonly maximum?: number;
+}
+
+/** A JSON number (a fraction allowed, never the text "0.5"); finite. */
+export interface NumberSchema {
+  readonly type: "number";
   readonly minimum?: number;
   readonly maximum?: number;
 }
@@ -43,7 +50,7 @@ export interface ObjectSchema {
   readonly maxProperties?: number;
 }
 
-export type Schema = StringSchema | IntegerSchema | BooleanSchema | ArraySchema | ObjectSchema;
+export type Schema = StringSchema | IntegerSchema | NumberSchema | BooleanSchema | ArraySchema | ObjectSchema;
 
 export const NO_PARAMS: ObjectSchema = { type: "object", properties: {}, additionalProperties: false };
 
@@ -61,6 +68,13 @@ export function oneOf(values: readonly string[]): StringSchema {
 
 export function integer(minimum?: number, maximum?: number): IntegerSchema {
   const schema: { type: "integer"; minimum?: number; maximum?: number } = { type: "integer" };
+  if (minimum !== undefined) schema.minimum = minimum;
+  if (maximum !== undefined) schema.maximum = maximum;
+  return schema;
+}
+
+export function number(minimum?: number, maximum?: number): NumberSchema {
+  const schema: { type: "number"; minimum?: number; maximum?: number } = { type: "number" };
   if (minimum !== undefined) schema.minimum = minimum;
   if (maximum !== undefined) schema.maximum = maximum;
   return schema;
@@ -89,6 +103,12 @@ function check(schema: Schema, value: unknown, path: string, depth: number): Sch
   switch (schema.type) {
     case "integer": {
       if (typeof value !== "number" || !Number.isSafeInteger(value)) return { code: "invalid_arg", path };
+      if (schema.minimum !== undefined && value < schema.minimum) return { code: "invalid_arg", path };
+      if (schema.maximum !== undefined && value > schema.maximum) return { code: "invalid_arg", path };
+      return null;
+    }
+    case "number": {
+      if (typeof value !== "number" || !Number.isFinite(value)) return { code: "invalid_arg", path };
       if (schema.minimum !== undefined && value < schema.minimum) return { code: "invalid_arg", path };
       if (schema.maximum !== undefined && value > schema.maximum) return { code: "invalid_arg", path };
       return null;

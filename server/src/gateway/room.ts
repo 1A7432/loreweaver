@@ -73,6 +73,7 @@ import { eventIdOf, moduleRoom } from "./module_commands.ts";
 import type { RateLimiter } from "./rate_limit.ts";
 import { type ReviewFilter, reviewFact, reviewNarrative } from "./review.ts";
 import type { RoomPacks } from "./packs.ts";
+import { addUpload, uploadFits } from "./audio.ts";
 import { mediaData, type UploadOffer, type Uploads } from "./uploads.ts";
 import {
   BUILT_IN_VIEWS,
@@ -633,14 +634,23 @@ export class Room {
   // published at once, turn-less, the way a command's events are: its place in the log is
   // decided when it is appended, like every other event's.
 
-  /** `media.offer`: the call's answer. A share of bytes the room already holds is announced again. */
+  /**
+   * `media.offer`: the call's answer. A share of bytes the room already holds is announced
+   * again; an audio upload of bytes it holds goes into the library at once.
+   */
   offerUpload(member: Member, offer: UploadOffer): Answer {
     const uploads = this.#host.uploads;
     if (uploads === null) return { ok: false, code: "media_unavailable" };
+    // A full library refuses before any bytes travel (a player is refused for who they are first).
+    if (offer.purpose === "audio" && member.role === "admin" && !uploadFits(this.#host.services.store, this.id, offer.sha256)) return { ok: false, code: "audio_library_full" };
     const outcome = uploads.offer(this.id, { id: member.id, role: member.role }, offer);
     if (!outcome.ok) return { ok: false, code: outcome.code };
     if (outcome.kind === "upload") return { ok: true, data: { upload_id: outcome.uploadId } };
     if (outcome.share) this.#shareMedia(member, outcome.record);
+    if (outcome.audio) {
+      const refused = this.#addAudio(member, outcome.record);
+      if (refused !== null) return { ok: false, code: refused };
+    }
     return { ok: true, data: { existing: mediaData(outcome.record) } };
   }
 
@@ -661,7 +671,32 @@ export class Room {
     const received = await uploads.receive(this.id, member, uploadId, bytes);
     if (!received.ok) return received;
     if (received.share) this.#shareMedia(member, received.record);
+    if (received.audio) {
+      const refused = this.#addAudio(member, received.record);
+      if (refused !== null) {
+        // Another upload filled the library while these bytes travelled: they are not kept,
+        // unless an enabled pack ships the same file.
+        if (!this.#host.packs.shipsBytes(this.#host.services.store, this.id, received.record.hash)) uploads.media.remove(this.id, received.record.hash);
+        return { ok: false, code: refused };
+      }
+    }
     return { ok: true, record: received.record };
+  }
+
+  /** Put an admin's uploaded sound into the room's audio library; the refusal code, or null. */
+  #addAudio(member: Member, record: MediaRecord): string | null {
+    const { store, clock } = this.#host.services;
+    const writer = store.writer(this.id);
+    try {
+      const added = store.transaction(() => addUpload(writer, store, record, member.id, clock.now()));
+      if (added === "full") return "audio_library_full";
+    } catch (error) {
+      // The room moved to another generation meanwhile (a reset or an import cleared its media too).
+      if (error instanceof StaleGeneration) return "media_unknown_upload";
+      throw error;
+    }
+    void this.refreshViews();
+    return null;
   }
 
   /** A fetch by `member`: only what the room holds under an audience their role may see. */
@@ -763,6 +798,7 @@ export class Room {
       moduleClock: this.#moduleClock,
       uploads: host.uploads?.enabled(this.id) ?? false,
       packs: host.packs,
+      media: host.uploads?.media ?? null,
     };
     return { source, modules: await this.#modules(), at: this.meta.head };
   }

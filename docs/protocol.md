@@ -405,15 +405,15 @@ strictly:
 
 | keyword | used for |
 |---|---|
-| `type` | `"object"`, `"string"`, `["string","null"]`, `"integer"`, `"boolean"`, `"array"` |
+| `type` | `"object"`, `"string"`, `["string","null"]`, `"integer"`, `"number"`, `"boolean"`, `"array"` |
 | `properties`, `required`, `additionalProperties` | objects; `additionalProperties` is `false` (no other names), `true` (any object), or a schema for every other name |
 | `maxProperties` | objects (default cap 64 names) |
 | `enum`, `minLength`, `maxLength` | strings (lengths in code points; default cap 4000) |
-| `minimum`, `maximum` | integers |
+| `minimum`, `maximum` | integers and numbers |
 | `items`, `maxItems` | arrays (default cap 64 items) |
 
 A name the schema does not list is refused (`unknown_arg`); an integer must be a JSON number
-with no fraction, never the text `"5"`; an argument given as `null` counts only where the type
+with no fraction, and a number a finite JSON number, never the text `"5"`; an argument given as `null` counts only where the type
 allows `null`; nesting deeper than 8 levels is refused. A module command's `params` is the
 schema its module declared.
 
@@ -470,11 +470,13 @@ argument. Text forms are given as English table / Chinese table; with any of the
 | `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op` (`export`\|`import`), `bundle?` (object) | Lifecycle. |
 | `uploads` | player, observer; `on`: admin | `uploads` / `uploads`, `上传` | `on?` (boolean) | Shows or sets the room's upload switch. Available when the server keeps files (`no_media`). |
 | `import` | player; `as: "world"`: admin | `import` / `import`, `导入` | `file?` (a 64-hex content hash), `pack?` (1–64), `card?` (1–512), `as` (`world`\|`character`), `name?` (1–64) | Imports a card file the caller uploaded with `purpose: "import"` ([11.6](#116-importing-a-card)), or a card an enabled pack ships (`pack` and `card`, its path in the pack; `pack_not_enabled`, `card_not_in_pack`). `no_media` without a media store and with no pack installed. |
-| `pack` | player; `enable`, `disable`, `install`: admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op` (`list`\|`enable`\|`disable`\|`install`), `id?` (1–64), `ref?` (1–2000) | `list`: an admin sees every installed pack, a player the room's by name. `enable`/`disable` switch an installed pack in this room (`unknown_pack`, `too_many_packs`, `module_id_taken`). `install` (text form `install <ref>`): `ref` a path on the server, an `https://` URL or `gh:owner/repo[@tag]`; installs the pack on the server and enables it here with its skills; `data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`, `text` the trust card in words; one `narrative` system event. It runs without queuing behind the room's turns, and its one result comes when the fetch and install are done. Refusals: `not_https`, `bad_gh_ref`, `source_not_found`, `archive_too_large`, `fetch_failed`, `too_many_redirects`, `no_pack_asset`, `bad_release`, `bad_archive`, `invalid_pack`, `engine_too_old`, `already_installed`, `index_unreadable`, `install_failed`, `install_unavailable`. |
+| `pack` | player; `enable`, `disable`, `install`: admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op` (`list`\|`enable`\|`disable`\|`install`), `id?` (1–64), `ref?` (1–2000) | `list`: an admin sees every installed pack, a player the room's by name. `enable`/`disable` switch an installed pack in this room (`unknown_pack`, `too_many_packs`, `module_id_taken`); disabling one stops what plays one of its audio cues (an `audio` `stop` signal per layer). `install` (text form `install <ref>`): `ref` a path on the server, an `https://` URL or `gh:owner/repo[@tag]`; installs the pack on the server and enables it here with its skills; `data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`, `text` the trust card in words; one `narrative` system event. It runs without queuing behind the room's turns, and its one result comes when the fetch and install are done. Refusals: `not_https`, `bad_gh_ref`, `source_not_found`, `archive_too_large`, `fetch_failed`, `too_many_redirects`, `no_pack_asset`, `bad_release`, `bad_archive`, `invalid_pack`, `engine_too_old`, `already_installed`, `index_unreadable`, `install_failed`, `install_unavailable`. |
 | `skill` | admin | `skill`, `skills` / `skill`, `技能` | `op` (`list`\|`enable`\|`disable`), `id?` (1–64) | The Keeper's skills this room may enable: the built-in ones and those of its enabled packs (`skill_not_available`, `too_many_skills`). |
 | `jrrp` | player | `jrrp`, `luck` / `jrrp` | — | Today's luck. |
 | `draw` | player | `draw` / `draw`, `抽牌` | — | Draws a card from a shuffled deck. |
 | `help` | player, observer | `help`, `h` / `help`, `帮助` | `id?` (1–128) | The `commands` view as text; with `id` (an id or a form), one command. |
+| `audio` | admin | `audio` / `audio`, `音频`, `音訊` | `op` (`list`\|`set`\|`remove`), `query?` (1–400), `title?` (1–400), `layer?` (`bgm`\|`ambience`\|`sfx` or `null`), `tags?` (≤16 of 1–32) | The room's audio library ([10.4](#104-built-in-views) `audio`): the sounds its admin uploaded with `purpose: "audio"` ([11.2](#112-offering-a-file)) and the cues of its enabled packs, named `<pack>/<cue>`. `list`: `data {sounds: [{id, title, layer, tags, source}]}`. `set` changes an upload's title, layer and tags; `remove` takes an upload out of the library (what plays it stops; its bytes go unless the table's log or an enabled pack still uses them). A pack's cue is read-only (`audio_read_only`). Text forms: `audio [list]`, `audio set <sound> title=<t> layer=<l> tags=a,b` (a value with spaces in quotes), `audio remove <sound>`. Available when the server keeps files (`no_media`). |
+| `bgm`, `ambience`, `sfx` | admin | `bgm` / `bgm`, `背景音乐`, `背景音樂`; `ambience`, `amb` / `ambience`, `amb`, `环境音`, `環境音`; `sfx` / `sfx`, `音效` | `op` (`play`\|`stop`\|`pause`\|`resume`\|`volume`), `query?` (1–400), `loop?`, `volume?` (a number 0–1), `fadeMs?` (0–60000) | One command per layer. `play` names a library sound by `query` — its id, else its exact title (or an upload's file name, or a cue's id without the pack), else a unique prefix of an id or title, else a unique substring — and plays it (`bgm` and `ambience` loop unless `loop: false`; volume 1 unless given); `stop`, `pause`, `resume`, `volume` act on what the layer plays (`audio_not_playing` when nothing). One `audio` signal ([9.4](#94-audio)) to the table; `data {layer, action, …}`. Refusals: `audio_not_found`, `audio_ambiguous` (the message names up to five candidates), `audio_bad_volume`, `audio_bad_fade`. Text forms: `bgm [play] <sound> [--loop\|--once] [--volume 0.7\|70%] [--fade 2000]`, `bgm stop\|pause\|resume [--fade N]`, `bgm volume <0–1\|N%>`; the Chinese words `播放`, `停止`, `暂停`, `继续`, `音量` too. |
 | `panels` | player, observer; `enable`, `disable`: admin | `panels`, `panel` / `panels`, `面板`, `模组面板` | `op` (`list`\|`enable`\|`disable`), `id?` (`<pack>/<panel>`, 1–129) | The panels of the room's enabled packs ([10.6](#106-panels)). Every one is on by default; the admin's switch is a room setting that survives resets. `panel_not_available` for an id no enabled pack has. |
 
 **Rule-pack commands** depend on the room's rule system. With the built-in systems only `coc7`
@@ -691,7 +693,9 @@ An undo: the log lost every event numbered `from` or higher **except** those who
 
 The campaign was wiped (`story`: the story; `chars`: the story and the characters; `all`:
 everything) or the room was replaced by an import (always `all`). Clear the scrollback and every
-draft; adopt `epoch`. Views follow with their new values.
+draft; adopt `epoch`. Views follow with their new values. A reset of `all` also clears what the
+room plays: stop every audio layer (no `audio` signal says so). A lighter reset leaves the music
+playing.
 
 ## 9. Signals
 
@@ -755,21 +759,40 @@ An out-of-band line for the table, in the room's language.
 
 ### 9.4 `audio`
 
-A playback intent; the bytes are fetched by `hash` over the byte channel.
+A playback **transition**; the bytes are fetched by `hash` over the byte channel
+([11.3](#113-get)). What each layer plays NOW is the `audio` view ([10.4](#104-built-in-views)).
+
+```json
+{"type":"signal","kind":"audio","data":{"id":"01J…","action":"play","layer":"bgm","sound":"harbor/rain","hash":"3f9a…","mime":"audio/ogg","size":48213,"title":"Rain on the quay","loop":true,"volume":0.8,"fadeMs":1500}}
+```
 
 | field | meaning |
 |---|---|
-| `id` | The cue's id. |
+| `id` | This signal's own id. |
 | `action` | `play`, `stop`, `pause`, `resume`, `volume`. |
-| `layer` | `bgm`, `ambience` or `sfx`. |
-| `hash`, `mime` | The sound to fetch. |
-| `title` | Optional, for display. |
-| `loop` | Optional boolean. |
-| `volume` | Optional number. |
-| `fadeMs` | Optional fade duration in milliseconds. |
+| `layer` | `bgm`, `ambience` or `sfx`. `bgm` and `ambience` hold one sound each and loop by default; `sfx` is one-shot: each `play` sounds once, beside the others. |
+| `sound` | The library id of the sound (`<pack>/<cue>`, or an upload's hash): on `play`, and on a transition of a `bgm` or `ambience` layer, the sound it acts on. |
+| `hash`, `mime`, `size` | `play` only: the sound to fetch, and its size in bytes. |
+| `title` | `play` only, optional: for display. |
+| `loop` | `play` only. |
+| `volume` | `play` and `volume`: 0 to 1. |
+| `fadeMs` | Optional: fade over this many milliseconds (at most 60,000). |
 
-Audio cues come from the Stage Director's pass after a turn. Being signals, they are not
-replayed: a client that connects later does not learn what is playing.
+**The view is the state, the signal is the transition.** A client:
+
+1. on every connect (and reconnect), subscribes to `audio` and starts what `playing` says: each
+   layer's sound at its `volume`, looping as `loop` says, paused when `paused`;
+2. afterwards follows the signals: `play` replaces what the layer plays (`sfx`: sounds once),
+   `stop` ends it, `pause` / `resume` hold and continue it, `volume` changes it — over `fadeMs`
+   when given;
+3. takes the view as the truth whenever they could disagree: after a reconnect (signals are not
+   replayed), and after a `reset` of `all` (which stops every layer, [8.6](#86-reset)).
+
+The signals come from two places, through one path that moves the room's state with each
+signal: the admin's `bgm`, `ambience` and `sfx` commands (and an `audio remove` or a
+`pack disable` stopping what played the sound), and the Stage Director's pass after a turn (a
+pack's cue, [7.2](#72-what-is-in-the-log-and-in-what-order)). An undo does not change what
+plays and sends no `audio` signal.
 
 ## 10. Views
 
@@ -919,6 +942,24 @@ ones players do not see marked `hidden: true`.
 | `entry.page` | `{hash, size, mime}` | A page's HTML (`mime` is `text/html`), fetched by hash over the byte channel ([11.3](#113-get)). |
 | `entry.fallback` | `[template block]` or `null` | A page's template for a client that cannot run it; `null`: show one "needs a rich client" line. |
 
+**`audio`**: the room's audio library and what each looping layer plays ([9.4](#94-audio)).
+
+| field | type | meaning |
+|---|---|---|
+| `library` | `[sound]` | The sounds the room's admin uploaded with `purpose: "audio"` (oldest first), then the audio cues of the room's enabled packs. |
+| `sound.hash`, `.mime`, `.size` | string, string, integer | What fetching it over the byte channel needs ([11.3](#113-get)): every viewer gets these, to prefetch. A non-admin gets each file once and nothing else. |
+| `sound.id` | string | Admin only. The library id: `<pack>/<cue>` for a pack's cue, the hash for an upload. What `bgm`/`ambience`/`sfx` take as `query`. |
+| `sound.title` | string | Admin only. |
+| `sound.layer` | string or `null` | Admin only. `bgm`, `ambience` or `sfx`: the layer it is meant for (an upload's is `null` until the admin sets it). |
+| `sound.tags` | string[] | Admin only. |
+| `sound.source` | `{kind, id}` | Admin only. `kind` `upload` (`id` `null`) or `pack` (`id` the pack). |
+| `playing` | `{bgm?, ambience?}` | What each looping layer plays; a layer with nothing playing is absent. `sfx` is never here. |
+| `playing.<layer>` | `{id, title, hash, mime, size, loop, volume, paused}` | The sound (its library id, title and what fetching it needs), whether it loops, its volume (0 to 1), and whether it is paused. For every viewer. |
+
+A player sees only what fetching needs because a sound's name is content: a pack's cue titles and
+an admin's uploads may tell the story before the table hears it. What plays is named for
+everyone.
+
 ### 10.5 Module views
 
 A module may publish views named `<module>/<name>`, each with the JSON Schema and title its
@@ -992,7 +1033,7 @@ An upload starts on the control stream with `call media.offer`:
 | `mime` | string | The file's type (at most 128 characters). |
 | `size` | integer | Bytes, greater than 0. |
 | `sha256` | string | The lowercase hex SHA-256 of the bytes. |
-| `purpose` | `share` (default) or `import` | `share`: the file becomes room media and the table sees a `media` event once the bytes arrive. `import`: a card file for the `import` command ([11.6](#116-importing-a-card)), stored where only admins can fetch it, announced to nobody. |
+| `purpose` | `share` (default), `import` or `audio` | `share`: the file becomes room media and the table sees a `media` event once the bytes arrive. `import`: a card file for the `import` command ([11.6](#116-importing-a-card)), stored where only admins can fetch it, announced to nobody. `audio` (admins only, sounds only): a sound for the room's audio library, fetchable by every member, announced by no event; it joins the `audio` view's library ([10.4](#104-built-in-views)) under its file name without the extension as title. |
 
 A success answers one of:
 
@@ -1000,19 +1041,23 @@ A success answers one of:
   attempt, by this member, within 15 minutes.
 - `{"existing":{hash, mime, size, name, from}}`: the room already holds these bytes; send
   nothing. For a `share`, the file is announced to the table again (a new `media` event, `from`
-  the offering member). For an `import`, the file is ready for the `import` command.
+  the offering member). For an `import`, the file is ready for the `import` command. For an
+  `audio`, the sound is in the library (it already was, or the room held these bytes as a file
+  every member may fetch).
 
 Accepted types: `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml` (a
 restricted subset), `audio/mpeg`, `audio/ogg`, `audio/wav`, `audio/flac`, `audio/mp4`,
 `audio/aac`. For `purpose: "import"` only `image/png` (a card with the data embedded) and
-`application/json`.
+`application/json`; for `purpose: "audio"` only the `audio/…` types.
 
 Default limits: an image at most 8 MiB and 512 MiB of images per room; a sound at most
-128 MiB and 2048 MiB of sounds per room; 10 offers per member per room per minute (a refused
-offer still spends one).
+128 MiB and 2048 MiB of sounds per room (the operator sets these two); 10 offers per member per
+room per minute (a refused offer still spends one); 100 uploaded sounds in a room's audio
+library.
 
 Refusals: `invalid_params` (a field of the wrong shape), `media_unavailable` (the server keeps
-no files), `observer_upload`, `media_disabled` (the room's upload switch is off),
+no files), `observer_upload`, `forbidden` (`audio` from a non-admin), `audio_library_full`,
+`media_disabled` (the room's upload switch is off),
 `media_rate_limited`, `media_bad_mime`, `media_bad_offer`, `media_too_large`, `media_bad_hash`,
 `media_quota_exceeded`.
 
@@ -1024,7 +1069,8 @@ server: {"op":"get","ok":true,"hash":"…","size":<n>,"mime":"…","name":"…"}
 ```
 
 A member can fetch what the room holds under an audience its role may see: room media (shared
-files, staging pictures) for everyone; import files for admins. A hash in another room, one the
+files, staging pictures), the audio library's sounds and the files of the room's enabled packs
+for everyone (what only an admin-only panel names, for admins); import files for admins. A hash in another room, one the
 role may not see and one nobody holds all answer the same: `media_not_found`.
 
 ### 11.4 PUT
@@ -1043,7 +1089,8 @@ line.
 PUT refusals: `media_unknown_upload` (no waiting offer with that id for this member: never
 made, expired, already used, or the room was cleared), `media_size_mismatch` (more or fewer
 bytes than offered), `media_hash_mismatch`, `media_bad_signature`, `media_bad_svg`,
-`media_quota_exceeded`, `media_disabled`, `media_bad_upload`, `media_storage_failed`. Any
+`media_quota_exceeded`, `media_disabled`, `media_bad_upload`, `media_storage_failed`,
+`audio_library_full` (another upload filled the library meanwhile; the bytes are not kept). Any
 failed PUT uses the offer up: offer again.
 
 ### 11.5 Errors
@@ -1291,7 +1338,6 @@ These are defined in the design, or reserved in the code, but not built in 3.0:
   no reference client runs one yet (the terminal client shows the fallback). The page bridge
   is the desktop client's to define. Panels a room publishes at runtime (`source.kind:
   "room"`) are reserved: no server produces them.
-- **The `audio` view**: the audio library and what each layer is playing.
 - **Admin views** (`admin/model`, `admin/keys`, `admin/content`): the names under `admin/` are
   reserved for admins; no such view exists yet. Keys are minted by the operator
   (`loreweaver key`), not over the protocol.

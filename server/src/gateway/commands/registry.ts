@@ -20,6 +20,7 @@ import { translate } from "../../infra/i18n.ts";
 import { LifecycleError, StaleGeneration } from "../../infra/lifecycle/errors.ts";
 import { COMMANDS_CATALOG } from "./catalog.ts";
 import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCommands } from "./engine/checks.ts";
+import { audioCommand, layerCommand } from "./engine/audio.ts";
 import { importCommand, uploadsCommand } from "./engine/files.ts";
 import { packCommand, panelsCommand, skillCommand } from "./engine/packs.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
@@ -128,6 +129,10 @@ export class CommandRegistry {
       packCommand(packs),
       skillCommand(packs),
       panelsCommand(packs),
+      audioCommand(options.uploads ?? null, packs),
+      layerCommand("bgm", options.uploads ?? null, packs),
+      layerCommand("ambience", options.uploads ?? null, packs),
+      layerCommand("sfx", options.uploads ?? null, packs),
       jrrpCommand,
       drawCommand,
       helpCommand((call) => this.#entries(call.context, call.locale)),

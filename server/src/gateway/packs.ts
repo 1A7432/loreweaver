@@ -34,6 +34,7 @@ import { mergeRoomKit } from "../agent/lanes/presentation.ts";
 import type { PanelEntry, Role } from "loreweaver-protocol/v3";
 
 import type { Pack, PackAsset, PackPanel, TrustCard } from "../core/packs/index.ts";
+import type { KitCue } from "../core/presentation/kit.ts";
 import { panelAdminOnly, panelEntry, type PanelFile, panelListedTo } from "../core/panels/index.ts";
 import { builtInPacks, type RulePack, RulePackRegistry } from "../core/rulepacks/index.ts";
 import { builtInSkills, type Skill, SkillRegistry } from "../core/skills/index.ts";
@@ -299,6 +300,32 @@ export class RoomPacks {
       this.#report(room, line);
     }
     return merged.kit;
+  }
+
+  /**
+   * The audio cues of the room's enabled packs, each with the sound its kit names, in the
+   * order the packs were enabled, then as each kit declares them. A cue whose sound the pack
+   * does not ship is left out (the pack reader refuses such a pack; this is the safe side).
+   * Every id is kept: the audio library names a cue `<pack>/<cue>`, so the Director's merge
+   * rule (first claim of a bare id) does not apply there.
+   */
+  audioCues(store: Store, room: string): readonly { readonly packId: string; readonly cue: KitCue; readonly asset: KitAsset }[] {
+    const out: { packId: string; cue: KitCue; asset: KitAsset }[] = [];
+    for (const loaded of this.enabled(store, room)) {
+      const kit = loaded.pack.presentation?.kit;
+      if (kit === undefined) continue;
+      const assets = new Map(kitAssetsOf(loaded.pack).map((asset) => [asset.path, kitAsset(asset)]));
+      for (const cue of kit.audio) {
+        const asset = assets.get(cue.asset);
+        if (asset !== undefined) out.push({ packId: loaded.pack.manifest.id, cue, asset });
+      }
+    }
+    return out;
+  }
+
+  /** Whether a file of the room's enabled packs has these bytes (removing an upload must not take a pack's sound with it). */
+  shipsBytes(store: Store, room: string, sha256: string): boolean {
+    return this.enabled(store, room).some((loaded) => loaded.pack.assets.some((asset) => asset.sha256 === sha256));
   }
 
   /** The skills the room may enable: the built-ins, then those of its enabled packs (not shadowed ones). */

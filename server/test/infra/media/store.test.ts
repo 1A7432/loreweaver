@@ -494,3 +494,20 @@ test("a pending offer's size is told to its uploader alone, and an abandoned off
   c.advance(1000);
   expect(media.pendingSize(late, "m:ada")).toBeUndefined();
 });
+
+test("removing one blob takes its row, and its file only when no other room's row names it", async () => {
+  const { media, blobDir } = bench();
+  const bytes = ogg("removed");
+  const kept = ogg("kept");
+  await upload(media, bytes, { mime: "audio/ogg", audience: "members" });
+  await upload(media, kept, { mime: "audio/ogg", audience: "members" });
+  await upload(media, bytes, { room: "other", mime: "audio/ogg", audience: "members" });
+  expect(media.remove("table", sha(bytes))).toBe(true);
+  expect(media.find("table", sha(bytes), "admin")).toBeUndefined();
+  expect(tree(blobDir).sort()).toEqual([sha(bytes), sha(kept)].sort());
+  expect(media.remove("other", sha(bytes))).toBe(true);
+  expect(tree(blobDir)).toEqual([sha(kept)]);
+  expect(media.remove("table", sha(bytes))).toBe(false);
+  expect(media.remove("table", "not a hash")).toBe(false);
+  expect(media.usage("table").audio).toBe(kept.length);
+});

@@ -186,15 +186,25 @@ export interface SignalPayloads {
   turn:
     | { status: "busy"; actor: string; activity?: "reading" | "dice" | "cast" | "bookkeeping"; round?: number }
     | { status: "idle" };
-  /** A playback intent; the bytes are fetched by hash over the byte channel. */
+  /**
+   * A playback TRANSITION; the bytes are fetched by hash over the byte channel. What each
+   * layer plays now is the `audio` view: start from it on connect, then follow these.
+   */
   audio: {
+    /** This signal's own id. */
     id: string;
     action: "play" | "stop" | "pause" | "resume" | "volume";
     layer: "bgm" | "ambience" | "sfx";
+    /** The library id of the sound: on `play`, and on a transition of a layer that plays one. */
+    sound?: string;
+    /** `play`: the sound to fetch. */
     hash?: string;
     mime?: string;
+    /** `play`: the sound's size in bytes. */
+    size?: number;
     title?: string;
     loop?: boolean;
+    /** 0..1: on `play` and `volume`. */
     volume?: number;
     fadeMs?: number;
   };

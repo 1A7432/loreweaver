@@ -115,5 +115,7 @@ export async function runLanePass(pass: LanePass, room: LaneRoom): Promise<"done
   if (done.status === "stale") return "stale";
   if (done.event !== null) room.broadcastEvent(done.event);
   for (const audio of done.audio) room.broadcastAudio(audio);
+  // A cue moved the room's audio state: the `audio` view follows its signal.
+  if (done.audio.length > 0) await room.refreshViews();
   return "done";
 }

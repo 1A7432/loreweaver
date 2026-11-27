@@ -6,6 +6,8 @@
 import { afterEach, expect, test } from "bun:test";
 
 import {
+  decodeByteReply,
+  encodeByteLine,
   Session as ClientSession,
   type Attachment,
   type ClientFrame,
@@ -14,16 +16,19 @@ import {
   type ServerFrame,
   type SessionOptions, PAGE_LIMIT } from "loreweaver-protocol/v3";
 
+import { createHash } from "node:crypto";
+
+import { ByteChannel } from "../../src/net/bytes.ts";
 import { Session as ServerSession } from "../../src/net/session.ts";
-import { KEYS, reply, ROOM, RoomBench } from "../gateway/room_bench.ts";
+import { KEYS, reply, ROOM, RoomBench, type BenchOptions } from "../gateway/room_bench.ts";
 
 const benches: RoomBench[] = [];
 afterEach(async () => {
   await Promise.all(benches.splice(0).map((b) => b.close()));
 });
 
-function setup(): RoomBench {
-  const b = new RoomBench();
+function setup(options: BenchOptions = {}): RoomBench {
+  const b = new RoomBench(options);
   benches.push(b);
   return b;
 }
@@ -79,6 +84,29 @@ class Player {
         });
       },
     });
+  }
+
+  /**
+   * A PUT on a byte stream of the current connection (the byte channel beside the control
+   * stream): the header line, the body, the end of the stream. The server's answer line.
+   */
+  async put(uploadId: string, bytes: Uint8Array): Promise<unknown> {
+    const server = this.#server;
+    if (server === null) throw new Error("not connected");
+    const queue = [encodeByteLine({ op: "put", upload_id: uploadId }), bytes];
+    const out: Uint8Array[] = [];
+    await new ByteChannel(() => server.byteAccess(), () => "en").serve(
+      { read: () => Promise.resolve(queue.shift() ?? null), stop: () => undefined },
+      {
+        write: (chunk) => {
+          out.push(chunk.slice());
+          return Promise.resolve();
+        },
+        finish: () => Promise.resolve(),
+      },
+    );
+    const text = Buffer.concat(out).toString("utf8");
+    return decodeByteReply(JSON.parse(text.slice(0, text.indexOf("\n"))));
   }
 
   /** The network drops: both sides notice. */
@@ -510,4 +538,44 @@ test("a member who connects in the middle of a turn is told one is running; the 
   expect(late.session.getSnapshot().turn).toMatchObject({ status: "idle" });
   const busy = (ada.received[0] ?? []).filter((frame) => frame.type === "signal" && frame.kind === "turn" && frame.data.status === "busy");
   expect(busy.length).toBe(1);
+});
+
+test("audio: an admin uploads a sound for the library and plays it; a member who connects later finds it playing in the audio view; a player is refused both", async () => {
+  const b = setup({ media: true });
+  const root = await join(b, KEYS.root);
+  const ada = await join(b, KEYS.ada);
+  const bytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, ...new TextEncoder().encode("harbor rain at night")]);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const offer = { name: "Harbor Rain.ogg", mime: "audio/ogg", size: bytes.length, sha256, purpose: "audio" };
+
+  // A player may neither upload to the library nor play it.
+  expect(await done(b, ada.session.call("media.offer", offer))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+  expect(await done(b, ada.session.input(".bgm play harbor"))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+
+  const offered = await done(b, root.session.call("media.offer", offer));
+  if (!offered.ok) throw new Error(offered.error.code);
+  const uploadId = (offered.data as { upload_id: string }).upload_id;
+  expect(await done(b, root.put(uploadId, bytes))).toMatchObject({ op: "put", ok: true, hash: sha256, mime: "audio/ogg" });
+  await done(b, root.session.viewSubscribe(["audio"]));
+  expect(root.session.view("audio")?.data.library).toEqual([{ hash: sha256, mime: "audio/ogg", size: bytes.length, id: sha256, title: "Harbor Rain", layer: null, tags: [], source: { kind: "upload", id: null } }]);
+  // No event announces a library upload.
+  expect(ada.session.getSnapshot().events).toEqual([]);
+
+  const signals: unknown[] = [];
+  ada.session.onSignal((frame) => {
+    if (frame.kind === "audio") signals.push(frame.data);
+  });
+  const played = await done(b, root.session.runCommand("bgm", { op: "play", query: "harbor", volume: 0.8 }));
+  expect(played).toMatchObject({ ok: true, text: "BGM: playing Harbor Rain." });
+  expect(signals).toEqual([{ id: expect.any(String), action: "play", layer: "bgm", sound: sha256, hash: sha256, mime: "audio/ogg", size: bytes.length, title: "Harbor Rain", loop: true, volume: 0.8 }]);
+
+  // Bao connects after the signal went out: the view is how he learns what plays.
+  const bao = await join(b, KEYS.bao);
+  await done(b, bao.session.viewSubscribe(["audio"]));
+  const seen = bao.session.view("audio")?.data;
+  expect(seen?.playing).toEqual({ bgm: { id: sha256, title: "Harbor Rain", hash: sha256, mime: "audio/ogg", size: bytes.length, loop: true, volume: 0.8, paused: false } });
+  // A player's library is what fetching needs, nothing that names a sound.
+  expect(seen?.library).toEqual([{ hash: sha256, mime: "audio/ogg", size: bytes.length }]);
+  expect(bao.session.droppedFrames).toBe(0);
+  expect(ada.session.droppedFrames).toBe(0);
 });

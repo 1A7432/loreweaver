@@ -25,7 +25,7 @@ import { type Clock, systemClock } from "../infra/ids.ts";
 import { ImageGenError, OpenAICompatibleImageGen } from "../infra/imagegen/index.ts";
 import { RoomStorages } from "../infra/lifecycle/storages.ts";
 import { createLLM, type LLMClient, LLMError } from "../infra/llm/index.ts";
-import { MediaStore } from "../infra/media/index.ts";
+import { DEFAULT_MEDIA_LIMITS, MediaStore } from "../infra/media/index.ts";
 import { ensurePrivateDir, writePrivateFile } from "../infra/private_files.ts";
 import { OpenAIEmbeddings, VectorIndex } from "../infra/recall/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
@@ -222,7 +222,8 @@ export interface OpenData {
 export function openData(settings: Settings, clock: Clock = systemClock): OpenData {
   ensurePrivateDir(settings.dataDir);
   const db = openDatabase(join(settings.dataDir, "loreweaver.db"));
-  const media = new MediaStore(settings.dataDir, db, { clock });
+  const limits = { ...DEFAULT_MEDIA_LIMITS, audio: { maxFileBytes: settings.media.audioMaxFileBytes, roomQuotaBytes: settings.media.audioRoomQuotaBytes } };
+  const media = new MediaStore(settings.dataDir, db, { clock, limits });
   const storages = new RoomStorages().register({
     name: "media",
     lifecycle: { reset: "all" },

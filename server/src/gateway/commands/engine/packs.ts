@@ -11,6 +11,7 @@
 import { localText, type TrustCard } from "../../../core/packs/index.ts";
 import { panelAdminOnly, panelListedTo, panelText } from "../../../core/panels/index.ts";
 import { disableSkill, enableSkill, readEnabledSkills, skillDescription, skillName, writeEnabledSkills } from "../../../core/skills/index.ts";
+import { stopPlaying } from "../../audio.ts";
 import type { LoadedPack, RoomPacks, RuntimeInstallOutcome } from "../../packs.ts";
 import { firstWord } from "../parse.ts";
 import { compact, object, oneOf, text } from "../schema.ts";
@@ -271,6 +272,8 @@ export function packCommand(packs: RoomPacks): CommandSpec {
         }
         if (dropped.length > 0) writeEnabledSkills(writer, skills);
       }
+      // Its cues leave the room's audio library with it: what plays one of them stops.
+      const stopped = stopPlaying(writer, store, services.clock, (sound) => sound.id.startsWith(`${id}/`));
       const name = loaded === null ? id : packName(loaded, call.locale);
       const lines = [call.say("pack.disabled", { name })];
       if (dropped.length > 0) lines.push(call.say("pack.skills_dropped", { list: dropped.join(call.say("list.separator")) }));
@@ -278,6 +281,7 @@ export function packCommand(packs: RoomPacks): CommandSpec {
         text: lines.join("\n"),
         data: { id, enabled: false, changed: true, skillsDisabled: dropped },
         events: [{ kind: "narrative", data: { speaker: "system", text: call.tell("pack.event_disabled", { name: loaded === null ? id : localText(loaded.pack.manifest.name, call.context.locale) || id }), format: "plain" } }],
+        signals: stopped.map((audio) => ({ kind: "audio" as const, data: audio })),
         modulesChanged: true,
       };
     },

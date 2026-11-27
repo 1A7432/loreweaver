@@ -24,7 +24,8 @@
 //    may skip it.
 // 3. `commitDirector` — one synchronous block through the writer of the turn the pass was
 //    scheduled on: the `blocks` event (stamped with that turn), the image budget and the
-//    picture larder. It returns the event and the audio signals for the caller to
+//    picture larder, and each audio cue through `applyAudio` (the room's audio state moves
+//    with the signal). It returns the event and the audio signals for the caller to
 //    publish. A room rewound, reset or replaced since makes it return `stale`, writing
 //    nothing.
 //
@@ -37,6 +38,7 @@ import { playerViewer, type Viewer } from "../../core/documents/model.ts";
 import type { DocumentViews } from "../../core/documents/views.ts";
 import { SCENE_ID, SCENE_TYPE, type SceneView } from "../../core/notes/scene.ts";
 import { MODULE_VARIABLES_ID, MODULE_VARIABLES_TYPE, type ModuleVariablesView, VARIABLE_TREE_ID, VARIABLE_TREE_TYPE, type VariableTreeView } from "../../core/variables/documents.ts";
+import { applyAudio, cueSoundId, isStateful, readPlaying } from "../../core/audio/index.ts";
 import type { Clock } from "../../infra/ids.ts";
 import { defineStateKey, jsonStateKey } from "../../infra/lifecycle/declarations.ts";
 import { StaleGeneration } from "../../infra/lifecycle/errors.ts";
@@ -618,11 +620,16 @@ export function commitDirector(context: RoomContext, proposal: DirectorProposal,
         blocks.length === 0
           ? null
           : context.writer.appendEvent({ id: deps.clock.id(), ts: deps.clock.now(), kind: "blocks", turn: context.turn, data: { blocks } });
-      const audio = proposal.audio.map(({ cue, action }): SignalPayloads["audio"] =>
-        action === "play"
-          ? { id: deps.clock.id(), action, layer: cue.layer, hash: cue.asset.hash, mime: cue.asset.mime, ...(cue.title === "" ? {} : { title: cue.title }), loop: cue.layer !== "sfx" }
-          : { id: deps.clock.id(), action, layer: cue.layer },
-      );
+      // Through the one function every audio source uses: the room's state moves with the
+      // signal, under this turn's writer, so the `audio` view shows what the Director put on.
+      const audio: SignalPayloads["audio"][] = [];
+      for (const { cue, action } of proposal.audio) {
+        const sound = { id: cueSoundId(cue.packId, cue.id), hash: cue.asset.hash, mime: cue.asset.mime, size: cue.asset.size, title: cue.title === "" ? cue.id : cue.title };
+        // A cue's `stop` stops that cue, never whatever else the layer plays now (the admin's music).
+        if (action === "stop" && isStateful(cue.layer) && readPlaying(context.services.store, context.room)[cue.layer]?.sound.id !== sound.id) continue;
+        const applied = applyAudio(context.writer, context.services.store, action === "play" ? { action, layer: cue.layer, sound } : { action, layer: cue.layer }, deps.clock.id());
+        if (applied.ok) audio.push(applied.signal);
+      }
       return { status: "committed" as const, event, audio, spent };
     });
   } catch (error) {
