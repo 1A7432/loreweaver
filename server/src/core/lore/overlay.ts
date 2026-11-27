@@ -476,7 +476,7 @@ export function readOverlayFile(raw: unknown): OverlayChange<OverlayFile> {
   let overlay: LoreOverlay = EMPTY_OVERLAY;
   const entries = raw.entries ?? null;
   if (entries !== null) {
-    // `title: {enabled, condition}` (docs/lwf/formats/cards.md §7). The YAML reader has
+    // `title: {enabled, condition}` (docs/lwf/formats/cards.md §9). The YAML reader has
     // already refused `__proto__` and key orders JavaScript would rearrange.
     if (!isRecord(entries)) return refuse("bad_field", "entries");
     const titles = Object.keys(entries);

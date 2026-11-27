@@ -6,7 +6,7 @@
 
 **扩展包**（pack）是内容进入 Loreweaver 服务器的方式：一个 `.lwpack` 文件（一个 ZIP 压缩包，根目录有一份 `pack.yaml` 清单），里面可以有模组（代码）、卡和卡里的设定、规则包补丁、给守秘人的技能、面板，以及带图片和声音的演出包。服务器会先把整个扩展包校验一遍，然后才写下第一个文件。
 
-这一页讲做事的顺序。格式本身在 [LWF](lwf/SPEC.md) 里规定：[pack.md](lwf/formats/pack.md)（清单、拒收规则、信任卡）、[panels.md](lwf/formats/panels.md)、[cards.md](lwf/formats/cards.md)、[rulepacks.md](lwf/formats/rulepacks.md)，以及 [skills-hooks.md](lwf/formats/skills-hooks.md) §1。这一页和格式文档说法不一致时，以格式文档为准。哪些东西可以扩展、信任模型是什么，见 [plugins.zh.md](plugins.zh.md)。卡有单独一份指南：[cards.zh.md](cards.zh.md)。格式文档都是英文的。
+这一页讲做事的顺序。格式本身在 [LWF](lwf/SPEC.md) 里规定：[pack.md](lwf/formats/pack.md)（清单、拒收规则、信任卡）、[panels.md](lwf/formats/panels.md)、[cards.md](lwf/formats/cards.md)、[rulepacks.md](lwf/formats/rulepacks.md)，以及 [skills.md](lwf/formats/skills.md) §1。这一页和格式文档说法不一致时，以格式文档为准。哪些东西可以扩展、信任模型是什么，见 [plugins.zh.md](plugins.zh.md)。卡有单独一份指南：[cards.zh.md](cards.zh.md)。格式文档都是英文的。
 
 **`loreweaver` 命令。** 下文的 `loreweaver` 指服务器的命令行：编译好的可执行文件，或者在本仓库的检出目录里用 `bun server/src/cli/main.ts`。涉及已安装扩展包的命令都读写服务器的数据目录（`TRPG_DATA_DIR`，默认 `./data`），所以要和服务器用同一个设置来跑。每条命令都输出一个 JSON 对象。
 
@@ -254,7 +254,7 @@ Darkness in the Old Quarter is never safe. When the lantern is out, describe sou
 not sights, and call for a Listen check before anything is seen.
 ```
 
-目录名就是技能 id。技能能解锁的是服务器的受限工具：`generate_image`，以及 `adjust_relationship`、`set_relationship`、`get_relationships`；不认识的名字会被忽略。`metadata.content-rating: mature` 声明成人内容。房间管理员用 `.skill enable lamplighter`（`.技能 启用 lamplighter`）启用技能，`.skill list` 列出房间能启用哪些；在聊天里安装扩展包会顺带在那个房间启用它的技能。技能要写怎么*主持*这个扩展包——节奏、该藏什么、什么时候要求检定——而不是故事本身，故事在卡里。技能只是文字：`SKILL.md` 旁边的 `hooks.js` 不会运行（构建时报告为已忽略）。代码放进模组（§4.6）。格式见 [skills-hooks.md](lwf/formats/skills-hooks.md) §1。
+目录名就是技能 id。技能能解锁的是服务器的受限工具：`generate_image`，以及 `adjust_relationship`、`set_relationship`、`get_relationships`；不认识的名字会被忽略。`metadata.content-rating: mature` 声明成人内容。房间管理员用 `.skill enable lamplighter`（`.技能 启用 lamplighter`）启用技能，`.skill list` 列出房间能启用哪些；在聊天里安装扩展包会顺带在那个房间启用它的技能。技能要写怎么*主持*这个扩展包——节奏、该藏什么、什么时候要求检定——而不是故事本身，故事在卡里。技能只是文字：`SKILL.md` 旁边的 `hooks.js` 不会运行（构建时报告为已忽略）。代码放进模组（§4.6）。格式见 [skills.md](lwf/formats/skills.md) §1。
 
 ### 4.4 面板
 

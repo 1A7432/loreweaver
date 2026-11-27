@@ -105,7 +105,7 @@ panels:
 `views` maps a **handle** — a short local name, `^[a-z][a-z0-9_]{0,31}$` — to a **view name**:
 
 - a built-in view: `me`, `party`, `scene`, `variables`, `characters`, `commands`, `room`,
-  `usage` or `packs` (not `panels`);
+  `usage`, `packs` or `audio` (not `panels`);
 - an admin view: `admin/<name>`;
 - a module view: `<module>/<name>`, both parts `^[a-z][a-z0-9_]{0,63}$`.
 
@@ -186,7 +186,8 @@ A label, headline, title, `from`, `to`, `date`, `source` or `act` is at most 120
 manifest lists it or not, and MUST be an image the pack ships (`panel_asset_missing`,
 `panel_asset_type`). On the wire it becomes the picture's `{hash, mime, size}`.
 
-**Choices.** `command` is a command id (`help`, `rules.sanity_check`, `harbor/ring`); `args`
+**Choices.** `command` is a command id (`help`, `rules.sanity_check`, `harbor/ring`):
+`^[a-z][a-z0-9_]{0,63}([./][a-z][a-z0-9_]{0,63})?$`, at most 128 characters (`bad_id`); `args`
 is a plain JSON object of at most 2,000 bytes, keys `^[A-Za-z_][A-Za-z0-9_]{0,63}$`, at
 most 4 levels deep, never bound. Picking the option is `command.run {id: command, args}` as
 the member viewing the panel.
@@ -280,7 +281,7 @@ pages renders the page's `fallback`, or one localized "needs a rich client" line
 ## 8. What is refused
 
 A pack is refused, before anything is installed, when a panels file: does not parse
-(`panels_invalid`, with the panel problem's code and path: `unknown_key`, `missing_field`,
+(`panels_invalid`, with the panel problem's code and path: `bad_yaml`, `not_a_mapping`, `unknown_key`, `missing_field`,
 `bad_field`, `bad_id`, `too_long`, `too_many`, `duplicate`, `bad_view_name`, `bad_binding`,
 `bad_path_syntax`, `unknown_handle`, `unused_view`, `handle_shadowed`, `repeat_nested`,
 `bad_condition`, `bad_path`, `audience_conflict`, or `replaced_2x` for a 1.0 field); is over

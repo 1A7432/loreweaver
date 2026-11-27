@@ -14,7 +14,7 @@ This page is the order to do things in. The formats themselves are specified in
 [LWF](lwf/SPEC.md): [pack.md](lwf/formats/pack.md) (the manifest, what is refused, the
 trust card), [panels.md](lwf/formats/panels.md), [cards.md](lwf/formats/cards.md),
 [rulepacks.md](lwf/formats/rulepacks.md) and
-[skills-hooks.md](lwf/formats/skills-hooks.md) §1. When this page and a format document
+[skills.md](lwf/formats/skills.md) §1. When this page and a format document
 disagree, the format document is right. The contract around all of it — what may be
 extended, and the trust model — is [plugins.md](plugins.md). Cards have their own guide:
 [cards.md](cards.md).
@@ -319,7 +319,7 @@ declares mature content. A room's admin enables a skill with `.skill enable lamp
 skills in that room. Write a skill as how to *run* the pack — pacing, what to withhold,
 when to ask for a roll — not as the story; the story is in the cards. A skill is text
 only: a `hooks.js` beside `SKILL.md` is not run (the build reports it as ignored). Code
-belongs in a module (§4.6). The format is [skills-hooks.md](lwf/formats/skills-hooks.md)
+belongs in a module (§4.6). The format is [skills.md](lwf/formats/skills.md)
 §1.
 
 ### 4.4 Panels

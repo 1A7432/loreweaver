@@ -1,6 +1,6 @@
 // Reading one skill: a directory `<id>/` holding `SKILL.md` — YAML front matter and a
 // Markdown body the Keeper's prompt carries while the skill is enabled in a room
-// (LWF `docs/lwf/formats/skills-hooks.md` §1; reference `core/skills.py`).
+// (LWF `docs/lwf/formats/skills.md` §1; reference `core/skills.py`).
 //
 // In 3.0 a skill is prompt text and a list of tools it unlocks, nothing else. A directory
 // that also holds a `hooks.js` (a 2.x event script) loads normally; the script is ignored

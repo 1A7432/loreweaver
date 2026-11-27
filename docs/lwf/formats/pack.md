@@ -36,6 +36,7 @@ harbor/                      the source tree
 ├── presentation.yaml
 ├── ui/panels.yaml           panels, and one panel's page
 ├── ui/chart.html
+├── art/cover.png
 ├── art/quay.png
 └── sound/bell.ogg
 ```
@@ -70,8 +71,8 @@ archive although only `art/cover.png` is listed under `assets` (§6).
 
 ## 2. The manifest
 
-The manifest is YAML, read with a safe loader that refuses anchors and aliases. Its root
-MUST be a mapping. Top-level keys this document does not define are **ignored** and
+The manifest is YAML, read as [SPEC.md](../SPEC.md) §4 says (no anchors or aliases, no
+duplicate keys, no `__proto__` key). Its root MUST be a mapping. Top-level keys this document does not define are **ignored** and
 reported (§8); every nested object is **closed**: an unknown key in it is an error.
 
 | Field | Req | Meaning |
@@ -138,10 +139,10 @@ decision to run its code, and the trust card says so first (§8).
 
 | Kind | Entry | Rules |
 |---|---|---|
-| `skills` | a skill directory | Its last segment is the skill id, a slug; ids are unique in the pack. The directory holds `SKILL.md`, which MUST parse ([skills-hooks.md](skills-hooks.md) §1). A `hooks.js` beside it is **not run**: it is reported as ignored and not installed. |
+| `skills` | a skill directory | Its last segment is the skill id, a slug; ids are unique in the pack. The directory holds `SKILL.md`, which MUST parse ([skills.md](skills.md) §1–§2). A `hooks.js` beside it is **not run**: it is reported as ignored and not installed. |
 | `rulepacks` | a `.yaml` or `.yml` file | Its stem is the rule system's id, a slug, unique in the pack. It MUST compile ([rulepacks.md](rulepacks.md)). |
 | `cards` | `{path, kind, notes?}` | §4.1. |
-| `presentation` | a `.yaml` or `.yml` file | At most **one**. §4.2. |
+| `presentation` | a `.yaml` or `.yml` file | At most **one**. A presentation kit ([presentation.md](presentation.md)). |
 | `panels` | a `.yaml` or `.yml` file | A panels file ([panels.md](panels.md)). At most 16 panels across the pack, ids unique across its files. Each page's HTML and every picture a panel names travel with it, listed under `assets` or not. |
 
 The 2.x kinds `lorebooks`, `presets` and `prep` are refused with the code
@@ -156,12 +157,12 @@ system — a pack ships everything it needs. A rule pack that needs the rules-sc
 
 | Key | Req | Meaning |
 |---|---|---|
-| `path` | yes | A SillyTavern card (`.png` or `.json`) or a native bundle (`*.lorecard.json`). [cards.md](cards.md) §1–§2. At most 32 MiB. |
+| `path` | yes | A SillyTavern card (`.png` or `.json`, at most 16 MiB) or a native bundle (`*.lorecard.json`, at most 32 MiB). [cards.md](cards.md) §1–§2. A card that does not parse refuses the pack (`card_invalid`, with the card error code). |
 | `kind` | yes | `world` or `character`: what the author says the card is. |
 | `notes` | no | Notes for the room admin, a string or `{en, zh}`, at most 2,000 characters per language. |
 
 **The kind is checked against the card.** A validator runs the detection of
-[cards.md](cards.md) §4 on the card and MUST refuse the pack when it disagrees with
+[cards.md](cards.md) §3.1 on the card and MUST refuse the pack when it disagrees with
 `kind` (`card_kind_mismatch`, with the kind detected). A card that carries any world
 machinery — variable declarations, templates, keeper-only entries, hook scripts, a
 native bundle's typed variables — is a world card. Hook scripts in a card are counted,
@@ -170,27 +171,11 @@ never run.
 ### 4.2 The presentation kit
 
 A YAML file of at most 128 KiB telling the runtime's presentation layer what the pack's
-table may show and play. It is closed at every level.
-
-| Field | Req | Meaning |
-|---|---|---|
-| `version` | yes | MUST be `2`. |
-| `generation` | no | `allow` (default) or `pack_only`. |
-| `templates` | no | An allowlist drawn from `image`, `title_card`, `letter`, `clipping` and `text`, without duplicates. Empty or omitted: all. |
-| `style` | no | `{keywords?, banned?, palette?}`. `keywords` is a string or `{en, zh}` (at most 400 characters each). `banned`: at most 24 strings of at most 400 characters. `palette`: at most 8 strings of at most 80 characters. |
-| `subjects` | no | At most 64 `{id, kind, name, ref?, prompt?}`. `id` a slug, unique. `kind` is `npc`, `location` or `item`. `name` a string or `{en, zh}`. `ref` the path of a picture. `prompt` at most 1,000 characters. |
-| `audio` | no | At most 32 `{id, layer, asset, title?}`. `id` a slug, unique. `layer` is `bgm`, `ambience` or `sfx`. `asset` the path of a sound. `title` at most 400 characters. |
-
-Every `ref` MUST be an image in the pack and every cue `asset` a sound in the pack
-(`kit_asset_missing`, `kit_asset_type`). A subject without a `ref` may be named but is
-never sent to image generation; `generation: pack_only` disables generation, and when
-several packs share a room one `pack_only` disables it for the room while their
-`templates` allowlists intersect.
-
-The `audio` cues are the sounds the runtime's presentation layer may play for the pack. A
-runtime that lets a room's admin play sounds by name SHOULD offer the cues of the packs a room
-enabled, read-only, named `<pack id>/<cue id>` (Loreweaver's room audio library), and a cue's
-`title` is shown to that admin only: a title may tell the story before the table hears it.
+table may show and play: style, subjects with reference pictures, staging shapes, sound cues.
+Its format, its checks and how several packs' kits combine in one room are
+[presentation.md](presentation.md). Every picture and sound it names MUST be in the pack and
+of the right type (`kit_asset_missing`, `kit_asset_type`), and becomes one of the pack's
+assets (§6).
 
 ## 5. The archive
 
@@ -362,7 +347,8 @@ Pack 3.0 is not compatible with 2.0, and a 3.0 runtime refuses a 2.0 pack. To mo
 
 - set `manifest_version: 3`, and delete the `files` and `trust` blocks a 2.0 builder
   generated — a 3.0 runtime computes the trust card itself;
-- write `kind:` on every card entry (2.0 forbade it and stamped it at build time);
+- write `kind:` on every card entry (2.0 forbade it and stamped it at build time), and drop a
+  card entry's overlay: the pack overlay file is not part of 3.0 ([cards.md](cards.md) §11);
 - move the logic of each skill's `hooks.js` into a module (§3): the script is no longer
   run;
 - drop `lorebooks`, `presets` and `prep` (not part of 3.0);

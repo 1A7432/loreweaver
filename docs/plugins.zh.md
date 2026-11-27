@@ -27,7 +27,7 @@ Loreweaver 是一个以世界和故事为先的 AI 守秘人，不是一个和�
 |---|---|---|---|
 | **卡**（`cards`） | 酒馆卡或原生 `*.lorecard.json`：设定、变量、模板、人设 | 数据；设定条目可以是 EJS 模板 | 由房间管理员（世界）或玩家（角色）导入——[cards.zh.md](cards.zh.md) |
 | **规则包**（`rulepacks`） | 用 YAML 写的规则系统：角色卡结构、检定怎么掷怎么判、派生值、子系统、命令；通常是补丁（`extends: coc7`） | 数据 | 全服务器共用；房间用 `rule system` 选一个——[rulepacks.md](lwf/formats/rulepacks.md) |
-| **技能**（`skills`） | `SKILL.md`：技能开启期间守秘人读到的文字，以及它解锁的受限工具 | 数据 | 每个房间用 `skill enable` 开启——[skills-hooks.md](lwf/formats/skills-hooks.md) §1 |
+| **技能**（`skills`） | `SKILL.md`：技能开启期间守秘人读到的文字，以及它解锁的受限工具 | 数据 | 每个房间用 `skill enable` 开启——[skills.md](lwf/formats/skills.md) §1 |
 | **面板**（`panels`） | 故事旁边的界面，数据来自视图；模板，或带模板 fallback 的自包含 HTML 页面 | 数据（页面只在客户端的沙箱框架里运行） | 扩展包启用后即打开；`panels disable` 逐个关——[panels.md](lwf/formats/panels.md) |
 | **演出包**（`presentation`） | 演出导演能展示和播放什么：风格、带参考图的对象、音效 | 数据 | 扩展包启用后并入房间的演出包和音频库——[pack.md](lwf/formats/pack.md) §4.2 |
 | **模组**（`modules`） | 基于 `loreweaver/module` 的 TypeScript 或 JavaScript：事件处理、命令、逐人计算的视图、角色、时钟 | **代码** | 扩展包启用后在房间的工作线程里加载——[sdk/README.md](../sdk/README.md) |

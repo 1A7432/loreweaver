@@ -1,359 +1,401 @@
-# LWF: rulepacks (rule systems as data)
+# LWF: rule packs (rule systems as data)
 
-**Version 2.0 · stable (additive-only).** Reference implementation: `core/rulepacks.py`,
-`core/resolution.py`, `core/check_outcome.py`, `core/dice_engine.py`, `core/sheets.py`,
-`core/character_rules.py`, `core/subsystems.py`, `core/rules_script.py` and
-`core/condexpr.py` in the Loreweaver engine. Reference packs: `rulepacks/coc7.yaml`,
-`rulepacks/dnd5e.yaml`, `rulepacks/wod.yaml`.
+**Version 3.0 · draft.** This is a breaking revision of rule packs 2.0 (see §17): the
+rules-script lane and runtime-registered computers are gone, and a few semantics changed.
+Reference implementation, in the Loreweaver engine: `server/src/core/rulepacks/` (compiling,
+`extends:`, the registry), `server/src/core/resolution/` (checks), `server/src/core/dice/`
+(dice notation), `server/src/core/condexpr.ts` (the expression language),
+`server/src/core/sheets/` (sheets, derived values, constraints) and
+`server/src/core/subsystems/` (subsystems). Reference packs, built into the engine:
+`rulepacks/coc7.yaml`, `rulepacks/dnd5e.yaml`, `rulepacks/wod.yaml`.
 
-A rulepack is one YAML file, `<id>.yaml`, that describes a tabletop rule system
-completely: its sheet shape, how a check rolls and grades, its derived stats, its
-character-creation limits, its extra mechanics (subsystems) and the words players type
-to use them. A runtime holds no system knowledge of its own: deleting a rulepack
-deletes the system.
+A rule pack is one YAML file that describes a tabletop rule system completely: its sheet,
+how a check rolls and grades, its derived values, its character-creation limits, its extra
+mechanics and the words players type for them. A runtime holds no system knowledge of its
+own: deleting a rule pack deletes the system. Two principles govern the format:
 
-Two principles govern the format:
+- **Nothing is evaluated as code** except through the closed expression language (§3).
+  Randomness lives only in the runtime's dice roller (§4).
+- **The format never grows syntax for one system.** A system the data cannot express is
+  not expressible in this version.
 
-- **Nothing is evaluated as code** except through the closed expression grammar (§3)
-  and the sandboxed script lane (§13). Randomness lives only in the runtime's dice
-  roller.
-- **The format never grows syntax for one system.** A system the data cannot express
-  uses the script lane.
+## 1. File, identity, loading
 
-## 1. File, identity, parsing
-
-- The filename stem is the system **id**. Inside a pack it MUST be a slug
-  ([pack.md](pack.md) §2).
-- The file is UTF-8 YAML, parsed with a safe loader that rejects anchors and aliases.
-  The root MUST be a mapping.
-- Unknown **top-level** keys are ignored. Each block in §2 states whether it is
-  **closed**: in a closed block an unknown key is a load error, so typos fail when the
+- The file's stem is the system **id**: `^[a-z0-9][a-z0-9-]{0,63}$` (`PACK_ID`, else
+  `BAD_ID`). Inside a pack the file is listed under `contents.rulepacks`, is a `.yaml` or
+  `.yml` file of at most 512 KiB ([pack.md](pack.md) §4–§5), and its id is unique in the pack.
+- The file is UTF-8 YAML read as [SPEC.md](../SPEC.md) §4 says (`BAD_YAML`). The root MUST be
+  a mapping (`NOT_A_MAPPING`); an empty document is an empty pack.
+- Unknown **top-level** keys are ignored. Each block below says whether it is **closed**: an
+  unknown key in a closed block is a load error (`UNKNOWN_KEY`), so a typo fails when the
   pack is built, not at the table.
-- A rulepack that fails to load is not available. Discovery MUST skip it with a log and
-  MUST NOT let it prevent other rulepacks from loading (§15).
+- Compiling is all-or-nothing: a pack with any problem does not load (§15). Every problem is
+  reported with a stable code and the dotted path of the field.
 
 ## 2. Top-level keys
 
 | Key | Section | Meaning |
 |---|---|---|
-| `extends` | §14 | The id of a base rulepack to patch. |
-| `names` | §2.1 | Lookup aliases for the system. |
-| `set_keys` | §2.1 | Lookup aliases that system-selection commands accept. |
-| `defaults` | §2.2 | Default values by canonical name. |
-| `alias` | §2.1 | Canonical stat name → list of alternative spellings. |
-| `display` | §12 | Presentation names per locale. |
+| `extends` | §13 | A base rule system to patch. |
+| `names`, `set_keys` | §2.1 | Names the system answers to (lists of text). |
+| `defaults` | §2.2 | Canonical name → integer. |
+| `alias` | §2.1 | Canonical name → list of other spellings. |
+| `display` | §12 | Display names per locale. |
 | `labels` | §6 | Rank labels per locale. |
 | `resolution` | §5 | How a check rolls and grades. Closed. |
-| `derived` | §7 | Derived stats. |
+| `derived` | §7 | Derived values. |
 | `sheet` | §8 | The sheet shape. Closed. |
-| `creation_constraints` | §9 | Character limits and creation methods. |
+| `creation_constraints` | §9 | Character limits and creation rolls. |
 | `subsystems` | §10 | Extra mechanics. Closed per entry. |
-| `commands` | §11 | Dot-command words. Closed per entry. |
-| `initiative` | §12 | `{roll: <dice expression>}`. |
-| `expertise` | §12 | Per-locale text about running the system. |
-| `st_show` | §12 | Sheet display hints. |
-| `turn_checks` | §12 | Runtime check table rows. Closed per row. |
+| `commands` | §11 | Typed command words. Closed per entry. |
+| `initiative` | §12 | `{roll: <dice notation>}`. |
+| `expertise` | §12 | Locale → text for the Keeper about running the system. |
+| `st_show` | §12 | Opaque sheet-display hints. |
+| `turn_checks` | §12 | End-of-turn check table. Closed per row. |
 
 ### 2.1 Names and aliases
 
-**Normalization.** Every lookup normalizes text the same way: trim, Unicode casefold,
-replace `_` with a space, map the full-width `：（）` to their ASCII forms, and collapse
-runs of whitespace to one space.
+**Normalising a name.** Every lookup below normalises text the same way: trim (Unicode
+whitespace), case-fold, read `_` as a space, read the full-width `：（）` as `:()`, and
+collapse whitespace runs to one space. Trimming comes first, so `_str` does not match `str`.
+Full-width letters are not folded (`ＳＴＲ` is not `STR`).
 
-**System lookup.** A system resolves by its id, by any entry of `names`, or by any entry
-of `set_keys`. Rulepacks are visited in discovery order (§15) and the first claim of a
-normalized name wins, so a built-in's names cannot be taken over.
+**System lookup.** A system resolves by its id, any entry of `names` or any entry of
+`set_keys`, normalised. The **first** system to claim a normalised name keeps it (§14), so a
+built-in's names cannot be taken over.
 
-**Stat lookup.** `alias` maps a canonical name to a list of variants, which may be
-empty or `null`. The canonical name and every variant resolve to the canonical name.
-Canonical names are the single identity everywhere: sheets, derived stats, checks,
-labels. They MAY be CJK; that is game data, not user-interface text.
+**Stat lookup.** A typed stat name resolves to a **canonical name**, in this order:
+
+1. the `alias` table: each canonical name and each of its listed variants (a list, or null
+   for none) resolves to the canonical name; when two rows claim one variant, the later row
+   wins;
+2. a name the pack derives (§7);
+3. a name the pack displays a stat under in any locale (§12): the display label is also a
+   name of that stat.
+
+Canonical names are the one identity everywhere: sheets, derived values, checks, labels.
+They MAY be CJK; that is game data, not interface text.
 
 ### 2.2 `defaults`
 
-A mapping from canonical name to a default value. A runtime uses it when a sheet value
-or expression name is missing (§7, §8) and as part of the system's stat vocabulary.
+A mapping from canonical name to an integer (`BAD_SHEET`/`NOT_INTEGER` otherwise): what an
+unset stat reads as in formulas (§7) and sheet reads (§8.4).
 
 ## 3. The expression language
 
-Ranks, difficulties, margins, derived stats, budgets, vital starts, loss ceilings, lore
-conditions and panel conditions all share one closed grammar. It looks like JavaScript
-but is not JavaScript: it is a fixed tokenizer and recursive-descent evaluator, and
-nothing is ever passed to an `eval`. Reference: `core/condexpr.py`.
+Rank conditions, difficulty transforms, margins, derived values, budgets, vital starts, loss
+ceilings, lore conditions ([cards.md](cards.md) §6) and panel conditions
+([panels.md](panels.md) §5.1) share one closed language. It looks like JavaScript but is
+not: a fixed tokenizer and recursive-descent parser, no assignment, no loops, nothing ever
+passed to an `eval`.
 
-**Limits.** An expression is at most 500 characters and at most 200 tokens.
+**Limits.** At most 500 UTF-16 units of source (`MAX_SOURCE_LENGTH`, `TOO_LONG`), 200 tokens
+(`MAX_TOKENS`, `TOO_MANY_TOKENS`), 32 levels of nesting of parentheses, `!`, unary `-` and
+call arguments (`MAX_DEPTH`, `TOO_DEEP`); a string built by `+` is at most 65,536 units.
 
 **Tokens.**
 
-- Numbers: `\d+(\.\d+)?`. There is no exponent form. A literal containing `.` is a float,
-  otherwise an integer.
-- Strings: in `'…'` or `"…"`, where a backslash escapes the next character.
-- Keywords, case-insensitive: `true`, `false`, and `null`/`undefined`/`none` (all null).
+- Numbers: ASCII `[0-9]+(\.[0-9]+)?`; no exponent form. Right after a `.`, digits are a path
+  segment (`a.1.0` is the path `a.1.0`).
+- Strings in `'…'` or `"…"`; a backslash takes the next character literally.
+- Keywords, case-insensitive: `true`, `false`; `null`, `undefined`, `none` (all null).
 - Word operators, case-insensitive: `and` (`&&`), `or` (`||`), `not` (`!`).
-- Identifiers: a Unicode letter or `_`, then word characters. CJK is allowed.
-- Operators: `=== !== == != >= <= > < && || ! ( ) [ ] . , + - * / %`.
+- Identifiers: a Unicode letter or `_`, then letters, digits, `_`.
+- Operators: `=== !== == != >= <= > < && || ! ( ) [ ] . , + - * / %`. Anything else is an
+  error.
 
-**Grammar.** From lowest to highest precedence:
+**Grammar**, loosest first:
 
 ```
-expr       := and ( "||" and )*
-and        := not ( "&&" not )*
-not        := "!" not | comparison
-comparison := additive ( op additive )?          # op: === !== == != >= <= > <
-additive   := term ( ("+"|"-") term )*
-term       := factor ( ("*"|"/"|"%") factor )*
-factor     := "(" expr ")" | "-" factor | literal | reference | call
-reference  := ident ( "." (ident|integer) | "[" (string|integer) "]" )*
-call       := "getvar" "(" string ( "," any )* ")" | fn "(" [ expr ("," expr)* ] ")"
+or      := and ( "||" and )*
+and     := not ( "&&" not )*
+not     := "!" not | compare
+compare := sum [ ( "===" | "!==" | "==" | "!=" | ">=" | "<=" | ">" | "<" ) sum ]
+sum     := term ( ( "+" | "-" ) term )*
+term    := unary ( ( "*" | "/" | "%" ) unary )*
+unary   := "-" unary | primary
+primary := number | string | keyword | "(" or ")" | call | getvar | path
+call    := NAME "(" [ or ( "," or )* ] ")"
+getvar  := "getvar" "(" string ( "," or )* ")"
+path    := NAME ( "." ( NAME | INTEGER ) | "[" ( STRING | INTEGER ) "]" )*
 ```
 
-A comparison does not chain. `!` applies to the whole comparison that follows it:
-`!a == b` means `!(a == b)`. A reference folds into one dotted path: `a.b[0]` and
-`a['b']` are the paths `a.b.0` and `a.b`. Only the function names of the evaluation
-context (below) may be called, plus `getvar('path')`, which reads the path and ignores
-any further arguments.
+A comparison does not chain (`CHAINED_COMPARISON`). `!` binds looser than comparison:
+`!a == b` is `!(a == b)`. A path folds into one dotted name: `a.b[0]` and `a['b']` are
+`a.b.0` and `a.b`; a numeric segment loses its leading zeros. `getvar('x')` reads the name `x`;
+further arguments must be well-formed but are never evaluated. A call names one of the
+functions the context allows (`UNKNOWN_FUNCTION`), with the right number of arguments
+(`ARITY`): `floor(x)`, `ceil(x)`, `abs(x)`, `min(x, …)`, `max(x, …)` take numbers (a boolean
+is 0/1; text is an error); `if(c, a, b)` evaluates all three and returns `a` when `c` is
+truthy, else `b`.
 
 **Semantics.**
 
-- `===` and `!==` are strict: equal type and equal value. A boolean is never strictly
-  equal to a number. In the reference an integer and a float are different types, so
-  `1 === 1.0` is false. Packs SHOULD NOT rely on that distinction.
-- `==` and `!=` are loose: values that differ are compared again as numbers when both
-  parse as numbers.
-- `> < >= <=` compare two numbers (numeric strings and booleans coerce), or two strings.
-  Anything else is an error.
-- `+` concatenates when both operands are strings. Otherwise the arithmetic operators
-  coerce to numbers, and a value that does not coerce is an error.
-- `/` is true division and `%` is floored modulo, with the sign of the divisor. Division
-  or modulo by zero is an error.
-- Unary `-` requires a number.
-- Truthiness: `0`, `""`, null, `false` and empty lists or mappings are false; everything
-  else is true.
-- `&&` and `||` short-circuit. The skipped side is still parsed.
-- An evaluation error is reported to the caller. Every context in this document then
-  fails closed: no rank matches, no entry injects, no block shows, no ceiling applies.
+- There is one number type. Every result MUST stay within ±(2^53 − 1), else the evaluation
+  fails (`NUMBER_RANGE`); `NaN` and infinities never become values.
+- `===` / `!==`: same type and same value (`2.0 === 2` holds; `true === 1` does not); lists
+  and mappings compare structurally.
+- `==` / `!=`: strictly equal, or both sides read as numbers and the numbers are equal. A
+  value reads as a number when it is a number, a boolean (0/1), or text that is a decimal
+  numeral after trimming (`"7"`, `" 2.5 "`, `"1e3"`); nothing looser (no hexadecimal, no
+  empty text). So `"5" == 5` holds and `"" == 0` does not.
+- `< <= > >=`: numerically when both sides read as numbers, by code point when both are text,
+  and otherwise an **error** (`UNORDERABLE`): `"abc" > 5` is never silently false.
+- `+` joins two strings; otherwise `+ - * / %` need two numbers (`TYPE_MISMATCH`). `/` is true
+  division; `%` takes the sign of the divisor (`-7 % 3` is 2); division or modulo by zero is
+  an error. Unary `-` needs a number.
+- Truthiness: `0`, `""`, null, `false`, an empty list and an empty mapping are false;
+  everything else is true. `&&` and `||` short-circuit.
+- A name the context does not supply reads as null, unless the context says otherwise: in
+  the closed namespace of §5.3 it is an error; in sheet formulas it reads as the pack
+  default, then 0 (§7).
 
-**Evaluation contexts.**
+Every context fails closed: an expression that errors matches no rank, injects no entry,
+shows no block, applies no ceiling.
 
 | Context | Names | Functions |
 |---|---|---|
-| Resolution (`ranks[].when`, `difficulties.*.target`, `margin`) | Closed, §5.3. | `floor`, `ceil`, `min`, `max`, `abs` |
-| Derived `expr`, vital `start` | The canonical namespace (§8.1). A missing name falls back to `defaults`, then 0. A non-numeric value falls back to the default. | as above, plus `if(cond, a, b)` |
-| Creation budgets (§9) | The canonical namespace plus derived values. Missing or non-numeric values are 0. | none |
-| `loss_ceiling.when` (§10) | `tag`, plus canonical names, bare or as `stat_data.<name>` | none |
+| Rank `when`, `margin` (§5) | the closed namespace of §5.3 | `floor ceil min max abs` |
+| Difficulty `target` (§5.3) | `target`, `raw_target` | `floor ceil min max abs` |
+| Derived values, vital starts, budgets (§7–§9) | canonical names | `floor ceil min max abs if` |
+| `loss_ceiling.when` (§10) | `tag`, canonical names bare or as `stat_data.<name>` | none |
 
-A runtime MUST check every resolution expression **statically when the pack loads**:
-every referenced name MUST be in the context's closed set. A dry run is not enough,
-because `&&` short-circuits past a misspelled name.
+A runtime MUST check every resolution expression **statically when the pack loads**: every
+name it reads MUST be in the context's closed set (`UNKNOWN_NAME`). A dry run is not enough,
+because `&&` short-circuits past a misspelled name. The portable subset panels use is
+[panels.md](panels.md) §5.1.
 
-The portable subset used by panel conditions is defined in [panels.md](panels.md) §5.
+## 4. Dice notation
 
-## 4. Dice expressions
+The runtime's dice roller is the only randomness. One grammar serves every entry point: the
+pack's notations and the players' typed rolls.
 
-The runtime's dice roller is the only source of randomness. Dice expressions are
-case-insensitive. A pack SHOULD restrict itself to this portable core:
+```
+expr        := comparison
+comparison  := additive (("==" | "!=" | ">=" | "<=" | ">" | "<") additive)*
+additive    := multiplicative (("+" | "-") multiplicative)*
+multiplicative := unary (("*" | "x" | "×" | "//" | "/" | "%") unary)*
+unary       := ("+" | "-") unary | atom
+atom        := (dice | set | number | slot) label*
+dice        := int? "d" (int | "%" | "f") diceop*         no spaces inside
+diceop      := ("rr" | "ro" | "ra" | "e" | "k" | "p") selector | ("mi" | "ma") int | "!"
+set         := "(" [expr ("," expr)* [","]] ")" (("k" | "p") selector)*
+selector    := ["h" | "l" | ">" | "<"] int
+int         := digits | "{" name "}"
+label       := "[" text "]"
+```
 
-| Form | Meaning |
-|---|---|
-| `NdS`, `dS` | N dice (default 1) with S sides. |
-| `+ - *`, parentheses, integer literals | Arithmetic. `x` or `×` between two numbers or parentheses means `*`, as in `3d6x5`. |
-| `NdSkhK`, `NdSklK` | Keep the K highest or lowest dice. A bare `kK` means `khK`. |
-| `NdS!` | Exploding dice: a maximum face rolls again and adds. |
-| `NdS>=T`, `NdS<=T` | A success-counting pool, which MUST be the whole expression. N is 1–999 and S is 2–9999. The total is the number of faces meeting the threshold. The roller also reports `successes` and `ones` (the count of natural 1s). |
-| `NdF`, `dF`, with an optional `+K` or `-K` | Fudge dice, which MUST be the whole expression. N defaults to 4; each die is −1, 0 or +1. |
-| `{param}` | A roll parameter slot (§5.4), replaced by an integer before rolling. A slot with no value is an error. |
+- Letters are case-insensitive outside labels and slot names. Full-width ASCII forms and the
+  ideographic space read as their ASCII counterparts (`１d20＋5`).
+- `NdS` rolls N dice (default 1) of S faces; `d%` is `d100`; `dF` is Fate dice (−1, 0, +1),
+  four when no count is written.
+- `k` keeps and `p` drops the selected dice; a bare `k` keeps the highest (`4d6k3` is
+  `4d6kh3`). `h` / `l` select the highest / lowest *n*, `>` / `<` the faces above / below
+  *n*, a bare number the faces equal to it. `rr` rerolls while any die matches, `ro` rerolls
+  matching dice once, `ra` adds one die for the first match, `e` explodes matching dice (a new
+  die per match, again for new matches), `!` explodes on the highest face (`!!` is refused),
+  `mi` / `ma` raise / lower faces to a minimum / maximum.
+- **Success pools.** A `>`, `>=`, `<` or `<=` whose left operand is a dice group (operators and
+  labels included) **counts** the kept dice meeting the threshold (`5d10>=6`,
+  `{pool}d10>={difficulty}`). Anything else compares values and yields 1 or 0: `(5d10)>6`,
+  `2d6+3>8`. `==` and `!=` always compare values.
+- `x`, `X` and `×` multiply (`3d6x5`). `/` is true division, `//` floors, `%` takes the sign of
+  the divisor, and only the final total is truncated toward zero.
+- `{name}` is a slot, replaced by an integer before rolling (§5.4, §12).
 
-The reference also accepts the remainder of the `d20` dice notation (rerolls, minimum and
-maximum, drop selectors). Those forms are not portable.
+**Limits** (`LIMITS`): 1,000 dice per roll counting rerolls and explosions (`TOO_MANY_DICE`),
+1,000,000,000 faces (`TOO_MANY_SIDES`), 1,000 code points of notation (`TOO_LONG`), 64 levels
+of nesting (`TOO_DEEP`), values within ±(2^53 − 1) (`VALUE_TOO_LARGE`). Other errors: `EMPTY`,
+`SYNTAX`, `ZERO_SIDED_DIE`, `BAD_POOL`, `DIVISION_BY_ZERO`, `MISSING_PARAM`, `BAD_PARAM`.
 
-**Roll detail.** A roll produces `{expression, dice, total, modifiers, successes?, ones?}`.
-For a pool, `dice` holds every face. Otherwise `dice` holds the kept natural faces of
-the expression's first dice group, found left to right, and `total` is the whole
-expression's value.
-
-Reference: `core/dice_engine.py::roll_detail`, `roll_expression`.
+**A rolled check** carries: `total`; `dice`, the kept natural faces of the notation's first dice
+group in left-to-right order (every face, for a pool); and for a pool `successes` and `ones`
+(kept dice showing 1).
 
 ## 5. Check resolution (`resolution:`)
 
 A check runs in three phases with hard boundaries:
 
-- **ROLL**: the runtime rolls the dice. This is the only random step.
-- **INTERPRET**: a pure function `(roll detail, target, options) → outcome`, with no
-  randomness and no state. Because it is pure, a runtime can re-grade a roll (house
-  ladders, resource spends) and table-test a ladder exhaustively.
-- **APPLY**: the runtime applies consequences: subsystems and sheet writes.
+- **ROLL**: the runtime rolls the dice — the only random step.
+- **INTERPRET**: a pure function of (rolled values, target, variant, difficulty, modifier) →
+  outcome; no randomness, no state. A runtime can therefore re-grade a roll (a resource spend)
+  and table-test a ladder exhaustively.
+- **APPLY**: the runtime applies consequences (subsystems, sheet writes).
 
-A language model MUST NOT be able to supply, pre-write or override the outcome of the
-ROLL or INTERPRET phase.
+A language model MUST NOT be able to supply, pre-write or override the outcome of ROLL or
+INTERPRET.
 
 ### 5.1 Fields
 
-The block is closed.
+The block is closed (`UNKNOWN_KEY`). A pack without `resolution` has no check.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `version` | `1` | The block's schema version. A newer version MUST be refused. An older one loads only through a registered migration. |
-| `roll` | required | The dice expression a check rolls. |
-| `target` | `skill` | `skill`: the target is the sheet's check value (roll-under style). `dc`: the target is an external difficulty number, and the sheet value becomes the roll `modifier`. `none`: there is no target. |
-| `compare` | `<=` | `<=` or `>=`. The direction used by the default margin (§5.5). |
+| `version` | `1` | The block's schema version; any other value is refused (`UNSUPPORTED_VERSION`). |
+| `roll` | required | The notation a check rolls (`BAD_NOTATION`). Its slots MUST be declared `params` (`UNDECLARED_PARAM`). |
+| `target` | `skill` | `skill`: the target is the stat's value (roll-under). `dc`: the target is a difficulty number and the stat's value is the roll's `modifier`. `none`: there is no target. |
+| `compare` | `<=` | `<=` or `>=`: the direction of the default margin, and of an `opposed` subsystem's default (§10). |
 | `params` | — | Roll parameter slots (§5.4). |
 | `modifiers` | — | Named roll modifiers (§5.6). |
-| `difficulties` | — | At most 16 named target transforms (§5.3). |
-| `ranks` | required, unless `script` | The default rank ladder (§5.2). |
-| `variants` | — | At most 32 named house ladders, each `{ranks: [...]}`. |
-| `margin` | — | An expression for the outcome margin (§5.5). |
-| `check` | — | How generic check commands feed the system (§5.7). |
-| `script` | — | A rules script that replaces `ranks` and `variants` (§13). Declaring both is an error. |
+| `difficulties` | — | At most 16 (`MAX_DIFFICULTIES`) named target transforms (§5.3). |
+| `ranks` | required | The default rank ladder (§5.2). |
+| `variants` | — | At most 32 (`MAX_VARIANTS`) house ladders: `{id: {ranks: [...]}}`, closed. |
+| `margin` | — | An expression for the outcome's margin (§5.5). |
+| `check` | — | How generic check commands use the system (§5.7). |
+| `script` | — | **Refused** (`SCRIPT_UNSUPPORTED`): the rules-script lane is not part of this version. |
 
-Ids of ranks, variants, difficulties, params and modifiers MUST match
-`^[a-z][a-z0-9_]{0,31}$`.
+Ids of ranks, variants, difficulties, parameters and modifiers MUST match
+`^[a-z][a-z0-9_]{0,31}$` (`BAD_ID`). A key that is absent takes its default; an explicit null
+is a wrong value.
 
 ### 5.2 Rank ladders
 
-A ladder is an ordered, non-empty list of at most 32 rules. A rule is closed:
+A ladder is a non-empty list of at most 32 rules (`MAX_RANKS`). A rule is closed:
 `{id, when?, success?, critical?, fumble?, tier?}`.
 
-- `when` is a resolution expression. The **first rule whose `when` is truthy wins**.
-- The last rule MUST have no `when`; it is the fallback. No other rule may lack one.
-- `success`, `critical` and `fumble` are booleans and default to false.
-- `tier` is an integer 0–32. When omitted it defaults to `count − 1 − index`, so earlier
-  rules rank higher. A higher tier is a better outcome.
-- Rank ids MAY repeat within a ladder; the same id may be reached by several rules.
+- `when` is an expression (§3). The **first rule whose `when` is truthy wins**.
+- The last rule MUST have no `when`; it is the fallback. No other rule may lack one
+  (`BAD_LADDER`).
+- `success`, `critical`, `fumble` are booleans, default false.
+- `tier` is an integer 0–32; omitted, it is `count − 1 − index`, so earlier rules rank
+  higher. A higher tier is a better outcome.
+- A rank id MAY appear in several rules.
 
-`variants` are whole replacement ladders. A runtime lets a room select one, and an
-unknown or empty selection uses the default ladder. A patch can add a variant without
-restating the base ladder, because mappings merge (§14).
+A room may select a variant; an unknown or empty selection grades with the default ladder.
 
-### 5.3 Names, difficulties and targets
+### 5.3 The namespace, difficulties and targets
 
-The resolution namespace is **closed**:
+A ladder and a margin read only these names (closed; anything else fails the load):
 
 | Name | Value |
 |---|---|
 | `roll` | The roll total plus `modifier`. |
-| `dice.N` (also written `dice[N]`) | The N-th kept natural face, 0-based. |
-| `target` | The difficulty-adjusted target. Absent when the check has no target. |
-| `raw_target` | The target before difficulty. Absent when the check has no target. |
-| `modifier` | The flat modifier: the sheet value for `dc` systems, otherwise 0. |
-| `successes`, `ones` | Pool counts, 0 for non-pool rolls. |
+| `dice.N` (also `dice[N]`) | The N-th kept natural face, 0-based. |
+| `target` | The difficulty-adjusted target. |
+| `raw_target` | The target before the difficulty. |
+| `modifier` | The flat modifier (the stat's value in a `dc` system; else as the runtime supplies, normally 0). |
+| `successes`, `ones` | Pool counts; 0 outside a pool. |
 
-- **No silent zero.** A check that has no target MUST leave `target` and `raw_target`
-  absent from the namespace, never substitute 0. An expression that reads an absent name
-  is an evaluation error.
-- **`target: none`.** A `none` pack MUST NOT reference `target` or `raw_target` in any
-  resolution expression, and this MUST be rejected when the pack loads.
-- **Difficulties.** A difficulty is closed, `{target?, prefixes?}`. Inside a difficulty's
-  `target` expression, both `target` and `raw_target` hold the **raw** target. Its result
-  is truncated to an integer and becomes the effective `target`. A difficulty without
-  `target` leaves the target unchanged. `prefixes` maps a locale to the words that select
-  the difficulty in typed commands.
+- **No silent zero.** A check without a target leaves `target` and `raw_target` **absent**;
+  an expression that reads an absent name fails (`TARGET_REQUIRED`), and so does a missing die
+  (`DIE_MISSING`). A `skill` or `dc` check rolled without a target is left **ungraded**; a
+  `none` system always grades.
+- **`target: none`.** No resolution expression of a `none` pack may read `target` or
+  `raw_target` (`TARGET_FORBIDDEN`, at load).
+- **Difficulties.** A difficulty is closed: `{target?, prefixes?}`. `target` is an expression
+  over `target` and `raw_target`, both holding the raw target; its value, truncated toward
+  zero, is the effective target. A difficulty without `target` leaves the target unchanged,
+  and so does an unknown difficulty id. `prefixes` maps a locale to the words that select the
+  difficulty in typed commands.
 
 ### 5.4 Parameters
 
-`params` maps a slot name to a closed `{min, max, default?}` of integers, with
-`max ≥ min`. Before rolling, each slot takes its supplied value, or its `default` when
-none was supplied, and is then clamped into `[min, max]`. A slot that has neither value
-nor default, or whose value is not an integer, MUST fail that roll with an error that
-names the slot. Which lanes may supply parameter values is runtime-defined, so a pack
-SHOULD give every slot a default.
+`params` maps a slot to a closed `{min, max, default?}` of integers with `max ≥ min`
+(`BAD_RANGE`). Before rolling, each slot takes the supplied value, else its `default`, as an
+integer (a number truncates; text must be a plain decimal integer), clamped into
+`[min, max]`. A slot with neither fails the roll (`MISSING_PARAM`); a value that is not an
+integer fails it (`INVALID_PARAM`). Which callers may supply values is the runtime's, so a
+pack SHOULD give every slot a default.
 
 ### 5.5 Margin
 
-When `margin` is declared, the outcome margin is its value, truncated to an integer.
-Otherwise the margin is `target − roll` for `compare: "<="` and `roll − target` for
-`compare: ">="`, and it is absent when there is no target. A positive margin is on the
-success side.
+With `margin`, the outcome's margin is its value truncated toward zero. Without it, the margin
+is `target − roll` for `compare: "<="` and `roll − target` for `">="`, and absent when there
+is no target. A positive margin is on the success side.
 
 ### 5.6 Modifiers
 
-A modifier is a closed `{roll?, tens_reroll?}`. A caller applies modifiers by name, each
-with a positive count.
+A modifier is closed: `{roll?, tens_reroll?}`. A caller applies modifiers by name, each with a
+count; a count of 0 or less does nothing, an undeclared name fails the roll
+(`UNKNOWN_MODIFIER`).
 
-- **`roll`** replaces the check's roll expression, for example advantage as `2d20kh1`.
-- **`tens_reroll`** is `keep_lowest` or `keep_highest`. It is the generic d100
-  tens-reroll mechanic. Counts add up, `keep_lowest` positive and `keep_highest`
-  negative, so opposing modifiers cancel one for one. When the net count is non-zero,
-  the runtime rolls a d100, with tens × 10 + ones and 00 + 0 counting as 100. It then
-  rolls |net| extra tens dice and keeps the candidate with the lowest (net > 0) or highest
-  (net < 0) **full d100 value**. The kept value is the whole roll, whatever `roll` says.
-  The reference caps the extra tens dice at 100.
-
-Applied modifiers are recorded in the roll detail.
+- **`roll`** replaces the check's notation (advantage as `2d20kh1`); when two do, the later
+  wins.
+- **`tens_reroll`** is `keep_lowest` or `keep_highest`, the d100 tens-die mechanic. Counts net,
+  `keep_lowest` positive and `keep_highest` negative, so opposing modifiers cancel one for
+  one. A non-zero net rolls a d100 (1–100; ones = value mod 10, tens = ⌊value / 10⌋ mod 10),
+  then |net| extra tens dice (0–9, at most 100), and keeps the candidate whose **full value**
+  (tens × 10 + ones, with 0 and 0 meaning 100) is lowest (net > 0) or highest (net < 0), the
+  earliest on a tie. That value is the whole roll, whatever `roll` says.
 
 ### 5.7 `check`
 
-A closed block that tells a runtime's generic check commands and tools how to use the
-system:
+A closed block telling a runtime's generic check commands and tools how to use the system:
 
-- `favorable`, `unfavorable`: the names of declared modifiers that favorable and
-  unfavorable counts route to. Opposing counts cancel.
-- `default_target`: the target for a `dc` check that names no difficulty number.
-- `proficiency`: a canonical stat that a proficient check adds to the sheet value.
-- `default_skill`: the canonical stat a bare check command rolls.
+- `favorable`, `unfavorable`: declared modifiers (`UNDECLARED_MODIFIER` otherwise) that
+  favourable and unfavourable counts route to; the counts net first (two bonus and one
+  penalty is one bonus).
+- `default_target`: an integer, the target of a `dc` check that names none. (The reference
+  Keeper's dice tool uses it; its typed check command leaves such a check ungraded.)
+- `proficiency`: a canonical stat a proficient check adds to the modifier.
+- `default_skill`: the canonical stat a bare check rolls.
 
-### 5.8 The outcome contract
+### 5.8 The outcome
 
-An outcome is `{rank: {id, tier, success, critical, fumble}, target, margin?}`, and on
-the wire `{id, label, success, critical, fumble, tier, margin?}`. The rank `id` is pack
-vocabulary and purely presentational. Consumers MUST branch only on the three flags and
-on `tier`, never on a rank id, and opposed checks compare `tier` first.
+An outcome is `{rank: {id, tier, success, critical, fumble}, margin, target, effectiveTarget,
+roll, variant}`. The rank id is pack vocabulary and purely presentational. Consumers MUST
+branch only on the three flags and `tier`, never on a rank id, and opposed checks compare
+`tier`. How an outcome reaches a client is the wire protocol's ([protocol](../../protocol.md)).
 
-Reference: `core/resolution.py::compile_resolution`, `CheckResolver.interpret`;
-`core/check_outcome.py`; `core/check_roll.py`.
+Errors at grading time: `INVALID_TARGET`, `INVALID_ROLL`, `INVALID_MODIFIER`, `INVALID_COUNT`,
+`UNKNOWN_MODIFIER`, `MISSING_PARAM`, `INVALID_PARAM`, `TARGET_REQUIRED`, `DIE_MISSING`,
+`EXPRESSION_FAILED`, `ROLL_FAILED`.
 
 ## 6. Labels
 
-`labels` maps a locale to a table from rank id to a label spec. A spec is one of:
+`labels` maps a locale to a table from rank id to a label, each one of:
 
-- a string, which is both the display text and a marker;
-- a non-empty list of strings, whose first entry is the display text and all of whose
-  entries are markers;
-- `{display: string, markers: [string]}`.
+- a string: the display text, and its one marker;
+- a non-empty list of strings: the first is the display text, all are markers;
+- `{display, markers}` (closed).
 
-A rank's display label for a locale is looked up by the locale's primary subtag, then
-`en`, then falls back to the rank id. Markers are surface forms that a runtime MAY treat
-as evidence that narration already stated a graded outcome. A pack SHOULD leave generic
-words such as "Success" out of `markers`.
+Locales compare trimmed and case-folded; one declared twice is `DUPLICATE_ID`. A rank's label
+for a viewer is looked up by the viewer's base language (the part before `-` or `_`), then
+`en`, then the rank id itself. Markers are surface forms a runtime MAY take as evidence that
+narration already stated a graded outcome; a pack SHOULD keep generic words such as
+"Success" out of them.
 
-## 7. Derived stats (`derived:`)
+## 7. Derived values (`derived:`)
 
-`derived` maps a canonical name to a spec, using a fixed vocabulary. Derived values are
-**never persisted** (§8.3). The derived values are evaluated as a **DAG fold in
-declaration order**: each result joins the namespace, so a later entry may use an earlier
-one. A value the sheet itself supplies always takes precedence as a reference, so a
-trained skill overrides its derived base.
+`derived` maps a canonical name to exactly one of these specs (`BAD_SHAPE` otherwise; each
+spec is closed):
 
 | Spec | Value |
 |---|---|
-| `{copy_of: s}` | `int(s)`. |
-| `{half_of: s}` | `int(s) // 2`. |
-| `{floor_div: {of: s, by: n}}` | `int(s) // n`. |
-| `{expr: "<expression>", format?: "<template>"}` | The expression's value, where an integral float becomes an integer. With `format`, `{}` in the template is replaced by the value. |
-| `{sum_ranges: {of: [s, …], ranges: [[lo, hi, v], …], else?: v}}` | Sum the stats. The first range with `lo ≤ sum ≤ hi` (inclusive) yields `v`, otherwise `else`. A `v` may be a literal, which keeps its YAML type (`"1d4"` stays a string), or an `{expr, format?}` spec. |
-| `{computer: name}` | A runtime-registered function. The reference ships none, so a pack that uses this is not portable. An unknown name MUST fail the load. |
-| `{computer_group: id}` | Adds a runtime-registered group of computers. Same portability caveat. |
+| `{copy_of: s}` | The integer value of `s`. |
+| `{half_of: s}` | ⌊value of `s` / 2⌋. |
+| `{floor_div: {of: s, by: n}}` | ⌊value of `s` / n⌋; `n` a non-zero integer (`BAD_BOUND`). |
+| `{expr: "<expression>", format?: "<template>"}` | The expression's value. |
+| `{sum_ranges: {of: [s, …], ranges: [[lo, hi, v], …], else?: v}}` | Sum the stats; the first band with `lo ≤ sum ≤ hi` yields `v`, else `else`. |
 
-Here `int(s)` means: the value of stat `s` as an integer, or its `defaults` value when
-it is missing or non-numeric, or 0. `//` is floor division. Any other spec shape MUST
-fail the load.
+A band value `v` (or `else`) is text, an integer, or `{expr, format?}`. `format` replaces `{}`
+(or `{0}`) with the value; `{{` and `}}` are literal braces; any other placeholder is refused
+(`BAD_FORMAT`). `{computer: …}` and `{computer_group: …}` are refused
+(`UNSUPPORTED_COMPUTER`): there are no engine-side functions; express the value as a formula.
 
-Reference: `core/rulepacks.py::_compile_derived_spec`, `RulePack.compute_derived`.
+**Evaluation.** Derived values are **never stored** (§8.3). They fold in declaration order: a
+name a formula reads resolves to the sheet's own value, else an earlier derived result, else
+the pack default, else 0. Each result joins the namespace for later entries, but a value the
+sheet itself stores always wins as a reference (a trained skill over its derived base). A
+result must be an integer or text. A formula that fails — division by zero, text where a
+number belongs, a non-integer result, an input whose own formula failed, a sum in no band
+without `else` — makes the value **absent**, never 0, and reports a formula issue
+(`evaluation_failed`, `input_failed`, `not_integer`, `out_of_range`, `no_band`,
+`bad_result`).
 
 ## 8. The sheet (`sheet:`)
 
-### 8.1 Storage model and the canonical namespace
+### 8.1 Storage and the canonical namespace
 
-A character sheet stores:
-
-- `attributes`, `skills` and `secondary_attributes`: maps from a storage key to a value;
-- the named fields the pack declares in `sheet.fields`;
-- when the pack declares `hit_points`, a current and a maximum hit-point pair.
-
-The **canonical namespace** of a sheet is built from these parts: attributes, renamed
-through the reverse of `attr_keys`; skills, through the reverse of `skill_keys`;
-secondary values, through `secondary_keys`; and fields, through `field_keys`. Unmapped
-keys keep their own names. Without a `sheet` block, the namespace is simply the
-attributes and the skills.
+A character sheet stores `attributes`, `skills` and `secondary` tables (storage key →
+integer), the pack's named `fields` (text or integer), and, when the pack declares
+`hit_points`, a current/maximum pair under the canonical names `hp` and `hpmax`. The **canonical
+namespace** maps canonical names to the stored values through `attr_keys`, `skill_keys`,
+`secondary_keys` and `field_keys` (canonical → storage key). Where several slots claim one
+name the more specific wins, lowest first: an undeclared skill of that name, the declared skill
+slot, the declared secondary slot, an undeclared attribute of that name, the declared attribute
+slot, the hit points, the declared field. A pack without `sheet` keeps bare attribute and skill
+tables, read by their own names.
 
 ### 8.2 Fields
 
@@ -361,174 +403,145 @@ The block is closed.
 
 | Key | Meaning |
 |---|---|
-| `label` | Required: the sheet's display label. |
-| `attr_keys`, `skill_keys`, `secondary_keys`, `field_keys` | Canonical name → storage key, or field name for `field_keys`. |
-| `attributes`, `skills`, `secondary`, `fields` | Fresh-sheet values, by storage key or field name. |
-| `hit_points` | `{current, max}`, integers. Declares that the sheet keeps hit points as a pair, under the canonical names `hp` and `hpmax`. |
-| `derived_attrs`, `derived_skills`, `derived_secondary` | Storage key → canonical derived name. These slots hold derivations (§8.3). |
-| `check_values` | Canonical → canonical. A check on the left name rolls against the right name's value, for example an ability check rolling its modifier. |
-| `vitals` | Attribute storage key → `{max_key, start}`. `max_key` is required. `start` is `full` (the default) or `{expr}` in the canonical namespace plus derived values. |
-| `resources` | At most 8 meters `{id, label, source?, value?, max?}`. `label` is a string (taken as `en`) or a locale map. `source` is `attributes` (the default), which requires the `value` and `max` storage keys, or `hit_points`. |
+| `label` | Required, non-empty: the sheet's name for the system. |
+| `attr_keys`, `skill_keys`, `secondary_keys`, `field_keys` | Canonical name → storage key (field name for `field_keys`). |
+| `attributes`, `skills`, `secondary` | A fresh sheet's integers, by storage key. |
+| `fields` | A fresh sheet's fields: a text or integer each; the default's type is the field's type. |
+| `hit_points` | `{current, max}` (closed, integers, default 0): the sheet keeps hit points as a pair. Without it, hit points are the `HP` / `HPMAX` attribute slots. |
+| `derived_attrs` | Storage key → derived canonical name: a **pure derivation**, never stored and never written (`DERIVED_SLOT`). |
+| `derived_skills`, `derived_secondary` | Storage key → derived canonical name: shows the derivation unless a different value is stored (§8.3). |
+| `check_values` | Canonical → canonical: a check on the left name rolls against the right name's value (an ability check rolling its modifier). |
+| `vitals` | Attribute storage key → `{max_key, start?}` (closed): a current pool. `max_key` is required; `start` is `full` (default) or `{expr}` (§3). |
+| `resources` | At most 8 (`MAX_RESOURCES`) meters `{id, label, source?, value?, max?}` (closed): `id` unique; `label` text (English) or locale → text; `source` `attributes` (default; `value` and `max` storage keys required) or `hit_points` (no `value`/`max`). |
 
 ### 8.3 Derived values are never persisted
 
-Readers MUST recompute derived slots from the pack before use. Stored copies are never
-trusted. A refresh does the following:
+Readers MUST recompute derived values from the pack; stored copies are never trusted. A
+refresh, after any change of source values:
 
-- `derived_attrs` slots are overwritten with the derived value.
-- A `derived_skills` or `derived_secondary` slot is **dropped** from storage when its
-  stored value equals the derived value or is absent. When it differs, it is kept as a
-  trained value or manual override. At creation, the slot is seeded cleanly.
-- Each vital is clamped to `[0, value of max_key]`. It is initialized from `start` at
-  creation, or when its slot is missing. An edit never heals a vital.
+- drops a `derived_skills` / `derived_secondary` slot whose stored value equals its derivation
+  (an untrained copy would otherwise turn into a false override when its source changes); a
+  differing value stays, as a trained value or manual override. At creation every such slot is
+  seeded cleanly;
+- clamps each vital into `[0, value of max_key]`; a vital is set from `start` at creation, or
+  when it has no value yet. An edit never heals. A vital whose maximum is unknown is left as
+  it is;
+- leaves a slot whose derivation failed as it is, and reports the failure.
 
-### 8.4 Reading and writing values
+### 8.4 Reading and writing
 
-A canonical name's value is read in this order:
+The value of a canonical name is its stored value, else its derived value, else (when its
+formula failed) **nothing**, else the pack default, else unset. A check on a typed name that
+resolves through §2.1 neither to a known stat nor to a slot the sheet stores MUST be refused;
+a runtime MUST NOT run it as a target-0 check. A known name with no value and no default reads 0.
 
-1. the attribute slot, via `attr_keys`;
-2. `hp` or `hpmax`, from the hit-point pair (when `hit_points` is declared);
-3. the secondary slot, via `secondary_keys`;
-4. the skill slot, via `skill_keys` or the name itself;
-5. the field, via `field_keys`;
-6. the derived value;
-7. the source value;
-8. `defaults`;
-9. 0.
+A write goes to the name's declared slot: a field (its type must match: `not_text`,
+`not_integer`); an attribute slot (refused for a derived attribute: `derived_slot`; then the
+sheet is refreshed); the hit points; a secondary slot; else a skill (by `skill_keys` or the
+name itself, so a custom skill is added). Values are safe integers. A write applies no range:
+ranges are §9's.
 
-Writes go to the declared slot by the same mapping, and an unmapped name is written as a
-skill. A check on a name that resolves neither through `alias` nor to a slot on the sheet
-MUST be refused. A runtime MUST NOT run it as a target-0 check.
+Hit points: with `hit_points`, the pair; otherwise the `HP` / `HPMAX` attributes (either may be
+a vital or a derivation; a lone value stands for both). The current value is reported clamped
+into `[0, max]`.
 
-Resource meters reach the wire as `{id, label, value, max}`, with the label resolved for
-each viewer's locale: the exact locale, then `en`, then any.
-
-Reference: `core/sheets.py`; `core/character_manager.py` (sheet record, hit points).
+Resource meters are reported as `{id, label, value, max}`, the label in each viewer's language
+(the full locale tag, then its base language, then `en`, then the id). An attribute-backed
+meter whose value or maximum the sheet lacks is left out.
 
 ## 9. Character constraints (`creation_constraints:`)
 
-Every stat write path MUST validate the sheet against these constraints, in
-deterministic code: manual edits, AI tool writes, rolled generation and imports alike.
-Validation returns a corrected sheet together with a list of violations.
+Every stat write path MUST validate the sheet against these constraints in deterministic code
+— manual edits, the Keeper's tools, generation and imports alike. Validation returns the
+corrected sheet and a list of violations; it never throws on content.
 
 | Key | Semantics |
 |---|---|
-| `attributes.<storage key>` | `{min (default 0), max (default 100), roll?}`. Every write clamps into the range, and a non-numeric value becomes `min`. When a character is generated, `roll` is rolled for each attribute in declaration order. |
-| `skills.default` | `{min (default 0), max (default 99)}`. Every write clamps every non-derived skill. |
-| `budgets.<id>.parts` | A list of budget formulas (§3). The budget is their sum, and a `{max: [formula, …]}` part contributes its largest alternative. *Spent* is the sum over non-derived skills of `max(0, value − fresh-sheet value)`. Overspending is reported as `<id>_exceeded`, never auto-corrected. A formula that does not evaluate contributes 0. |
-| `methods.point_buy` | `{budget, min, max, costs: {value: cost}}`. Checked only when the caller says the sheet was point-bought, and only once every constrained attribute lies within `[min, max]`. |
+| `attributes.<storage key>` | Closed `{min (default 0), max (default 100), roll?}`. A stored value is clamped into the range; a non-numeric one becomes `min`. `roll` is a creation roll (notation, checked at load; never on a derived attribute slot: `DERIVED_SLOT`). |
+| `skills.default` | Closed `{min (default 0), max (default 99), growth_max?}`. Every non-derived skill is clamped into the range. `growth_max` is accepted; this version defines no behaviour for it. |
+| `budgets.<id>` | Closed `{parts: [...]}`, non-empty. A part is a formula (§3) or `{max: [formula, …]}`, which contributes its largest alternative. The budget is the sum. *Spent* is the sum over non-derived skills of `max(0, value − fresh-sheet value)` (a custom skill's fresh value is 0). Overspending is reported (`budget_exceeded`, naming the budget), never corrected. A formula that fails leaves that budget unchecked and reports the issue. |
+| `methods.point_buy` | Closed `{budget, min, max, costs: {value: cost}}` (integers; defaults 0). Checked only when the caller says the sheet was point-bought, and only once every constrained attribute lies within `[min, max]`; an unlisted value costs 0 (`point_buy_budget_exceeded`). |
 
-The reference also reads `methods.standard_array`, `methods.rolled`,
-`archetype_priorities` and `default_archetype` in its character-drafting helper. That
-use is informative and not part of this contract.
+Other keys under `creation_constraints` and `methods` (the built-in packs carry e.g.
+`methods.standard_array`) are not read by this version's compiler; their meaning is not
+specified in this version.
 
-Reference: `core/character_rules.py::validate_sheet`;
-`core/character_manager.py::generate_character`.
+**Violations**: `attribute_not_numeric`, `attribute_below_min`, `attribute_above_max`,
+`skill_not_numeric`, `skill_below_min`, `skill_above_max`, `secondary_not_numeric`,
+`field_not_numeric`, `field_not_text`, `hit_points_not_numeric`, `unknown_entry`,
+`malformed`, `budget_exceeded`, `point_buy_budget_exceeded`.
+
+**Generating a character.** A fresh sheet (the pack's starting tables), then every attribute
+with a creation `roll` rolled in declaration order, then a creation refresh (vitals from their
+starts, derived slots seeded cleanly), then validation.
 
 ## 10. Subsystems (`subsystems:`)
 
-A subsystem binds one of the runtime's closed **behavior templates** to pack parameters
-and a pack-chosen name. A pack declares at most 16. The key MUST be an identifier that
-does not start with `_`. It names both the runtime tool or command that runs the
-mechanic and the `subsystem` id on the wire. Every entry may carry `display`, a locale
-map of names. Each entry is closed to its template's keys.
+A subsystem binds one of the runtime's closed **templates** to pack parameters and a
+pack-chosen name. A pack declares at most 16 (`MAX_SUBSYSTEMS`). The key is an identifier
+(`^[\p{L}\p{Nl}][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$`: it starts with a letter, so never with
+`_`; `BAD_ID`) and not `module_action` (`RESERVED_NAME`); it names the tool or command that
+runs the mechanic and the subsystem on the wire. Every entry has `template` and MAY have
+`display` (locale → name); otherwise it is closed to its template's keys. A `script` key is
+refused (`SCRIPT_UNSUPPORTED`). The templates `check_with_loss`, `resource_spend_adjust` and
+`opposed` roll the system's check, so need a `resolution` (`NEEDS_RESOLUTION`).
 
 | Template | Keys | Semantics |
 |---|---|---|
-| `check_with_loss` | `stat` (required), `stat_max`, `fumble_loss`, `loss_ceiling` | Roll the system check against the attribute `stat`, using the room's variant and no difficulty. The caller supplies two loss expressions, one for success and one for failure. Roll the one for the outcome. On a fumble, `fumble_loss: all` makes the loss the full current value, and `max` makes it the loss expression's maximum. Then `loss_ceiling: {when, value ≥ 0}` caps the loss when `when` holds; the condition reads the call's optional scene `tag` and the sheet. The new value is `max(0, stat − loss)`. `stat_max` names the attribute reported as the maximum. |
-| `improvement_check` | `roll` (default `1d100`), `improve` (default `1d10`), `cap` (default 100), `auto_success_above` | For a skill below `cap`, roll `roll`. It succeeds when the roll exceeds the skill value, or exceeds `auto_success_above` when that is set. On success the skill grows by `improve`, up to `cap`. |
-| `resource_spend_adjust` | `stat` (required) | Spend N points of the attribute `stat` to lower the roll of the character's most recent recorded check by N, then re-grade it through the pack's ladder with the check's original target, variant and difficulty. N MUST NOT exceed the available points or bring the roll below 1. A fumble cannot be adjusted. Which checks are eligible is runtime-defined. |
-| `opposed` | — | Two checks graded by the pack, and the higher `tier` wins. Tie-breaking is runtime-defined. |
-| `table_draw` | `tables` (required), `default` | Draw one entry uniformly from a table: `1d<count>` on the runtime's roller. `tables.<id>` is closed: `{entries (1–64 strings), display?, aliases?}`. Table ids and aliases are casefolded. `default` names a table and defaults to the first. |
-
-A subsystem that declares `script` is a **script flow** (§13), closed to
-`{script, display?, rolls?}`.
-
-Reference: `core/subsystems.py`; template bodies in `agent/kp_tools_subsystems.py`.
+| `check_with_loss` | `stat` (required), `stat_max`, `fumble_loss`, `loss_ceiling` | Roll the system's check against the attribute slot `stat` (the room's variant, no difficulty, no modifiers, parameters at their defaults). The caller supplies a loss notation for success and one for failure; roll the one for the outcome (never below 0). On a fumble, `fumble_loss: all` makes the loss the whole current value and `max` the notation's maximum (defined for `NdM`, `NdM + K` with K ≥ 0, or a constant; otherwise the rolled loss stands). Then `loss_ceiling: {when, value ≥ 0}` (closed; `when` ≤ 500) caps the loss when `when` holds; a `when` that fails to evaluate never caps. The attribute becomes `max(0, value − loss)`. `stat_max` names the slot reported as the maximum. `stat` MUST NOT be a derived attribute slot. |
+| `improvement_check` | `roll` (default `1d100`), `improve` (default `1d10`), `cap` (default 100), `auto_success_above` | For a skill below `cap` (else refused, `at_cap`), roll `roll`; the skill grows when the roll exceeds its value, or exceeds `auto_success_above` when set, by `improve`, up to `cap`. The skill is found through §2.1; an unknown name is refused, never grown from 0. |
+| `resource_spend_adjust` | `stat` (required) | Spend N points of the attribute `stat` to lower the roll of a recorded check by N, then re-grade it with the check's own target, variant and difficulty. Nothing is rolled. N is a positive integer, at most the points available, and less than the roll (the roll never goes below 1). A fumble cannot be adjusted. A check on `stat` itself, or on the stat of any `check_with_loss` subsystem, is not eligible. Which check is "recorded" is the runtime's. `stat` MUST NOT be a derived attribute slot. |
+| `opposed` | `settle` | Two sides each roll the system's check. `outcome`: each graded against its own value; the higher tier wins, then the higher value; equal values tie. `total`: each side's value is its roll's modifier; the higher total wins; equal totals tie; no side is graded. Default: `total` when `compare` is `>=`, else `outcome`. |
+| `table_draw` | `tables` (required), `default` | One uniform draw (`1d<count>`) from a table. `tables` holds at least one table; an id is trimmed and case-folded, unique; a table is closed `{entries (1–64 strings, MAX_TABLE_ENTRIES), display?, aliases?}`. A caller names a table by id, then by alias; `default` (case-folded) names the table drawn without one (`UNDECLARED` when unknown), else the first. |
 
 ## 11. Commands (`commands:`)
 
-`commands` maps a dot-command word to a binding. Words are trimmed and casefolded. A
-binding is closed: `{action}` or `{tool, args?}`, exactly one of `action` and `tool`.
+`commands` maps a typed command word to a binding. Words are trimmed and case-folded; an empty
+word or one declared twice is refused. A binding is closed: `{action}` or `{tool, args?}`,
+exactly one of `action` and `tool`.
 
 - `action: check` binds the word to the generic check command.
-- `action: make_char` makes the word create a character **in the declaring system**.
-  This word is the entry point into a system, so it resolves to the first pack in
-  discovery order that declares it, whatever the room's current system is. An inherited
-  word therefore routes to its base pack. A patch that needs its own character creation
-  MUST declare a word of its own.
-- `tool: <subsystem key>` runs that subsystem, with `args` as preset arguments. Naming an
-  undeclared subsystem MUST fail the load.
+- `action: make_char` makes the word create a character **in the declaring system**. It is
+  the entry point into a system, so it resolves to the first system (§14) that declares it,
+  whatever the room's current system; a word inherited through `extends` routes to its base.
+  A patch that needs its own character creation MUST declare a word of its own.
+- `tool: <subsystem key>` runs that subsystem (`UNDECLARED` when it is not declared), with
+  `args` (a mapping) as fixed arguments. `args` with an `action` is refused.
 
-Other words are scoped to the room's system.
-
-Reference: `core/rulepacks.py::_parse_commands_section`, `pack_declaring_command`,
-`own_make_char_word`.
+Other words act in the room's current system.
 
 ## 12. Presentation and runtime hints
 
-- **`display`**: `{locale: {canonical: display name}}`, looked up by the locale's primary
-  subtag. It never affects resolution, and an unmapped name falls back to its canonical
-  name. Since protocol 2.5 it also names things on the wire: each character attribute key
-  is labelled with the `display` name of its canonical name (`attribute_labels`), and a
-  subsystem's own `display` (§10) is sent as the dice frame's `subsystem_label`.
-- **`initiative`**: a mapping with a required `roll`, a dice expression whose
-  `{name}` slots are replaced by the sheet's canonical values before rolling.
-- **`expertise`**: `{locale: text}`, text a runtime MAY give its game-master agent about
-  running the system. The fallback order is the locale, then `en`.
-- **`st_show`**: opaque sheet-display hints (`top`, `sortBy`, `itemsPerLine`,
-  `ignores`). It is not validated.
+- **`display`**: `{locale: {canonical name: display name}}`. Locales are trimmed, case-folded,
+  `_` read as `-`; a locale declared twice merges, the later name winning. A stat's display
+  name for a viewer is looked up by the full locale tag, then its base language, else the
+  canonical name itself (no `en` fallback: canonical names are already names in the pack's own
+  language). A display name never affects resolution, but it is a **name the stat answers to**
+  (§2.1). A pack SHOULD give a display name in each language it serves for every attribute,
+  derived value and skill whose canonical name is not written in that language's script; the
+  built-in packs do for `en` and `zh`, with one label held back (checked by the reference's
+  `display_names.test.ts`).
+- **`initiative`**: a mapping whose `roll` is a notation; each `{name}` slot is replaced by the
+  sheet's value of that canonical name before rolling (a name without a value fails the roll).
+- **`expertise`**: locale → text a runtime MAY give its Keeper about running the system;
+  looked up by base language, then `en`.
+- **`st_show`**: opaque sheet-display hints (the built-ins use `top`, `sortBy`,
+  `itemsPerLine`, `ignores`); not validated.
 - **`turn_checks`**: a list of closed rows
-  `{id?, when (or condition), instruction?: {locale: text}, max_rounds?: int ≥ 1, enabled?}`.
-  Condition names are runtime-defined. A runtime MUST skip a row that names a condition
-  it does not implement, and MAY clamp `max_rounds`.
+  `{id?, when (or condition), instruction?: {locale: text}, max_rounds?: integer ≥ 1, enabled?}`.
+  The condition names are the runtime's; a pack's table replaces the runtime's default table
+  and may reword, reorder, drop or disable rows and lower their caps, never raise them. A
+  runtime MUST skip a row naming a condition it does not implement, and a condition after its
+  first row. The reference implements `narration_lost`, `dice_forged`, `dice_contradicts` and
+  `stale_scene_hud`, and clamps `max_rounds` to its own cap per condition and to 3.
 
-## 13. The rules-script lane
+## 13. `extends:` — patching a base system
 
-A system that the data cannot express ships a script. A **resolution script** replaces
-the rank ladder (`resolution: {script: <file>}`). A **flow script** is a whole subsystem
-(`subsystems: {<name>: {script: <file>, rolls?: {slot: dice expression}}}`).
-
-- **Files.** The file is a bare filename next to the rulepack YAML, at most 40,000
-  characters. It MUST define a global function: `resolve(input)` for resolution, or
-  `flow(input)` for a flow. A flow declares at most 8 `rolls`, and slot names MUST be
-  identifiers.
-- **Zero-callable sandbox.** The script runs in a JavaScript sandbox with no host
-  callables: no I/O, no randomness source, no engine state. Limits are a 64 MiB memory cap
-  and a 1 s time limit per evaluation, armed before the script's top level runs. The
-  runtime pre-rolls every die and passes the input in as plain JSON.
-- **Load.** A pack whose script cannot load does not load. A runtime without a sandbox
-  MUST NOT load the pack.
-- **Resolution input:** `{roll, dice, total, target, raw_target, modifier, successes,
-  ones, variant, difficulty}`. `target` is effective (after difficulty) or `null`;
-  `raw_target`, `successes` and `ones` are `null` when absent.
-- **Resolution output:** exactly `{rank: {id, tier, success?, critical?, fumble?},
-  margin?}`. `id` matches `^[a-z][a-z0-9_]{0,31}$`, `tier` is an integer 0–32, the flags
-  are booleans, and `margin` is an integer or `null`. Any extra key, wrong type or
-  out-of-range value MUST be rejected as an error, never partially applied.
-- **Flow input:** `{rolls: {slot: {expr, total, dice}}, sheet: {canonical: scalar}}`. The
-  sheet snapshot includes derived values.
-- **Flow output:** a closed effect `{stat_delta?, mark?, narration?}`.
-  - `stat_delta` holds at most 8 entries, from name to integer, each clamped to ±1000.
-    The runtime resolves each name through `alias` and applies it through the sheet
-    layer, then validates the sheet (§9).
-  - `mark` is a string, truncated to 64 characters.
-  - `narration` is a string, truncated to 2,000 characters.
-- **Purity.** Authors MUST write scripts as pure functions of their input. A runtime MAY
-  reuse one interpreter across calls, so script state is not guaranteed to persist or to
-  reset.
-- **Disclosure.** A pack that ships scripts is disclosed as `has_rules_script`
-  ([pack.md](pack.md) §4.2).
-
-Reference: `core/rules_script.py`.
-
-## 14. `extends:`, patching a base system
-
-A world that needs bespoke rules ships a rulepack that patches a base, instead of
-rewriting a whole system:
+A world that needs bespoke rules ships a pack that patches a base instead of restating a whole
+system:
 
 ```yaml
-# rulepacks/ashfall.yaml — an invented module's house rules on CoC 7e
+# rules/ashfall.yaml — an invented module's house rules on CoC 7e
 extends: coc7
 names: [ashfall]
 defaults: {Ember Lore: 5}
@@ -547,39 +560,132 @@ commands:
 
 Resolution is normative:
 
-1. While the current document has `extends`, remove it, load the named base as raw YAML,
-   and **deep-merge** the current document over the base. The base's own `extends`
-   survives the merge, so the loop continues with the grandparent.
-2. In the merge, mappings merge recursively. An explicit `null` deletes the inherited
-   key. Scalars and lists replace the inherited value wholesale; a rank ladder, for
-   example, is replaced, never appended to.
-3. At most 4 bases may be chained. A cycle, a self-reference, a base that is not a
-   non-empty string, or an unknown base MUST fail the load.
-4. Bases are looked up by id. Inside a pack, the pack's own bundled rulepacks (by stem)
-   come first, then the host's discovery directories, built-in first. The lookup reads
-   files, not the registry, so it does not depend on discovery order.
-5. The merged document is then loaded as an ordinary rulepack under the **child's** id.
+1. While the document has `extends`, remove it, load the named base as raw data, and
+   **deep-merge** the document over the base. The base's own `extends` survives the merge, so
+   the loop continues with the grandparent.
+2. Mappings merge recursively; an explicit `null` deletes the inherited key. Scalars and lists
+   replace the inherited value wholesale: a rank ladder is replaced, never appended to.
+   Inherited keys keep their position; keys only the child has follow, in the child's order.
+3. At most 4 bases (`MAX_EXTENDS_DEPTH`; `EXTENDS_TOO_DEEP`). A base that is not a non-empty
+   string (`EXTENDS_INVALID`), an unknown base (`EXTENDS_UNKNOWN`), a cycle or a
+   self-reference (`EXTENDS_CYCLE`) fails the load; so does a base that is not a mapping.
+4. Bases are looked up by id among raw files, not among loaded systems. Inside a pack: the
+   pack's own rule packs first, then the runtime's built-ins. A pack cannot extend another
+   pack's system. A pack file that extends its own id reaches the built-in of that id.
+5. The merged document is then compiled as an ordinary pack under the **child's** id.
 
-A patch MUST use a new id: discovery never lets a pack or user file shadow a built-in
-id (§15).
+## 14. Where systems come from
 
-Reference: `core/rulepacks.py::resolve_extends`, `_merge_extends`.
+A runtime's systems are its built-ins, then the rule packs of installed packs in install order
+([pack.md](pack.md) §8). An id is kept by its first claimant: a later pack's system with a
+taken id is not loaded, and the runtime names it. A system name (id, `names`, `set_keys`) is
+likewise kept by the first system to claim it. Installed packs are validated again when a
+runtime starts, and a pack that no longer validates is skipped. A room chooses its system by
+name; a system needs no enabling.
 
-## 15. Discovery
+## 15. What is refused
 
-A runtime discovers rulepacks from its built-in directory first, then from user and pack
-directories. A built-in id always wins over a same-named file elsewhere. Within one
-directory, files are visited in sorted filename order. A malformed file is skipped with a
-log. A runtime SHOULD notice rulepacks installed while it runs without needing a
-restart.
+A pack that fails to compile does not load; inside a pack it refuses the pack
+(`rulepack_invalid`, with the code, the inner code and the path). Codes: `BAD_YAML`,
+`NOT_A_MAPPING`, `BAD_ID`, `BAD_FIELD`, `UNKNOWN_KEY`, `DUPLICATE_ID`, `TOO_MANY`,
+`RESERVED_NAME`, `UNDECLARED`, `BAD_NOTATION`, `BAD_EXPRESSION`, `SCRIPT_UNSUPPORTED`,
+`NEEDS_RESOLUTION`, `DERIVED_SLOT`, `EXTENDS_INVALID`, `EXTENDS_UNKNOWN`, `EXTENDS_CYCLE`,
+`EXTENDS_TOO_DEEP`; and two wrappers that carry the inner layer's code: `BAD_RESOLUTION`
+(`BAD_FIELD`, `UNKNOWN_KEY`, `UNSUPPORTED_VERSION`, `BAD_ID`, `TOO_MANY`, `BAD_EXPRESSION`,
+`UNKNOWN_NAME`, `TARGET_FORBIDDEN`, `BAD_LADDER`, `BAD_NOTATION`, `UNDECLARED_PARAM`,
+`BAD_RANGE`, `UNDECLARED_MODIFIER`, `DUPLICATE_ID`) and `BAD_SHEET` (`BAD_SHAPE`,
+`UNKNOWN_KEY`, `MISSING`, `NOT_INTEGER`, `BAD_FORMULA`, `UNSUPPORTED_COMPUTER`, `BAD_FORMAT`,
+`BAD_BOUND`).
 
-## 16. Conformance
+## 16. A complete small pack
 
-A second implementation proves itself against shared vectors, not against prose. Every
-`ranks` ladder, `derived` table and `creation_constraints` block is pure data plus the
-grammar of §3, so it can be table-tested exhaustively against the reference: every
-target and roll through every ladder, every band edge of a derived table, alias probes,
-and sheet validation. The reference packs listed at the top of this document are the
-test corpus. [loreweaver-dsh](https://github.com/1A7432/loreweaver-dsh) is the first
-implementation to do this: it grades 108,500 checks across every ladder of the reference
-`coc7` pack against tables exported from the reference implementation.
+```yaml
+# rules/d20lite.yaml
+names: [d20 lite]
+set_keys: [d20lite]
+defaults: {Might: 10, Wits: 10, Athletics: 0}
+alias:
+  Might: [mig, 力量]
+  Wits: [wit]
+display:
+  zh: {Might: 力量, Wits: 机智, Athletics: 运动, Might Bonus: 力量加值}
+resolution:
+  roll: 1d20
+  target: dc
+  compare: ">="
+  modifiers:
+    advantage: {roll: 2d20kh1}
+    disadvantage: {roll: 2d20kl1}
+  check: {favorable: advantage, unfavorable: disadvantage, default_target: 10}
+  ranks:
+    - {id: critical, when: "dice.0 == 20", success: true, critical: true, tier: 3}
+    - {id: fumble, when: "dice.0 == 1", fumble: true, tier: 0}
+    - {id: success, when: "roll >= target", success: true, tier: 2}
+    - {id: failure, tier: 1}
+labels:
+  en: {critical: Critical, fumble: Fumble, success: Success, failure: Failure}
+  zh: {critical: 大成功, fumble: 大失败, success: 成功, failure: 失败}
+derived:
+  Might Bonus: {expr: "floor((Might - 10) / 2)"}
+sheet:
+  label: d20 Lite
+  attr_keys: {Might: MIG, Wits: WIT}
+  attributes: {MIG: 10, WIT: 10}
+  skills: {Athletics: 0}
+  hit_points: {current: 10, max: 10}
+  resources:
+    - {id: hp, label: {en: HP, zh: 生命}, source: hit_points}
+creation_constraints:
+  attributes:
+    MIG: {min: 3, max: 18, roll: 3d6}
+    WIT: {min: 3, max: 18, roll: 3d6}
+  skills:
+    default: {min: 0, max: 10}
+initiative: {roll: "1d20 + {Wits}"}
+subsystems:
+  omen:
+    template: table_draw
+    display: {en: Omen, zh: 预兆}
+    tables:
+      sky: {entries: [A red moon., Gulls fly inland., Still water.]}
+commands:
+  d20lite: {action: make_char}
+  r: {action: check}
+  omen: {tool: omen}
+```
+
+## 17. Conformance and migration
+
+**Shared vectors.** A second implementation proves itself against tables, not prose. A ladder,
+a derived table and a constraint block are pure data plus §3, so they can be table-tested
+exhaustively. This repository holds the reference's recorded tables under
+`server/test/fixtures/reference/`: `rules_pack_meta.jsonl`, `rules_coc7_grid.jsonl.gz`,
+`rules_dnd5e_grid.jsonl`, `rules_wod_grid.jsonl`, `rules_interpret_cases.jsonl`,
+`rules_check_roll.jsonl.gz`, `rules_params.jsonl`, `rules_luck.jsonl.gz`,
+`rules_subsystems.jsonl.gz`, `rules_synthetic.jsonl.gz`, `sheets_cases.jsonl`,
+`sheets_aliases.jsonl`, `sheets_derived.jsonl`, `sheets_ops.jsonl`, `dice_vectors.jsonl.gz`,
+`dice_normalize.jsonl`, `dice_result_flags.jsonl` (their `README.md` describes each), and the
+expression table `clients/protocol/src/condexpr.vectors.json` for the portable subset. The
+`rules_*`, `sheets_*` and `dice_*` tables were recorded from the 2.6 engine; the reference's
+3.0 tests replay them and pin every deliberate departure from them in the test files beside
+them (`server/test/core/{resolution,rulepacks,sheets,subsystems,dice}/`). A row that a test
+supersedes is not a 3.0 contract. `rules_script_lane.jsonl` records a lane this version does
+not have. [loreweaver-dsh](https://github.com/1A7432/loreweaver-dsh) implemented rule packs
+2.0 against these tables.
+
+**From rule packs 2.0.**
+
+- `resolution.script` and `script` subsystems are refused (`SCRIPT_UNSUPPORTED`); nothing
+  replaces the rules-script lane. Express the system as ladders, or not at all.
+- `{computer}` and `{computer_group}` derived specs are refused (`UNSUPPORTED_COMPUTER`).
+- A derived formula that fails makes its value absent instead of falling back to the default;
+  a non-integer result is a failure, not truncated.
+- One number type: `2.0 === 2` holds. `if(c, a, b)` is available to sheet formulas.
+- A display name is also a name the stat answers to, and so is a derived name; display names
+  no longer fall back to `en`.
+- Overspending a budget is reported as `budget_exceeded` naming the budget (2.0:
+  `<id>_exceeded`); a budget whose formula fails is not checked (2.0: it contributed 0).
+- `opposed` gained `settle`; `skills.default` accepts `growth_max`.
+- Systems are no longer discovered from directories: they come from the built-ins and from
+  installed packs (§14).
+- YAML is read as 1.2 with SPEC.md §4's restrictions (2.0 read YAML 1.1 in the reference).

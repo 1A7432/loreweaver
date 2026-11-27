@@ -1,281 +1,110 @@
-# LWF: skills (`SKILL.md`) and event hooks (`hooks.js`)
+# LWF: skills (`SKILL.md`)
 
-**Version 2.0 · stable (additive-only).** Numbered with the rest of the LWF 2.0 family;
-against the unpublished 1.0 draft, 2.0 adds two events (`clock_advanced`,
-`tool_use` with `denyTool`), `decvar`, the native-bundle hook location, the image and
-performance block kinds for `emitUI`, and `emitPanel` as stable. It also corrects the
-cap and kill-switch statements of 1.0 to what the reference enforces. The hook-private
-state store (`getstate`/`setstate`, §4), module actions (`defineAction`, §4) and
-`event.seed` (§3) are **additive** extensions within 2.0: a script that uses none of them
-behaves exactly as before. The later rise of the script cap (40,000 → 400,000 →
-1,000,000 characters, plus a room total of 2,000,000, then 8,000,000 characters) and of the private-state limits is a
-relaxation: every script that was valid stays valid. Player-invokable actions
-(`spec.player`, `spec.label`, `event.source`) are likewise additive. Reference
-implementation: `core/skills.py`, `core/hooks.py`, `agent/hook_runtime.py`,
-`core/ejs_full.py`, `core/ejs_lite.py` and the hook phases in `agent/loop.py` in the
-Loreweaver engine.
+**Version 3.0 · draft.** This is a breaking revision of skills 2.0 (see §5): a skill is
+prompt text and a list of tools it unlocks, nothing else. The 2.x event hooks
+(`hooks.js`) and the templates section moved out: hooks are not run in 3.0, and templates
+in lore are specified in [cards.md](cards.md) §7. Reference implementation, in the
+Loreweaver engine: `server/src/core/skills/` (the parser, the registry, enabling in a
+room), `server/src/agent/tools/catalog.ts` (which tools a skill unlocks) and the built-in
+skills under `skills/`.
 
-> **Pack 3.0.** Under [pack.md](pack.md) 3.0 a skill is `SKILL.md` alone. A `hooks.js` in
-> a 3.0 pack is not run: it is reported as ignored and not installed, and pack code
-> lives in modules ([pack.md](pack.md) §3). §2–§6 describe the 2.x hook API and apply
-> only to runtimes of the 2.x family; §1 and §7 still apply.
+A skill is a block of instructions for the runtime's Keeper that a room admin switches on
+for one room: a play style, a content agreement, a capability. It follows the Claude Code
+`SKILL.md` shape.
 
-## 1. Skills
+## 1. The skill directory
 
-A skill is a directory `skills/<id>/` whose name is the skill id (a slug inside a pack).
-It contains `SKILL.md` and, optionally, `hooks.js`. Inside a pack it contains nothing
-else ([pack.md](pack.md) §2).
+A skill is a directory whose name is the skill **id**: a lowercase slug,
+`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$` (`SKILL_ID_PATTERN`; 1–64 characters, no leading
+or trailing `-`), else `bad_id`. It holds `SKILL.md` (`no_skill_file` otherwise). A
+`hooks.js` beside it is not run: the skill loads, with the warning `hooks_ignored`. Inside a
+pack, the directory is listed under `contents.skills` and its last path segment is the id
+([pack.md](pack.md) §4).
 
-`SKILL.md` follows the Claude Code shape:
+## 2. `SKILL.md`
 
-- The first line MUST be `---`. The frontmatter runs up to the next line that is exactly
-  `---`, and a file without a closing fence is malformed.
-- The frontmatter is YAML, read with a safe loader that rejects anchors and aliases, and
-  MUST be a mapping. Unknown keys are ignored.
-- The rest of the file is the Markdown **body**: instructions for the runtime's
-  game-master agent while the skill is enabled.
+The file is UTF-8 text of at most 100,000 code points (`MAX_SKILL_FILE_CHARS`). A leading
+byte-order mark is ignored.
 
-| Frontmatter | Meaning |
-|---|---|
-| `name` | Display name. Defaults to the id. |
-| `description` | When to enable the skill. Shown to the room admin. |
-| `name-zh`, `description-zh` | Optional localized display metadata. The English fields are the fallback. |
-| `allowed-tools` | A list of runtime tool names that the skill unlocks while it is enabled. A runtime MUST ignore names it does not know. |
-| `metadata.scope` | `room`, the default and the only defined value: a per-room toggle. |
-| `metadata.systems` | The rule-system ids the skill is written for. Informative. |
-| `metadata.content-rating` | `mature` or `explicit` declares mature content. While such a skill is enabled, a runtime MAY lift its output content filter for that room; the reference does. |
+- The first line MUST be `---` (spaces around it allowed; `no_front_matter` otherwise). The
+  front matter runs to the next line that is `---`; without one the file is refused
+  (`unclosed_front_matter`).
+- The front matter is YAML ([SPEC.md](../SPEC.md) §4; `yaml`, with the YAML error code and
+  line) and MUST be a mapping (`not_a_mapping`); an empty front matter is an empty
+  mapping. Unknown keys are ignored.
+- The rest of the file, with leading and trailing blank lines removed, is the **body**: at
+  most 20,000 code points (`MAX_SKILL_BODY_CHARS`). While the skill is enabled in a room,
+  the body is part of the Keeper's prompt there, in the order skills were enabled.
 
-Rules:
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | text, ≤ 100 | the id | Display name. |
+| `description` | text, ≤ 2,000 | `""` | When to enable the skill; shown to the room admin. |
+| `name-<lang>`, `description-<lang>` | text, same caps | — | Localized display text; `<lang>` is 2–3 lowercase letters (`name-zh`). At most 16 languages each (`MAX_SKILL_LOCALES`). A blank value is ignored. The English fields are the fallback. |
+| `allowed-tools` | list of text | `[]` | Tool names the skill unlocks while enabled (§3). At most 32 (`MAX_ALLOWED_TOOLS`), each 1–64 (`MAX_TOOL_NAME_CHARS`); duplicates are dropped. |
+| `metadata.scope` | text | `room` | `room` is the only defined value; any other value loads with the warning `unknown_scope`, and the skill is a room toggle anyway. |
+| `metadata.systems` | list of text | `[]` | The rule-system ids the skill is written for: informative. At most 16, each ≤ 64. |
+| `metadata.content-rating` | text, ≤ 32 | `""` | Lower-cased. `mature` or `explicit` declares mature content (§3). |
 
-- **Install ≠ enable.** A skill becomes active in a room only through a room-admin enable
-  action ([pack.md](pack.md) §6.5).
-- **Built-ins win.** A skill whose id a runtime built-in already claims never replaces
-  the built-in.
-- **Robust discovery.** A malformed skill MUST be skipped with a log, without blocking
-  other skills.
+Text values are trimmed. A value of the wrong type is refused (`bad_field`, with the key's
+path), one over its cap is refused (`too_long`, `too_many`); nothing is cut to fit.
+`metadata`, when present, MUST be a mapping.
 
-Reference: `core/skills.py::parse_skill_text`, `gateway/ops.py::room_content_unfiltered`.
+### 2.1 Example
 
-## 2. Where hooks live
+```markdown
+---
+name: Harbor guide
+name-zh: 港口向导
+description: Enable when the table plays in the harbor town.
+description-zh: 在港口小镇游玩时开启。
+allowed-tools: [generate_image]
+metadata:
+  scope: room
+  systems: [coc7]
+---
+# Harbor guide
 
-- A skill's `hooks.js` is active while the skill is enabled for the room.
-- A card's hook scripts ([cards.md](cards.md) §4) are installed room-wide by the room
-  admin's world import. A native bundle carries them as its top-level `hooks` list, and
-  a SillyTavern card as `extensions.loreweaver_hooks`. Re-importing a card replaces that
-  card's scripts and never stacks them.
+The tide rules the town. Mention it when a scene changes, and let the bell ring at high water.
+```
 
-A room runs at most **16 scripts** in total, skills and cards together, and each script
-is at most **1,000,000 characters**; together a room's scripts are at most **8,000,000
-characters**, and scripts past that total are skipped in order. A script beyond the cap,
-a script that is too long,
-and a script that throws while loading are each skipped with a logged warning. The other
-scripts still load.
+## 3. What an enabled skill does
 
-## 3. Events
+- **Its body** joins the Keeper's prompt in that room (§2).
+- **Its tools.** A runtime marks some of its Keeper tools **gated**: a gated tool is offered
+  to the Keeper only in a room where an enabled skill lists its name under
+  `allowed-tools`. A name that matches no gated tool unlocks nothing and is not an error:
+  tool names are the runtime's vocabulary. The reference's gated tools are
+  `generate_image`, `adjust_relationship`, `set_relationship` and `get_relationships`.
+- **Mature content.** While an enabled skill declares `mature` or `explicit`, a runtime MAY
+  lift the room's output word filter; the reference does.
 
-A script registers handlers with `on(event, handler)`. Handlers run in registration
-order, and a handler that throws loses only its own effects. A handler may be `async`; a
-rejection is logged.
+## 4. Installing, naming and enabling
 
-| Event | Payload | When |
-|---|---|---|
-| `turn_start` | `{user_message, actor}` | Before the game-master agent runs for the player's input. |
-| `tool_use` | `{tool, arguments}` | Before each tool call the game-master agent makes. Also before each variable write by another AI lane that the runtime describes as the equivalent tool call. |
-| `dice_rolled` | `{rolls: [{tool, result}]}` | After the reply, when at least one dice tool resolved this turn. `result` is truncated to 200 characters. |
-| `clock_advanced` | `{from, to, delta}` | After the reply, once for each game-clock advance made this turn. |
-| `reply_ready` | `{reply}` | After the reply is final. |
-| `variables_changed` | `{writes: [{path, op}]}` | Last, at most once per turn, and only when something wrote variables this turn: hooks, the reply's own variable-update blocks, or tool calls. `op` is `set`, `insert`, `delete`, `add` or `move`. Writes made by this event's own handlers do not fire it again, so hook cascades end by construction. |
+- **Where skills come from.** The runtime's built-in skills and the skills of installed
+  packs. The reference ships `mature-mode`, `romance-relationships` and `image-gen`.
+- **First claim keeps an id.** Built-ins claim their ids first, then installed packs in
+  install order. A later skill with a taken id is not loaded — a built-in is never replaced
+  — and the runtime names it at install and at start ([pack.md](pack.md) §8). A runtime
+  holds at most 256 skills (`MAX_SKILLS`).
+- **Install ≠ enable.** A skill is active in a room only after the room admin enables it
+  there (the reference's `skill enable <id>` / `skill disable <id>`). A room may enable a
+  built-in skill or a skill of a pack enabled in that room; enabling a pack enables none
+  of its skills, and disabling it disables them. A room enables at most 32 skills at once
+  (`MAX_ENABLED_SKILLS`; `too_many_skills`); an unknown id is `skill_not_available`.
+- **A room setting.** The enabled set survives every reset: it is an agreement of the
+  people at the table (mature content, images), not campaign content.
+- **A skill that does not parse** refuses its pack (`skill_invalid`, with the skill error
+  code and path), before anything is installed. An installed pack that no longer validates
+  when the server starts is skipped with a note, its skills with it.
 
-After the reply, the phases run in this order: `dice_rolled`, `clock_advanced` (once per
-advance), `reply_ready`, `variables_changed`.
+## 5. From skills 2.0
 
-**`event.seed`.** Every payload above, and every module action's `event` (§4), also carries
-`seed`: a non-negative integer below 2^53. A runtime MUST derive it from persisted inputs
-only (the reference: sha256 over the room, the turn in flight and the dispatch's stream
-and ordinal within the turn), so that the same room state yields the same seeds and a
-rewound turn replays them. Script authors needing randomness SHOULD seed their own
-generator from it; `Math.random()` is not replayable.
-
-**`denyTool(reason)`** may be called in a `tool_use` handler. It refuses the tool call,
-and the reason goes back to the agent as the refusal. A refusal **fails open**: if the
-dispatch fails or times out, the call is allowed. A room admin's own commands are not
-tool calls and are never subject to `denyTool`.
-
-## 4. Inside a handler
-
-**Variable bridge.** These are available inside every handler:
-
-- `getvar(name, {defaults}?)`: reads a typed variable by id, or a path in the imported
-  variable tree.
-- `setvar(name, value)`: writes a value.
-- `incvar(name, delta = 1)` and `decvar(name, delta = 1)`: adjust a value.
-- The `variables` and `stat_data` tree views, and lodash as `_`.
-
-A leading `variables.` or `stat_data.` on a name is ignored.
-
-Hooks are module logic. They see the **keeper view** of the variables, including
-keeper-only typed variables and unexposed tree leaves. Everything they emit to players
-is authorial output, so authors MUST NOT emit keeper-only material.
-
-**Snapshot semantics.** Variables are snapshotted once per turn. A handler sees its own
-earlier writes as it requested them, before validation. It does not see writes that
-tools or the reply made earlier in the same turn. `variables_changed` reports which paths
-changed and how, never the new values.
-
-**Private state.** A hook-only JSON store, separate from the variables. It is available
-in hook handlers only, never in templates (§7).
-
-- `getstate(key)`: returns a copy of the stored value, or `undefined` when the key is
-  absent. Mutating the copy changes nothing stored.
-- `setstate(key, value)`: stores any JSON value, as it is at the moment of the call.
-  `null` or `undefined` deletes the key. A value that cannot be represented as JSON,
-  including NaN or Infinity anywhere inside it, is refused and logged.
-
-A runtime MUST keep this store out of the variable space: it is never rendered into the
-game-master prompt, never sent to any client, never reported by `variables_changed`, and
-never resolvable by conditions, panel bindings or `getvar`. Writes are buffered and applied
-like variable writes (§5); a handler sees its own earlier writes at once. At the start of
-each phase (the turn's first event, the after-reply phases, each module action) the
-handler's view MUST equal the persisted store. Writes made in a `tool_use` handler are not
-applied. Limits, which a runtime MUST enforce per write:
-
-| Limit | Value |
-|---|---|
-| Key | 1–64 characters of `A–Z a–z 0–9 _ . : -`; not `__proto__`, `constructor` or `prototype` |
-| One value | ≤ 1 MiB, UTF-8 bytes of its compact JSON |
-| Keys per room | ≤ 64 |
-| All values per room | ≤ 4 MiB |
-| Writes per dispatch | ≤ 32 |
-
-A write over a limit is skipped and reported, never fatal. A stored value that cannot be
-decoded reads as absent. The store is room state: a runtime that rewinds, exports or
-resets a room treats it like the room's typed variables.
-
-**Module actions.** `defineAction(name, spec, handler)` registers a mechanic the
-game-master agent can call during the turn; it is available in hook scripts only.
-
-- `name` matches `[a-z][a-z0-9_]{0,31}`. `spec` is an object: `description` (required,
-  ≤ 200 characters), `params` (optional free-text hint of the argument shape, ≤ 400
-  characters), `rolls` (optional, at most 8 identifier slots mapped to dice expressions).
-  `player` (optional boolean, default false) and `label` (optional: a string, or an
-  `{en, zh}` map, each text 1–60 characters). Unknown `spec` keys are ignored. A
-  registration that breaks these rules is dropped with a logged warning; for a repeated
-  name the first valid registration wins; a room has at most 24 actions.
-- A runtime exposes the room's actions to the agent as one tool. The reference names it
-  `module_action` with parameters `action` (an enum of the names) and `args` (an object),
-  and lists each action as `name — description [params]` in registration order.
-- Before each call the runtime refreshes the handler's view of variables and private
-  state from the store, rolls each declared slot with its own dice engine, and calls
-  `handler(args, event)` with `event = {actor, seed, rolls}` and
-  `rolls = {slot: {expr, total, dice}}`, plus `event.source`: `"keeper"` when the agent's
-  tool called it, `"player"` when a room member invoked it directly. `args` is at most 8 KiB
-  serialized.
-- The handler's return value is the tool result: a string as is, any other value as
-  compact JSON, `undefined` as a short confirmation; at most 4,000 characters.
-- Effects (`setvar`, `setstate`, `emitUI`, `emitPanel`) are applied immediately as in §5,
-  and its variable writes count as the turn's hook writes (`variables_changed` reports
-  them). `inject`, `narrate`, `rewriteReply` and `denyTool` have no effect in an action.
-- A handler that throws, times out, does not settle or returns a non-JSON value applies
-  **nothing**; the agent receives a failure line.
-- A `tool_use` handler sees and may deny action calls. A runtime MUST cap the calls per
-  turn (the reference: 16) and MUST NOT run two action calls concurrently.
-- **Player-invokable actions.** An action with `player: true` may also be run by any room
-  member directly, with no agent round (the reference: the `.act <name> [args]` command,
-  where `args` is a JSON object or free text delivered as `{"text": …}`). Its return value
-  is then **player-visible authorial output** — the same trust stance as `narrate` —
-  delivered to the whole room. A runtime MUST NOT reveal actions without `player: true`
-  to players (an unknown name and a keeper-only one get the same answer), MUST NOT consult
-  `tool_use` for such a call (it is not a tool call), MUST fire `variables_changed` once
-  after it when it wrote variables, and SHOULD let the agent learn the result on its next
-  turn. The seed of such a call MUST still derive from persisted inputs (the reference keeps
-  a per-room counter of these calls). A runtime MAY advertise the player actions to clients
-  (the reference: protocol 2.6 `state.actions`).
-
-**Effect emitters.** Each emitter's cap applies **per event dispatch**.
-
-| Emitter | Effect | Cap per dispatch |
-|---|---|---|
-| `inject(text)` | Adds a section to this turn's game-master prompt. Only useful in `turn_start`. | 8 × 4,000 characters |
-| `narrate(text)` | Appends to the player-visible reply, after a blank line, in event order (`turn_start` first, held until the reply exists, then the after-reply phases in order); a later handler's `reply` includes earlier narrations. No effect in `tool_use` or a module action; a turn that fails before producing a reply delivers none. | 8 × 2,000 characters |
-| `rewriteReply(text)` | Replaces the player-visible reply. It takes effect in `reply_ready`. | 1 × 4,000 characters |
-| `emitUI(blocks, opts?)` | Sends declarative UI blocks to clients as protocol `ui` frames. | 8 emissions × 16 blocks |
-| `emitPanel(panelId, payload)` | Sends an opaque event to one declared panel ([panels.md](panels.md) §4). | 20 per **turn** across all dispatches, each ≤ 32 KB serialized |
-| `log(text)` | Writes an operator-visible warning line. | — |
-
-**`emitUI`.** `blocks` uses the `ui` block vocabulary of [panels.md](panels.md) §3, in
-wire form: an `image` or `map_pin` names its picture by sha256 `hash`, not by path.
-`opts` takes the following keys; invalid values fall back or are dropped:
-
-- `panel`: `inline` (the default) or `sidebar`;
-- `id`: names a UI region, at most 64 characters;
-- `replace: true`: lets an inline frame update the prior frame with the same `id`.
-
-A block that fails its schema is dropped, and the rest of the emission survives. A
-runtime MUST drop an `image` or `map_pin` whose hash is not reachable from the room: the
-room's own media, or an asset of a pack enabled in the room.
-
-**`emitPanel`.** `panelId` is the wire id `<pack-id>/<panel-id>`. A payload that is not
-JSON-serializable is dropped, and so is one that contains NaN or Infinity or is larger
-than 32 KB. A runtime MUST deliver the event only to viewers whose panel manifest
-contains that panel. A payload for an `audience: all` panel reaches players.
-
-## 5. Contract: hooks request, the runtime applies
-
-Every effect goes into a buffer. Deterministic runtime code validates, caps and applies
-the buffer after the handler returns.
-
-- A `setvar` whose name is a declared typed variable goes through that variable's kind
-  and bounds validation ([cards.md](cards.md) §2). Any other name lands in the imported
-  variable tree.
-- A write that fails validation is skipped and reported, never fatal.
-- At most 64 writes are applied per dispatch.
-- A `setstate` write is checked against the private-state limits (§4) on top of the
-  state as stored, so the room-wide limits hold across every dispatch of a turn.
-
-## 6. Sandbox (normative floor)
-
-- **A fresh interpreter every turn.** The runtime builds the hook interpreter anew for
-  each turn (module actions run in the same interpreter as that turn's events). Nothing survives to the next turn or crosses into another room, so a value
-  kept in a script global resets every turn. Durable state MUST go through the variable
-  bridge or the private state store (§4).
-- **Hard limits.** A memory cap (the reference uses 64 MiB) and a time limit per
-  evaluation (1 s), armed **before** a script's top-level code runs. An infinite loop
-  times out and never hangs the runtime.
-- **Zero host I/O.** No filesystem, no network, no host callables. State goes into the
-  sandbox, and effects come out of it, only as serialized JSON.
-- **Inert on failure.** Any failure degrades to "hooks inert for this turn (logged)",
-  never to a broken turn. This covers a parse error, a timeout, a memory overrun and a
-  missing sandbox runtime.
-- **Kill switch.** An operator kill switch MUST exist, and it MUST disable hooks and
-  full-mode templates (§7) together.
-
-## 7. Templates (EJS) and macros
-
-World content, meaning lore entries and card prose, may embed EJS templates and
-SillyTavern macros.
-
-- **Full mode** executes real JavaScript, the official EJS library plus lodash, in a
-  sandbox of the class of §6 with the same caps. A template's variable writes are
-  buffered: at most 64 per evaluation, applied by deterministic code after rendering.
-- **Subset mode** renders when full mode is unavailable, disabled, or fails. A runtime
-  MUST then render a safe, read-only subset:
-  - `<% if / else if / else %>` blocks;
-  - `<%= %>` and `<%- %>` outputs;
-  - `getvar()`, `variables.<path>` and `stat_data.<path>` reads;
-  - the `{{getvar::…}}` and `{{var:…}}` macros;
-  - `@@if` conditions.
-- **Never raw.** In either mode, raw template syntax MUST NOT reach a language model.
-- **Macros:**
-  - `{{user}}`: the active player character, resolved at render time;
-  - `{{char}}`: bound to the card name when the card is imported;
-  - `{{time}}`, `{{date}}`: the **game** clock, not the wall clock;
-  - `{{roll:XdY}}`: rolled by the runtime's dice roller, never narrated into existence;
-  - `{{random}}`, `{{pick}}`, `{{newline}}`, `{{// comments}}`.
-- **Randomness.** `{{random}}`, `{{pick}}` and lore `probability` draw from real
-  randomness, seeded per room and turn, so a re-run of the same turn reproduces the same
-  draws. Macro draws and lore-probability draws use separate streams.
-- **Inert features.** The reference stubs `faker` to return empty strings, and ignores
-  `@INJECT` message-index positioning.
-
-Reference: `core/ejs_full.py`, `core/ejs_lite.py`, `agent/card_text.py`;
-`docs/cards.md` in the engine.
+- A skill's `hooks.js` is not run. A pack that ships one installs without it (the file is
+  reported as ignored); event logic belongs in a pack module ([pack.md](pack.md) §3).
+  Nothing replaces the hook API itself (events, `denyTool`, private state, module actions,
+  `emitUI`, `emitPanel`): a module answers through the module SDK's effects instead.
+- The templates and macros of 2.0 §7 are now [cards.md](cards.md) §7. Subset-mode rendering
+  and the kill switch that disabled hooks and full templates together are gone.
+- New in 3.0: explicit caps on every field, refused rather than cut; localized display text
+  for any language (`name-<lang>`), not only `zh`.
