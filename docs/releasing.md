@@ -32,6 +32,11 @@ finds on `PATH`, which is where the installers put it.
    and publish it. Running the workflow again for the same tag replaces the draft's files and
    leaves its text; a release that has been published is never changed — tag a new version.
 
+5. Once a release is published, the guides that say there is none are wrong: rewrite *Five minutes
+   to a table* in `README.md` / `README.zh.md`, section 1 of `docs/play.md` / `docs/play.zh.md`, the
+   opening and *Updating* in `docs/deploy.md` / `docs/deploy.zh.md`, and the *A release* item of
+   `docs/roadmap.md` / `docs/roadmap.zh.md` around the installer.
+
 A pre-release never becomes GitHub's "latest", so the one-line installers (which ask for the
 latest release) do not pick it up; install one with `TRPG_RELEASE_TAG=<tag>`.
 

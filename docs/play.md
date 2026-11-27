@@ -21,8 +21,8 @@ Loreweaver 3.0 has no published release yet, so the client runs from a checkout 
 cd clients/tui && bun run dev
 ```
 
-The desktop client, Loreweaver Studio, cannot connect to a 3.0 server yet; this terminal client is
-the one to use. On the connect screen, paste the two things your room admin sent you:
+The desktop client's 3.0 version (Loreweaver Studio, branch `v3` of its repository) is not released
+yet; this terminal client is the one to use. On the connect screen, paste the two things your room admin sent you:
 
 - a **ticket** — the server's peer-to-peer address, a long string starting with `endpoint`;
 - an **access key** — yours alone, and it is also your identity: there are no accounts and no

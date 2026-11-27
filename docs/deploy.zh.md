@@ -39,7 +39,9 @@ bun server/src/cli/main.ts --version
 
 ### 用一个文件代替整份源码
 
-`cd server && bun run build` 会把服务器编成一个可执行文件 `server/dist/loreweaver`，并跑一遍它的自检。命令都一样（`loreweaver serve`、`loreweaver key …`），运行它的机器上不需要装 Bun。设置用环境变量给它。把它放到 `<本地服务器目录>/server-bin/loreweaver`，终端客户端不在源码目录里运行时，「本地开服并开玩」跑的就是它。
+`cd server && bun run build` 会把服务器编成一个可执行文件 `server/dist/loreweaver`，并跑一遍它的自检。命令都一样（`loreweaver serve`、`loreweaver key …`），运行它的机器上不需要装 Bun。设置用环境变量给它，或者写在启动它的那个文件夹里的 `.env` 文件里。
+
+终端客户端也能这样编（`cd clients/tui && bun run compile` → `clients/tui/dist/loreweaver-tui`）。不在源码目录里运行时，它的「本地开服并开玩」跑的是和它放在同一个文件夹里的 `loreweaver`；没有的话是 `TRPG_LOCAL_SERVER_BIN` 指的那个；再没有就是 `<本地服务器目录>/server-bin/loreweaver`。一次发布就是每个平台这两个文件，外加把它们装到一起的安装脚本——见 [releasing.md](releasing.md)。
 
 ### 一个数据目录只跑一个服务器
 

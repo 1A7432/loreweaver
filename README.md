@@ -27,9 +27,10 @@ A world's rules, lore, cast, interface and staging are all plain files in docume
 
 Version 3.0 is a rewrite of Loreweaver on Bun and TypeScript. **There is no published 3.0 release
 yet**: today you run it from a checkout of this repository, with [Bun](https://bun.sh) installed.
-The desktop client, Loreweaver Studio, is being moved to 3.0 in
-[its own repository](https://github.com/1A7432/loreweaver-studio) and cannot connect to a 3.0
-server yet; until it can, the terminal client in this repository is how you play.
+The desktop client, Loreweaver Studio, has its 3.0 version on the `v3` branch of
+[its own repository](https://github.com/1A7432/loreweaver-studio), not released yet (the released
+Studio cannot connect to a 3.0 server); until it is, the terminal client in this repository is how
+you play.
 
 ### 1. Get the code
 
@@ -246,9 +247,8 @@ arguments and result. It is run by hand, one session at a time, and there is no 
 yet. Results are per model and per run, not a standing guarantee.
 
 **Young.** Networked multiplayer is comfortable for a table of friends but has rough edges. 3.0 has
-no published release yet, and the desktop client
-([companion repo](https://github.com/1A7432/loreweaver-studio)) cannot connect to it until its own
-move to 3.0 is done. The flagship module is in development. The forward plan, the open design
+no published release yet, and neither has the desktop client's 3.0 version
+([companion repo](https://github.com/1A7432/loreweaver-studio), branch `v3`). The flagship module is in development. The forward plan, the open design
 questions, and where help is most wanted: **[docs/roadmap.md](docs/roadmap.md)**.
 
 ---

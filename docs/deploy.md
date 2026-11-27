@@ -54,9 +54,14 @@ that room.
 
 `cd server && bun run build` compiles the server into one executable, `server/dist/loreweaver`, and
 runs its self-test. It takes the same commands (`loreweaver serve`, `loreweaver key …`) and needs no
-Bun on the machine it runs on. Give it its settings as environment variables. Placed at
-`<local server folder>/server-bin/loreweaver`, it is also what the terminal client's *Host locally &
-play* runs when the client is not inside a checkout.
+Bun on the machine it runs on. Give it its settings as environment variables, or in a `.env` file
+in the folder you start it in.
+
+The terminal client compiles the same way (`cd clients/tui && bun run compile` →
+`clients/tui/dist/loreweaver-tui`). Outside a checkout, its *Host locally & play* runs the
+`loreweaver` kept in the same folder as itself, else the one named by `TRPG_LOCAL_SERVER_BIN`,
+else `<local server folder>/server-bin/loreweaver`. A release is these two files per platform,
+with installers that put them together — [releasing.md](releasing.md).
 
 ### One server per data directory
 

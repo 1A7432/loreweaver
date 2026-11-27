@@ -44,6 +44,7 @@ Loreweaver is a self-hosted **AI Game Master / Keeper** for tabletop RPGs: a wor
 
 ## Checking, running, playing
 - Check: `bun install` at the root, then `bun run check` in `server/` and in `sdk/` (type check AND tests); `bun run build` in `server/` compiles the single-file server and runs its self-test (a real turn over a scripted model). Run it: `bun server/src/cli/main.ts serve` (`key <room> <role> <name>` hands out access keys; `pack` / `install` / `packs` / `uninstall` handle packs; `import-world <room> <card-file>` brings a SillyTavern card in from the shell); settings are `TRPG_*` variables, read in `server/src/infra/config.ts` only. Play it: `cd clients/tui && bun run dev`, then "Host locally & play". If your npm registry is a mirror, install with `--registry https://registry.npmjs.org/` so `bun.lock` does not record mirror URLs.
+- Release: a `v<version>` tag makes `.github/workflows/release.yml` build the server (`loreweaver`) and the terminal client (`loreweaver-tui`; `bun run compile` in `clients/tui/`) as one file each per platform, run both programs' `selftest` and the installers (`scripts/install.sh`, `scripts/install.ps1`) on every platform, and leave a DRAFT release for a person to publish. `docs/releasing.md` is the checklist; run the workflow by hand to rehearse after changing any of it.
 - A live-model run (`server/eval/playtest.ts`, logs under the ignored `playtest/`) is how behaviour is checked: a judge of secrecy, the dice-first rule, and a probe of every tool call. One session at a time.
 
 ## Working conventions for AI agents

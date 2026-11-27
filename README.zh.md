@@ -25,7 +25,7 @@ Loreweaver 是一个开源的 **AI RPG 引擎与开放标准**。你和朋友出
 
 ## 五分钟开一局
 
-3.0 是用 Bun 和 TypeScript 重写的 Loreweaver。**3.0 还没有发布任何版本**：现在要从这个仓库的源码运行，机器上需要装好 [Bun](https://bun.sh)。桌面客户端 Loreweaver Studio 正在[它自己的仓库](https://github.com/1A7432/loreweaver-studio)里迁到 3.0，现在还连不上 3.0 的服务器；在那之前，用这个仓库里的终端客户端玩。
+3.0 是用 Bun 和 TypeScript 重写的 Loreweaver。**3.0 还没有发布任何版本**：现在要从这个仓库的源码运行，机器上需要装好 [Bun](https://bun.sh)。桌面客户端 Loreweaver Studio 的 3.0 版本在[它自己仓库](https://github.com/1A7432/loreweaver-studio)的 `v3` 分支上，还没有发布（已发布的 Studio 连不上 3.0 的服务器）；在那之前，用这个仓库里的终端客户端玩。
 
 ### 1. 取代码
 
@@ -154,7 +154,7 @@ bun server/src/cli/main.ts install gh:owner/repo --yes   # 或者本地路径、
 
 **只有实测数据的部分。** *活的*模型行不行是另一个问题，CI 绿了也回答不了。有一个真模型实测（`server/eval/playtest.ts`），让脚本化的玩家去对真模型：由另一个真模型当裁判，拿桌上这一回合看到的全部内容对照世界的保密材料逐条评审（正当赢得的揭示不算漏，裁判打不通也按漏算）；每回合检查该掷骰的地方有没有掷；每一次工具调用连同参数和结果都记下来。它是手动跑的，一次一场，3.0 还没有每晚自动跑。结论只对那个模型、那一次运行有效，不是一张长期保票。
 
-**年轻的部分。** 联网多人对一桌熟人来说够用了，但边角还粗糙。3.0 还没有发布版本；桌面客户端（[配套仓库](https://github.com/1A7432/loreweaver-studio)）要等它自己迁到 3.0 才能连上。旗舰模组在做。往前的计划、公开讨论过的设计问题、以及最缺人手的地方，都在 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。
+**年轻的部分。** 联网多人对一桌熟人来说够用了，但边角还粗糙。3.0 还没有发布版本，桌面客户端的 3.0 版本（[配套仓库](https://github.com/1A7432/loreweaver-studio)的 `v3` 分支）也还没有发布。旗舰模组在做。往前的计划、公开讨论过的设计问题、以及最缺人手的地方，都在 **[docs/roadmap.zh.md](docs/roadmap.zh.md)**。
 
 ---
 
