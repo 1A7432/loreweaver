@@ -19,6 +19,7 @@ import {
   decodeByteReply,
   encodeByteLine,
   HeaderReader,
+  HELLO_TIMEOUT_MS,
   MAX_BYTE_HEADER_BYTES,
   PROTOCOL_MAJOR,
   type ClientFrame,
@@ -44,7 +45,19 @@ export interface IrohOptions {
   readonly secretKey?: Uint8Array;
   /** A server's byte-stream stall timeout (default the protocol's `BYTE_STALL_MS`); tests shorten it. */
   readonly byteStallMs?: number;
+  /** How long a server waits for a connection's hello (default the protocol's `HELLO_TIMEOUT_MS`); tests shorten it. */
+  readonly helloTimeoutMs?: number;
+  /** How long a server that has said its last word waits for the peer to hang up (default `CLOSE_GRACE_MS`); tests shorten it. */
+  readonly closeGraceMs?: number;
 }
+
+/**
+ * After the server's last line (a fatal error) it ends its side of the stream and waits this
+ * long for the client to read it and hang up, before closing the connection itself. Closing at
+ * once can discard the line still in flight — QUIC drops unsent data on close — and the client
+ * would then see a dropped link where it should have read `bad_key`.
+ */
+export const CLOSE_GRACE_MS = 3_000;
 
 async function bind(options: IrohOptions, accept: boolean): Promise<Endpoint> {
   const builder = Endpoint.builder();
@@ -163,6 +176,8 @@ export class IrohServer {
   async #serve(incoming: NonNullable<Awaited<ReturnType<Endpoint["acceptNext"]>>>): Promise<void> {
     const connection = await (await incoming.accept()).connect();
     this.#connections.add(connection);
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    let overdue: ReturnType<typeof setTimeout> | undefined;
     try {
       const stream = await connection.acceptBi();
       const writer = new Writer(stream.send);
@@ -174,11 +189,17 @@ export class IrohServer {
         close: () => {
           if (!open) return;
           open = false;
-          void writer.finish().then(() => {
+          // The last line is on its way: end our side, and let the client hang up once it
+          // has read it (the read loop below then ends). Only a client that does not is cut off.
+          void writer.finish();
+          grace = setTimeout(() => {
             connection.close(0n, bytes("closed"));
-          });
+          }, this.#options.closeGraceMs ?? CLOSE_GRACE_MS);
         },
       });
+      overdue = setTimeout(() => {
+        session.helloOverdue();
+      }, this.#options.helloTimeoutMs ?? HELLO_TIMEOUT_MS);
       const reader = new LineReader(
         (value) => {
           session.receive(value);
@@ -197,6 +218,8 @@ export class IrohServer {
       open = false;
       session.closed();
     } finally {
+      clearTimeout(grace);
+      clearTimeout(overdue);
       this.#connections.delete(connection);
       connection.close(0n, bytes("closed"));
     }

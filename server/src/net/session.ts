@@ -112,6 +112,15 @@ export class Session {
     this.#call(joined.room, joined.member, frame);
   }
 
+  /**
+   * The transport's clock says a connection has been open `HELLO_TIMEOUT_MS` — long enough
+   * for any client to say hello. One that has not is told so and closed: a link that never
+   * speaks would otherwise be held for as long as its peer cared to keep it.
+   */
+  helloOverdue(): void {
+    if (this.#joined === null && !this.#ended) this.#error("hello_timeout", true);
+  }
+
   /** The transport reports the connection gone. */
   closed(): void {
     this.#ended = true;

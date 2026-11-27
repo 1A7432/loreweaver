@@ -9,6 +9,7 @@
   "net.error.forbidden": "You are not allowed to do that.",
   "net.error.header_too_long": "That stream's header line is too long.",
   "net.error.hello_first": "The first frame must be hello.",
+  "net.error.hello_timeout": "No hello arrived in time.",
   "net.error.input_too_long": "That message is too long.",
   "net.error.invalid_params": "Those parameters are not valid.",
   "net.error.media_bad_hash": "That is not a sha256 hash (64 lowercase hex digits).",

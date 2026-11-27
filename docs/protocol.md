@@ -216,10 +216,22 @@ client marks the session ended).
 | `bad_key` | yes | The key is unknown. |
 | `bad_name` | yes | `hello.name` is over 64 code points. |
 | `hello_first` | yes | An `input` or `call` arrived before a successful `hello`. |
+| `hello_timeout` | yes | No `hello` arrived within 15 seconds of the connection opening (`HELLO_TIMEOUT_MS`). |
 | `bad_frame` | yes before the welcome, no after it | A frame that cannot be read: not JSON, not an object, no string `type`, an unknown `type`, a missing required field, an `input` or `call` without a valid `rid`, or a second `hello`. |
 
 A malformed `input` or `call` that does carry a valid `rid` is not an `error`: it is answered
 with a `result` refusal (`input_too_long`, `invalid_params`).
+
+**How a connection ends after a fatal error.** The server writes the `error` line, ends its
+side of the control stream, and leaves the connection open for the client to hang up — for
+up to 3 seconds, after which it closes the connection itself. A client that has read a fatal
+`error` closes the connection. (A server that closed at once could lose the line still in
+flight, and the client would see a dropped link where it should have read `bad_key`.)
+
+**Waiting for the first word.** Both sides bound it by the same 15 seconds. A server that
+has not received `hello` answers `hello_timeout` and closes. A client that has sent `hello`
+and received neither `welcome` nor a fatal `error` drops the link; unlike a fatal error this
+is a failed connection like any other, and it may dial again.
 
 ## 5. Requests and results
 

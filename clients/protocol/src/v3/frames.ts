@@ -271,6 +271,12 @@ export const MAX_INPUT_CHARS = 8000;
  * after `resume.after`, but never more than the newest `RESUME_LIMIT`).
  */
 export const RESUME_LIMIT = 200;
+/**
+ * How long either side waits for the other's first word: a server for `hello` on a new
+ * connection, a client for `welcome` after its hello. Past it the server answers
+ * `hello_timeout` and closes; a client drops the link and may dial again.
+ */
+export const HELLO_TIMEOUT_MS = 15_000;
 /** Events in one `log.page`; asking for more is refused. */
 export const PAGE_LIMIT = 100;
 /** View names in one `view.subscribe` / `view.unsubscribe`. */

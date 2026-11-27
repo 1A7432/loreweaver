@@ -9,6 +9,7 @@
   "net.error.forbidden": "你没有这个权限。",
   "net.error.header_too_long": "这个传输的请求行太长了。",
   "net.error.hello_first": "第一帧必须是 hello。",
+  "net.error.hello_timeout": "迟迟没有收到握手。",
   "net.error.input_too_long": "这条消息太长了。",
   "net.error.invalid_params": "参数不合法。",
   "net.error.media_bad_hash": "这不是 sha256 哈希（64 位小写十六进制）。",
