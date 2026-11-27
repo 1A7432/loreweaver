@@ -4,6 +4,7 @@ import { createRoot } from "@opentui/react"
 import App, { type AppPrefill } from "./App"
 import { forgetServer, loadConnectMemory, rememberLocalKey, rememberServer, saveConnectMemory, type SavedServer } from "./connectMemory"
 import { defaultTuiLocale, tt } from "./i18n"
+import { resolveClientVersion } from "./version"
 
 interface Args {
   command?: string
@@ -32,6 +33,18 @@ const args = parseArgs(Bun.argv.slice(2))
 if (args.command === "help" || args.command === "--help" || args.command === "-h") {
   console.log(tt(defaultTuiLocale(), "cli.usage"))
   process.exit(0)
+}
+
+// For scripts and a release build: neither opens the screen.
+if (args.command === "--version") {
+  console.log(resolveClientVersion())
+  process.exit(0)
+}
+if (args.command === "selftest") {
+  const { selftest } = await import("./selftest")
+  const report = await selftest()
+  console.log(JSON.stringify(report))
+  process.exit(report.ok ? 0 : 1)
 }
 
 const remembered = await loadConnectMemory()

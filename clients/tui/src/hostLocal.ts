@@ -4,9 +4,10 @@
 //      run with Bun from the repository root (so the root `.env` configures the model, exactly
 //      as `bun server/src/cli/main.ts serve` would);
 //   2. a prebuilt binary named by `TRPG_LOCAL_SERVER_BIN`;
-//   3. a prebuilt binary at `<local server folder>/server-bin/loreweaver`.
-// Nothing is downloaded: there is no published 3.0 server to download yet. When none of these
-// exists the bring-up fails and says so.
+//   3. the server binary beside this client's own executable — a release archive unpacks the
+//      two into one folder, and an installer keeps them together;
+//   4. a prebuilt binary at `<local server folder>/server-bin/loreweaver`.
+// Nothing is downloaded. When none of these exists the bring-up fails and says so.
 //
 // The server runs `serve --local` (loopback only — the client dials it with a loopback endpoint,
 // so this works with no network at all) with its data under the local server folder
@@ -14,7 +15,7 @@
 // first_key?}`. `first_key` — an admin key — appears only on a fresh data directory, so the shell
 // keeps it; when the data directory exists and no key was kept, a new admin key is minted with the
 // server's own `key` command before it starts.
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { chmod, mkdir } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import type { MessageKey } from "./i18n"
@@ -95,14 +96,40 @@ function bunExecutable(): string | undefined {
   return Bun.which("bun") ?? undefined
 }
 
+const SERVER_BINARY = process.platform === "win32" ? "loreweaver.exe" : "loreweaver"
+
+/**
+ * The server binary in the folder of this client's own executable, or undefined. Only a
+ * compiled client has one for a neighbour: run by Bun, the executable is `bun`, and what sits
+ * beside `bun` is not ours. A link to the client is followed to where the client really is.
+ */
+export function siblingServer(execPath: string = process.execPath): string | undefined {
+  let own: string
+  try {
+    own = realpathSync(execPath)
+  } catch {
+    return undefined
+  }
+  if (/^bun(\.exe)?$/i.test(basename(own))) return undefined
+  const candidate = join(dirname(own), SERVER_BINARY)
+  return candidate !== own && existsSync(candidate) ? candidate : undefined
+}
+
 /** How to run the server here, or undefined when there is none. */
-export function resolveServerCommand(home: string | undefined, env: Record<string, string | undefined> = process.env, searchFrom?: string): ServerCommand | undefined {
+export function resolveServerCommand(
+  home: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  searchFrom?: string,
+  execPath: string = process.execPath,
+): ServerCommand | undefined {
   const paths = resolveLocalServerPaths(home)
   const entry = findCheckoutEntry(searchFrom)
   const bun = bunExecutable()
   if (entry && bun) return { kind: "checkout", argv: [bun, entry], cwd: dirname(dirname(dirname(dirname(entry)))) }
   const named = env.TRPG_LOCAL_SERVER_BIN?.trim()
   if (named && existsSync(named)) return { kind: "binary", argv: [named], cwd: paths.home }
+  const sibling = siblingServer(execPath)
+  if (sibling) return { kind: "binary", argv: [sibling], cwd: paths.home }
   if (existsSync(paths.binary)) return { kind: "binary", argv: [paths.binary], cwd: paths.home }
   return undefined
 }

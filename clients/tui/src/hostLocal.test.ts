@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { bringUpServer, findCheckoutEntry, HostLocalError, parseReadyLine, resolveServerCommand, type BringUpLine, type HostHandle } from "./hostLocal"
+import { bringUpServer, findCheckoutEntry, HostLocalError, parseReadyLine, resolveServerCommand, siblingServer, type BringUpLine, type HostHandle } from "./hostLocal"
 
 const dirs: string[] = []
 const handles: HostHandle[] = []
@@ -70,6 +70,34 @@ describe("finding a server", () => {
     writeFileSync(bundled, "")
     chmodSync(bundled, 0o755)
     expect(resolveServerCommand(home, {}, nowhere)).toEqual({ kind: "binary", argv: [bundled], cwd: home })
+  })
+
+  test("a compiled client: the server binary beside it is found, through a link too, and never beside bun", () => {
+    const nowhere = tempDir()
+    const home = tempDir()
+    const folder = tempDir()
+    const exe = process.platform === "win32" ? ".exe" : ""
+    const client = join(folder, `loreweaver-tui${exe}`)
+    writeFileSync(client, "")
+    expect(siblingServer(client)).toBeUndefined()
+    const server = join(folder, `loreweaver${exe}`)
+    writeFileSync(server, "")
+    expect(siblingServer(client)).toBe(realpathSync(server))
+    expect(resolveServerCommand(home, {}, nowhere, client)).toEqual({ kind: "binary", argv: [realpathSync(server)], cwd: home })
+    // The environment's choice still comes first.
+    const named = join(tempDir(), "lw-server")
+    writeFileSync(named, "")
+    expect(resolveServerCommand(home, { TRPG_LOCAL_SERVER_BIN: named }, nowhere, client)?.argv).toEqual([named])
+    // What sits beside `bun` is not this client's server; a file that is not there has no neighbour.
+    const bun = join(folder, `bun${exe}`)
+    writeFileSync(bun, "")
+    expect(siblingServer(bun)).toBeUndefined()
+    expect(siblingServer(join(folder, "gone"))).toBeUndefined()
+    if (process.platform !== "win32") {
+      const linked = join(tempDir(), "loreweaver-tui")
+      symlinkSync(client, linked)
+      expect(siblingServer(linked)).toBe(realpathSync(server))
+    }
   })
 
   test("the ready line: a ticket and the first key; a refusal by code; anything else is not it", () => {

@@ -1,0 +1,294 @@
+name: release
+# Builds what a person downloads to run Loreweaver 3 without a checkout or Bun — the server
+# (`loreweaver`) and the terminal client (`loreweaver-tui`), each compiled to one file, for
+# every platform they are released for — and attaches the archives, their checksums and the
+# two installers to a DRAFT GitHub release. A person reads the draft and publishes it; CI
+# never publishes alone, and never changes a release that has been published.
+#
+# Release decision = push the tag `v<version>` (or `v<version>-<suffix>` for a pre-release),
+# where <version> is the version server/package.json and clients/tui/package.json both state.
+# `workflow_dispatch` is the rehearsal: everything is built, self-tested, packed and installed
+# on every platform, the files are kept as the run's artifacts, and no release is touched.
+#
+# Asset names carry no version (`loreweaver-linux-x64.tar.gz`), so the installers can ask for
+# `releases/latest/download/<name>` without knowing one. docs/releasing.md is the checklist.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  # A tag's release work is never cancelled by another ref's.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: The tag and the packages agree
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      prerelease: ${{ steps.read.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version server/package.json)"
+          client="$(jq -r .version clients/tui/package.json)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "server/package.json states no release version: $version"; exit 1; }
+          [ "$client" = "$version" ] || { echo "the server is $version but the terminal client is $client"; exit 1; }
+          prerelease=false
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            case "$GITHUB_REF_NAME" in
+              "v$version") ;;
+              "v$version"-?*) prerelease=true ;;
+              *) echo "tag $GITHUB_REF_NAME does not match the packages ($version): expected v$version or v$version-<suffix>"; exit 1 ;;
+            esac
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Loreweaver $version (pre-release: $prerelease)"
+
+  check:
+    # What is released is what was checked: the gates of ci.yml, on the tagged commit itself.
+    name: Type checks and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+        working-directory: sdk
+      - run: bun run check
+        working-directory: server
+      - run: bun run test
+        working-directory: clients/protocol
+      - run: bun run check
+        working-directory: clients/tui
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: macos-latest
+            platform: macos-arm64
+          - os: windows-latest
+            platform: windows-x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      EXE: ${{ runner.os == 'Windows' && '.exe' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+
+      - name: build the server
+        working-directory: server
+        # The two entry points and their order are what `roomWorkerEntry` relies on (as in ci.yml).
+        run: bun build --compile src/cli/main.ts src/worker/main.ts --outfile dist/loreweaver
+      - name: the server's self-test, and its version
+        working-directory: server
+        run: |
+          ./dist/loreweaver$EXE selftest
+          built="$(./dist/loreweaver$EXE --version)"
+          [ "$built" = "$VERSION" ] || { echo "the server says it is $built, not $VERSION"; exit 1; }
+
+      - name: build the terminal client
+        working-directory: clients/tui
+        run: bun build --compile ./src/index.tsx --outfile dist/loreweaver-tui
+      - name: the terminal client's self-test, and its version
+        working-directory: clients/tui
+        run: |
+          ./dist/loreweaver-tui$EXE selftest
+          built="$(./dist/loreweaver-tui$EXE --version)"
+          [ "$built" = "$VERSION" ] || { echo "the terminal client says it is $built, not $VERSION"; exit 1; }
+
+      - name: pack
+        run: scripts/package-release.sh "${{ matrix.platform }}" "$VERSION" "server/dist/loreweaver$EXE" "clients/tui/dist/loreweaver-tui$EXE" out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: archive-${{ matrix.platform }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  bundle:
+    # All or nothing: this job needs every platform's build, so a release never holds a
+    # partial set (an installer would then fail on whichever platform was left out).
+    name: Checksums and installers
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: archive-*
+          path: release
+          merge-multiple: true
+      - name: SHA256SUMS, install.sh, install.ps1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          for name in loreweaver-linux-x64.tar.gz loreweaver-linux-arm64.tar.gz loreweaver-macos-arm64.tar.gz loreweaver-windows-x64.zip; do
+            [ -f "$name" ] || { echo "::error::$name was not built"; exit 1; }
+          done
+          sha256sum loreweaver-*.tar.gz loreweaver-*.zip > SHA256SUMS
+          cp ../scripts/install.sh ../scripts/install.ps1 .
+          cat SHA256SUMS
+          ls -la
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  install:
+    # The installers, run as a person would run them, against exactly the files a release
+    # would hold: install, run both programs from where they landed, install again over it,
+    # and be refused by a checksum that does not match.
+    name: Install (${{ matrix.os }})
+    needs: [version, bundle]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: release
+
+      - name: install.sh
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/home" TRPG_ORIGIN="$PWD/release"
+          unset TRPG_HOME TRPG_BIN TRPG_RELEASE_TAG
+          mkdir -p "$HOME/.local/bin"
+          # Something of the same name that is not ours (the 2.x launcher) is kept, not lost.
+          printf '#!/bin/sh\necho 2.x\n' > "$HOME/.local/bin/loreweaver"
+          bash release/install.sh
+          [ "$(cat "$HOME/.local/bin/loreweaver.old")" = "$(printf '#!/bin/sh\necho 2.x')" ]
+          bash release/install.sh   # again, over itself
+          [ "$("$HOME/.local/bin/loreweaver" --version)" = "$VERSION" ]
+          [ "$("$HOME/.local/bin/loreweaver-tui" --version)" = "$VERSION" ]
+          "$HOME/.local/bin/loreweaver" selftest
+          # Run through the link, the client still finds itself and its native parts.
+          "$HOME/.local/bin/loreweaver-tui" selftest
+          [ -z "$(ls -A "$HOME/.loreweaver" | grep -v '^bin$' || true)" ] || { echo "the installer left something behind:"; ls -A "$HOME/.loreweaver"; exit 1; }
+
+          # A checksum that does not match installs nothing.
+          mkdir "$RUNNER_TEMP/tampered" && cp release/* "$RUNNER_TEMP/tampered/"
+          sed -i.bak -E 's/^[0-9a-f]{8}/00000000/' "$RUNNER_TEMP/tampered/SHA256SUMS"
+          export HOME="$RUNNER_TEMP/home2"
+          mkdir -p "$HOME"
+          if TRPG_ORIGIN="$RUNNER_TEMP/tampered" bash release/install.sh; then echo "a tampered download was installed"; exit 1; fi
+          [ ! -e "$HOME/.loreweaver/bin/loreweaver" ] && [ ! -e "$HOME/.local/bin/loreweaver" ]
+
+      - name: install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:TRPG_HOME = Join-Path $env:RUNNER_TEMP "lw"
+          $env:TRPG_ORIGIN = Join-Path $PWD "release"
+          $env:TRPG_NO_MODIFY_PATH = "1"
+          Remove-Item Env:TRPG_BIN, Env:TRPG_RELEASE_TAG -ErrorAction SilentlyContinue
+          $bin = Join-Path $env:TRPG_HOME "bin"
+          & ./release/install.ps1
+          & ./release/install.ps1   # again, over itself
+          if ((& "$bin/loreweaver.exe" --version) -ne $env:VERSION) { throw "the installed server is not $env:VERSION" }
+          if ((& "$bin/loreweaver-tui.exe" --version) -ne $env:VERSION) { throw "the installed client is not $env:VERSION" }
+          & "$bin/loreweaver.exe" selftest
+          if ($LASTEXITCODE -ne 0) { throw "the installed server's self-test failed" }
+          & "$bin/loreweaver-tui.exe" selftest
+          if ($LASTEXITCODE -ne 0) { throw "the installed client's self-test failed" }
+          $left = @(Get-ChildItem -Force -LiteralPath $env:TRPG_HOME | Where-Object { $_.Name -ne "bin" })
+          if ($left.Count -ne 0) { throw "the installer left something behind: $($left.Name -join ', ')" }
+
+          # A checksum that does not match installs nothing.
+          $tampered = Join-Path $env:RUNNER_TEMP "tampered"
+          Copy-Item -Recurse release $tampered
+          (Get-Content "$tampered/SHA256SUMS") -replace '^[0-9a-f]{8}', '00000000' | Set-Content "$tampered/SHA256SUMS"
+          $env:TRPG_HOME = Join-Path $env:RUNNER_TEMP "lw2"
+          $env:TRPG_ORIGIN = $tampered
+          $refused = $false
+          try { & ./release/install.ps1 } catch { $refused = $true }
+          if (-not $refused) { throw "a tampered download was installed" }
+          if (Test-Path (Join-Path $env:TRPG_HOME "bin/loreweaver.exe")) { throw "a tampered download left a program behind" }
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, bundle, install]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the draft release and upload its files
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: release
+      - name: Create the draft, or refresh it while it is still a draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          Loreweaver $VERSION — the server (\`loreweaver\`) and the terminal client (\`loreweaver-tui\`), each one file. No Bun and no checkout are needed.
+
+          **Install**
+          - macOS / Linux: \`curl -fsSL https://github.com/$REPO/releases/download/$TAG/install.sh | TRPG_RELEASE_TAG=$TAG bash\`
+          - Windows (PowerShell): \`\$env:TRPG_RELEASE_TAG="$TAG"; irm https://github.com/$REPO/releases/download/$TAG/install.ps1 | iex\`
+
+          Or download your platform's archive below and unpack it: the two programs run from any folder, as long as they stay together. \`SHA256SUMS\` lists every archive's SHA-256; the installers check it.
+
+          Built from $GITHUB_SHA by the \`release\` workflow.
+          EOF
+          state="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          case "$state" in
+            none)
+              flags=(--draft --verify-tag --title "Loreweaver $VERSION" --notes-file notes.md)
+              [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+              gh release create "$TAG" --repo "$REPO" "${flags[@]}" release/*
+              ;;
+            true)
+              # A rerun for the same tag: the draft's files are replaced, its text is left as someone may have edited it.
+              gh release upload "$TAG" --repo "$REPO" --clobber release/*
+              ;;
+            *)
+              echo "::error::release $TAG is already published; a published release is never changed. Tag a new version."
+              exit 1
+              ;;
+          esac
+          echo "Draft: $(gh release view "$TAG" --repo "$REPO" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"
