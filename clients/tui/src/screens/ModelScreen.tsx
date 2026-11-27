@@ -52,6 +52,23 @@ function keyText(key: { set: boolean; masked: string | null }, locale: string): 
   return key.set && key.masked !== null ? tt(locale, "model.keyIs", { masked: stripControlChars(key.masked) }) : tt(locale, "model.noKey")
 }
 
+/**
+ * What to call where a lane's model is served: the provider's name, or — for an endpoint the
+ * operator named by URL only — the host of that URL. "?" only when the server says neither.
+ */
+export function endpointName(provider: string | null, baseUrl: string | null): string {
+  if (provider !== null) return stripControlChars(provider)
+  if (baseUrl !== null) {
+    try {
+      const host = new URL(baseUrl).host
+      if (host !== "") return stripControlChars(host)
+    } catch {
+      // not a URL: fall through
+    }
+  }
+  return "?"
+}
+
 function laneSummary(lane: AdminModelLane, locale: string): Summary {
   const label = tt(locale, LANE_LABELS[lane.lane])
   const target: Target = { kind: "lane", lane: lane.lane }
@@ -60,7 +77,7 @@ function laneSummary(lane: AdminModelLane, locale: string): Summary {
   if (lane.provider === null && lane.model === null) return { target, head: `${label}: ${tt(locale, "model.notConfigured")}`, detail: tt(locale, SOURCE_LABELS[lane.source]) }
   return {
     target,
-    head: `${label}: ${stripControlChars(lane.provider ?? "?")} / ${stripControlChars(lane.model ?? "?")}`,
+    head: `${label}: ${endpointName(lane.provider, lane.baseUrl)} / ${stripControlChars(lane.model ?? "?")}`,
     detail: `${tt(locale, SOURCE_LABELS[lane.source])} · ${keyText(lane.key, locale)}`,
   }
 }
@@ -71,7 +88,7 @@ function imageSummary(image: AdminModelView["imagegen"], locale: string): Summar
   if (!image.enabled) return { target, head: `${label}: ${tt(locale, "model.image.off")}`, detail: tt(locale, SOURCE_LABELS[image.source]) }
   return {
     target,
-    head: `${label}: ${stripControlChars(image.provider ?? "?")} / ${stripControlChars(image.model ?? "?")}${image.size ? ` · ${stripControlChars(image.size)}` : ""}`,
+    head: `${label}: ${endpointName(image.provider, image.baseUrl)} / ${stripControlChars(image.model ?? "?")}${image.size ? ` · ${stripControlChars(image.size)}` : ""}`,
     detail: `${tt(locale, SOURCE_LABELS[image.source])} · ${keyText(image.key, locale)}`,
   }
 }

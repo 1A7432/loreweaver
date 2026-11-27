@@ -33,3 +33,29 @@ export function attributeLines(stats: readonly ViewStat[] | undefined): Attribut
     line: `${padCells(label, width)} ${stripControlChars(String(stat.value))}`,
   }))
 }
+
+/** The attributes a panel lists; a sheet with more shows them on the character screen. */
+export const MAX_PANEL_ATTRIBUTES = 12
+/**
+ * The cells a panel's attribute rows always have: the narrowest sidebar (24), inside the
+ * roster's frame and the panel's own. Two attributes share a row when both fit in this.
+ */
+export const PANEL_ATTRIBUTE_CELLS = 16
+const COLUMN_GAP = 2
+
+/**
+ * The rows of a compact panel: every attribute of the sheet (up to `MAX_PANEL_ATTRIBUTES`), two
+ * to a row when the widest fits twice in `cells`, else one to a row. Listing only the first few
+ * hid the rest of a sheet — CoC's POW, EDU and Luck come after its sixth.
+ */
+export function attributeRows(stats: readonly ViewStat[] | undefined, cells: number = PANEL_ATTRIBUTE_CELLS): string[] {
+  const lines = attributeLines((stats ?? []).slice(0, MAX_PANEL_ATTRIBUTES)).map((entry) => entry.line)
+  const widest = Math.max(0, ...lines.map((line) => Bun.stringWidth(line)))
+  if (lines.length < 2 || widest * 2 + COLUMN_GAP > cells) return lines
+  const rows: string[] = []
+  for (let i = 0; i < lines.length; i += 2) {
+    const right = lines[i + 1]
+    rows.push(right === undefined ? (lines[i] as string) : `${padCells(lines[i] as string, widest + COLUMN_GAP)}${right}`)
+  }
+  return rows
+}

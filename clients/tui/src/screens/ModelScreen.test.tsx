@@ -4,7 +4,7 @@ import { logItems } from "../log"
 import { FakeServer, liveRender, pump, waitFor, waitForScreen, withoutActWarning } from "../testkit"
 import { themes } from "../themes"
 import { itemsToTranscript } from "../transcript"
-import { ModelScreen } from "./ModelScreen"
+import { endpointName, ModelScreen } from "./ModelScreen"
 
 const harnesses: Array<{ renderer: { destroy(): void } }> = []
 const connections: Connection[] = []
@@ -82,6 +82,15 @@ function adminServer(view: unknown = MODEL): FakeServer {
   server.views.set("admin/model", view)
   return server
 }
+
+test("an endpoint the operator named by URL only is called by its host, never \"?\" while an address is known", () => {
+  expect(endpointName("deepseek", "https://api.deepseek.com/v1")).toBe("deepseek")
+  expect(endpointName(null, "https://llm.example.net:8443/v1")).toBe("llm.example.net:8443")
+  expect(endpointName(null, "not a url")).toBe("?")
+  expect(endpointName(null, null)).toBe("?")
+  // A name from a server is content: control characters never reach the terminal.
+  expect(endpointName("evil\x1b[2Jname", null)).not.toContain("\x1b")
+})
 
 describe("ModelScreen", () => {
   test("shows each lane's provider, model, where it comes from and its key; a lane that follows the Keeper's is one short line; pictures too", async () => {

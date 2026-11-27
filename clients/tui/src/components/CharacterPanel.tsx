@@ -1,7 +1,7 @@
 import { stripControlChars, type MeView } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
-import { attributeLines } from "./characterAttributes"
+import { attributeRows } from "./characterAttributes"
 import { FitText } from "./FitText"
 
 /** The viewer's own character, as the `me` view carries it. */
@@ -67,9 +67,9 @@ export function CharacterPanel({ character, theme, locale }: CharacterPanelProps
           {stripControlChars(res.label || res.id)} {bar(res.value, res.max)} {res.value}/{res.max}
         </text>
       ))}
-      {attributeLines(character.attributes).slice(0, 6).map(({ key, line }) => (
-        <FitText key={key} fg={theme.fg} cut="middle">
-          {line}
+      {attributeRows(character.attributes).map((row, index) => (
+        <FitText key={index} fg={theme.fg} cut="middle">
+          {row}
         </FitText>
       ))}
       {character.status.length > 0 ? (
