@@ -23,12 +23,12 @@ const KEYS = {
   ],
 }
 
-async function open(server: FakeServer, onBack: () => void = () => {}, notice?: string) {
+async function open(server: FakeServer, onBack: () => void = () => {}, notice?: string, renderOptions: { kittyKeyboard?: boolean } = {}) {
   const connection = server.connect()
   connections.push(connection)
   await connection.start()
   await waitFor("the welcome", () => connection.session.status === "online")
-  const harness = await withoutActWarning(() => liveRender(<AccessKeysScreen connection={connection} theme={themes.lamplight} themeName="lamplight" locale="en" platform="linux" copyNotice={notice} onBack={onBack} />, { width: 110, height: 34 }))
+  const harness = await withoutActWarning(() => liveRender(<AccessKeysScreen connection={connection} theme={themes.lamplight} themeName="lamplight" locale="en" platform="linux" copyNotice={notice} onBack={onBack} />, { width: 110, height: 34, ...renderOptions }))
   harnesses.push(harness)
   const screen = (what: string, has: (frame: string) => boolean) => waitForScreen(harness, what, has)
   const calls = () => server.current.calls("command.run").map((call) => call.params)
@@ -242,7 +242,11 @@ describe("AccessKeysScreen", () => {
   test("while a key is being minted, Esc waits for the answer instead of losing the key", async () => {
     const server = adminServer()
     server.onCall = () => null
-    const { harness, screen, calls, press } = await open(server)
+    // The Esc must REACH the screen while the mint is pending. A bare Esc byte is held back by
+    // the input parser for some milliseconds of real time (it may begin a longer sequence), so
+    // it could land after the answer and close the key panel instead; the kitty keyboard
+    // protocol's Esc is a whole sequence, delivered as it is pressed.
+    const { harness, screen, calls, press } = await open(server, () => {}, undefined, { kittyKeyboard: true })
     await screen("the keys", (text) => text.includes("Cleo"))
     await press(() => harness.mockInput.pressEnter())
     await screen("the form", (text) => text.includes("Tab name / role"))

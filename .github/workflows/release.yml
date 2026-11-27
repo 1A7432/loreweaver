@@ -113,7 +113,9 @@ jobs:
 
       - name: build the terminal client
         working-directory: clients/tui
-        run: bun build --compile ./src/index.tsx --outfile dist/loreweaver-tui
+        # `compile` leaves out the renderer's musl libraries: it loads them only when told to
+        # (OPENTUI_LIBC=musl), they are not installed on a glibc runner, and no musl build is released.
+        run: bun run compile
       - name: the terminal client's self-test, and its version
         working-directory: clients/tui
         run: |
