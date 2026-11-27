@@ -137,9 +137,11 @@ export async function run(argv: readonly string[], env: Environment = {}): Promi
 if (import.meta.main) {
   // The one place the process's own environment is read; everything below takes values.
   const outcome = await run(process.argv.slice(2), process.env);
-  (outcome.code === 0 ? console.log : console.error)(outcome.out);
   const server = outcome.server;
-  if (server === undefined) process.exit(outcome.code);
+  if (server === undefined) {
+    (outcome.code === 0 ? console.log : console.error)(outcome.out);
+    process.exit(outcome.code);
+  }
   let closing = false;
   const stop = (): void => {
     // A second signal while closing: the person means it. A close that hangs (a worker that
@@ -153,6 +155,13 @@ if (import.meta.main) {
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  // The terminal went away (its window was closed; the client that hosts this server in it
+  // ended): stop as on SIGTERM, where the default would end the process at once and leave the
+  // lock behind. A hang-up is never the impatient second signal: it commonly FOLLOWS the stop
+  // a host already asked for (its pipe ended, then its terminal closed).
+  process.on("SIGHUP", () => {
+    if (!closing) stop();
+  });
   if (outcome.untilStdinCloses === true) {
     // One stop however the pipe's end is reported (`end`, then `close`): a second call to
     // `stop` means "a second signal" and would cut the close short.
@@ -164,4 +173,7 @@ if (import.meta.main) {
     process.stdin.on("error", parentGone);
     process.stdin.resume();
   }
+  // Said only now: a host that stops the server the moment it reads this line finds the
+  // handlers above already in place.
+  console.log(outcome.out);
 }
