@@ -36,9 +36,10 @@
 //   - the machinery: latency, model calls per turn by lane, every tool call with its
 //     arguments and result (the probe), failed turns, problems the server reported, cache
 //     use, what the Scribe wrote.
-// Everything is written to the output directory: `run.jsonl` (every record), `transcript.md`
-// (what the table saw), `prompt-first.txt` / `prompt-last.txt` (the Keeper's assembled
-// context as sent), `summary.json`.
+// Everything is written to the output directory: `run.jsonl` (every record — `module_facts` is
+// what the modules told the Keeper, as it stood in its prompt), `transcript.md` (what the table
+// saw), `prompt-first.txt` / `prompt-last.txt` and `prompts/turn-NN.txt` (the Keeper's assembled
+// context as sent, at the start of each turn), `summary.json`.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -131,6 +132,18 @@ function record(kind: string, data: Record<string, unknown>): void {
 }
 let currentTurn = 0;
 
+const MODULE_FACT_LINE = /^- \[[a-z][a-z0-9_]{0,63}\] /u;
+
+/** The pending module facts in a Keeper prompt, one per line as the Keeper reads them. */
+function moduleFactLines(messages: readonly ChatMessage[]): string[] {
+  const lines: string[] = [];
+  for (const message of messages) {
+    if (message.role === "tool" || typeof message.content !== "string") continue;
+    for (const line of message.content.split("\n")) if (MODULE_FACT_LINE.test(line)) lines.push(line);
+  }
+  return lines;
+}
+
 /** The probe: every model call with its lane, time, usage and tool calls; every tool result. */
 class ProbeLLM implements LLMClient {
   readonly #inner: LLMClient;
@@ -138,6 +151,10 @@ class ProbeLLM implements LLMClient {
   /** The Keeper's assembled context of the first and the latest turn, as sent. */
   firstPrompt: readonly ChatMessage[] | null = null;
   lastPrompt: readonly ChatMessage[] | null = null;
+  /** The Keeper's context at the first call of each turn of the run, as sent. */
+  readonly turnPrompts = new Map<number, readonly ChatMessage[]>();
+  /** The module facts last recorded, so a turn's later calls (the same prompt again) add nothing. */
+  #lastFacts = "";
 
   constructor(inner: LLMClient) {
     this.#inner = inner;
@@ -149,6 +166,16 @@ class ProbeLLM implements LLMClient {
     if (lane === "keeper") {
       this.firstPrompt ??= messages;
       this.lastPrompt = messages;
+      if (!this.turnPrompts.has(currentTurn)) this.turnPrompts.set(currentTurn, messages);
+      // What the modules told the Keeper, as it stands in the prompt (`- [module] text {data}`,
+      // `renderPendingFacts`): what a leak of a keeper-only fact is held against. Recorded
+      // whenever it changes — a narrate-now turn inside one turn of the run has its own.
+      const facts = moduleFactLines(messages);
+      const key = facts.join("\n");
+      if (key !== this.#lastFacts) {
+        this.#lastFacts = key;
+        if (facts.length > 0) record("module_facts", { turn: currentTurn, facts });
+      }
       for (const message of messages) {
         if (message.role !== "tool" || this.#seenResults.has(message.toolCallId)) continue;
         this.#seenResults.add(message.toolCallId);
@@ -616,6 +643,9 @@ writeFileSync(join(OUT, "run.jsonl"), records.map((entry) => JSON.stringify(entr
 writeFileSync(join(OUT, "transcript.md"), transcript.map((block, index) => `## Turn ${index + 1}\n\n${block}\n`).join("\n"));
 writeFileSync(join(OUT, "prompt-first.txt"), text(probe.firstPrompt));
 writeFileSync(join(OUT, "prompt-last.txt"), text(probe.lastPrompt));
+// The Keeper's context at the start of every turn: what it had been told when it wrote the turn.
+mkdirSync(join(OUT, "prompts"), { recursive: true });
+for (const [turn, messages] of probe.turnPrompts) writeFileSync(join(OUT, "prompts", `turn-${String(turn).padStart(2, "0")}.txt`), text(messages));
 writeFileSync(join(OUT, "reports.txt"), reports.join("\n") + "\n");
 writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
 console.log(JSON.stringify({ out: OUT, ...summary }, null, 2));
