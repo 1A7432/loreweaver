@@ -442,7 +442,7 @@ test("dispatch: a command left out at load is refused without a round trip, and 
   expect(first.modules[0]?.commands.map((entry) => entry.name)).toEqual(["ok"]);
   expect(first.problems).toHaveLength(5);
   expect((await describeModules(w)).problems).toEqual([]);
-  const base = { module: "bad_names", who: ada, by: "member" as const, seed: "s", room: ROOM };
+  const base = { module: "bad_names", who: ada, by: "member" as const, seed: "s", step: 0, room: ROOM };
   expect(await dispatchCommand(w, { ...base, command: "constructor", args: {} })).toMatchObject({ status: "refused", reason: "unknown" });
   expect(await dispatchCommand(w, { ...base, command: "ok", args: [] })).toMatchObject({ status: "refused", reason: "invalid" });
   expect(await dispatchCommand(w, { ...base, command: "ok", args: { big: x(70_000) } })).toMatchObject({ status: "refused", reason: "invalid" });
@@ -455,7 +455,7 @@ test("dispatch: a command left out at load is refused without a round trip, and 
 test("dispatch: arguments are checked against the command's params before the module is called", async () => {
   const posts: string[] = [];
   const w = worker(["kitchen"], { posts });
-  const base = { module: "kitchen", command: "hit", who: ada, by: "member" as const, seed: "s", room: ROOM };
+  const base = { module: "kitchen", command: "hit", who: ada, by: "member" as const, seed: "s", step: 0, room: ROOM };
   expect(await dispatchCommand(w, { ...base, args: { amount: "two" } })).toMatchObject({ status: "refused", reason: "args", problem: { code: "invalid_arg", path: "amount" } });
   expect(await dispatchCommand(w, { ...base, args: { amount: 1.5 }, by: "keeper" })).toMatchObject({ status: "refused", reason: "args", problem: { code: "invalid_arg", path: "amount" } });
   expect(posts).toEqual(["load"]);
@@ -465,7 +465,7 @@ test("dispatch: arguments are checked against the command's params before the mo
 test("dispatch: who runs a command — a keeper command is refused to players and observers without a round trip; the Keeper never runs an admin one", async () => {
   const posts: string[] = [];
   const w = worker(["omens"], { posts });
-  const base = { module: "omens", args: {}, seed: "s", room: ROOM };
+  const base = { module: "omens", args: {}, seed: "s", step: 0, room: ROOM };
   for (const who of [ada, eve]) {
     expect(await dispatchCommand(w, { ...base, command: "advance", who, by: "member" })).toMatchObject({ status: "refused", reason: "role", text: null });
   }
@@ -535,7 +535,7 @@ test("the room snapshot: one module writing to its copy never changes what the n
     { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 }, members },
     { turn: 3, variables: { hp: 7, name: "Ada" }, clock: { time: "night", round: 4 }, members },
   ]);
-  const used = await dispatchCommand(w, { module: "peeker", command: "vars", args: {}, who: ada, by: "member", seed: "s", room });
+  const used = await dispatchCommand(w, { module: "peeker", command: "vars", args: {}, who: ada, by: "member", seed: "s", step: 0, room });
   expect(used).toMatchObject({ status: "ok", result: { data: { hp: 7, name: "Ada" } } });
 });
 

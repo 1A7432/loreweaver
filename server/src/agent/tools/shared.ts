@@ -1,7 +1,7 @@
 // What several tools share: reading and writing room documents through the context, the
 // acting character, refusals, and the small renderings of findings the model reads.
 // Everything here is text for the MODEL; nothing in it reaches the table.
-import { type Character, characterData, CHARACTER_TYPE, readCharacter, type SheetWrite, updateSheet } from "../../core/characters/index.ts";
+import { type Character, characterData, CHARACTER_TYPE, findModuleCharacter, readCharacter, type SheetWrite, splitModuleCharacterId, updateSheet } from "../../core/characters/index.ts";
 import { GAME_CLOCK_ID, GAME_CLOCK_TYPE, readGameClock } from "../../core/clock/index.ts";
 import type { Document, JsonObject } from "../../core/documents/model.ts";
 import type { RulePack } from "../../core/rulepacks/index.ts";
@@ -79,10 +79,31 @@ export function loadCharacter(context: RoomContext, id: string): CharacterLoad {
   return { ok: true, loaded: { id, document, pack, character } };
 }
 
-/** The character the acting member plays. */
+/**
+ * A seat on a module's character as the model reads it: its name and resources as the module
+ * last gave them, and that the module keeps it; null for any other character. The engine has
+ * no sheet for such a character.
+ */
+export function moduleCharacterLines(context: RoomContext, id: string): string[] | null {
+  const split = splitModuleCharacterId(id);
+  if (split === null) return null;
+  const kept = findModuleCharacter(context.moduleCharacters ?? [], id);
+  const lines = [`Character: ${kept?.name ?? id} — kept by module ${split.module}; the engine holds no sheet for it.`];
+  const resources = (kept?.resources ?? []).map((resource) => `  ${resource.label}: ${resource.value}${resource.max === null ? "" : `/${resource.max}`}`);
+  if (resources.length > 0) lines.push("Resources:", ...resources);
+  if (kept === null) lines.push("(The module does not list this character now.)");
+  return lines;
+}
+
+/** The character the acting member plays. A module's character has no sheet: the answer names it, its resources and its module. */
 export function activeCharacter(context: RoomContext): CharacterLoad {
   const seat = context.who.character;
-  return seat === null ? { ok: false, result: NO_CHARACTER } : loadCharacter(context, seat.id);
+  if (seat === null) return { ok: false, result: NO_CHARACTER };
+  const kept = moduleCharacterLines(context, seat.id);
+  if (kept !== null) {
+    return { ok: false, result: refuse("module_character", [...kept, "There is no sheet to read or change: use that module's own commands (run_command)."].join("\n")) };
+  }
+  return loadCharacter(context, seat.id);
 }
 
 export type SheetSave =

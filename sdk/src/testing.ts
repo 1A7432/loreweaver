@@ -10,15 +10,19 @@ import type { ClockAdvance, ClockReading, CommandOrigin, Json, JsonObject, Modul
 import {
   type CallValue,
   type CommandOutcome,
+  type CommandValue,
+  commandAnswer,
   type DiceRoller,
   type Effect,
   type ModuleDescription,
   ModuleRunner,
   mayUse,
   type Refusal,
+  runSteps,
+  type StepStop,
 } from "./runner.ts";
 
-export type { CommandOutcome, DiceRoller, Effect, ModuleDescription, Refusal };
+export type { CommandOutcome, DiceRoller, Effect, ModuleDescription, Refusal, StepStop };
 
 export interface TestHostOptions {
   /**
@@ -50,6 +54,11 @@ export interface TestHostOptions {
    * assigns would wrongly survive.
    */
   readonly fresh?: () => ModuleDefinition | Promise<ModuleDefinition>;
+  /**
+   * Milliseconds, for the time limit of a command that runs in steps (`more: true`). Default
+   * `Date.now`; a test of that limit passes a clock it moves itself.
+   */
+  readonly now?: () => number;
 }
 
 /** What one call did. */
@@ -68,7 +77,19 @@ export interface TestCall {
   readonly writes: readonly Extract<Effect, { kind: "setVar" }>[];
   readonly blocks: readonly Extract<Effect, { kind: "blocks" }>[];
   readonly rolls: readonly Extract<Effect, { kind: "roll" }>[];
+  readonly seats: readonly Extract<Effect, { kind: "seat" }>[];
   readonly logs: readonly string[];
+}
+
+/**
+ * What one command did, over all its steps: `effects` and the shortcuts are every completed
+ * step's, in order; `outcome` is what its caller is answered (see the README's stepped
+ * commands); `steps` how many steps completed; `stopped` why the loop was cut, or null.
+ */
+export interface TestCommand extends TestCall {
+  readonly outcome: CommandOutcome;
+  readonly steps: number;
+  readonly stopped: StepStop | null;
 }
 
 export interface TurnStartInput {
@@ -122,14 +143,18 @@ export interface TestHost {
   /** The verdicts, in call order: `true`, or the first denial's reason. */
   toolUse(calls: readonly ToolCallInput[], who?: Who, room?: RoomInput): Promise<TestCall & { readonly verdicts: readonly (true | string)[] }>;
   replyPhase(input: ReplyPhaseInput): Promise<TestCall>;
-  /** Runs a command as the member `who` (`call.by` is `member`), with the role and `available` checks the engine makes. */
-  command(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCall & { readonly outcome: CommandOutcome }>;
+  /**
+   * Runs a command as the member `who` (`call.by` is `member`), with the role and `available`
+   * checks the engine makes, and its further steps while it answers `more: true`, as the
+   * engine does.
+   */
+  command(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCommand>;
   /**
    * Runs a command as the Keeper does with its `run_command` tool (`call.by` is `keeper`),
    * with the same checks: `player` and `keeper` commands run, `admin` ones are refused.
    * `who` is the member whose turn it is (default: the host's `who`).
    */
-  keeperCommand(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCall & { readonly outcome: CommandOutcome }>;
+  keeperCommand(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCommand>;
   /** A view's data for `who`; throws when there is no such view or it failed. */
   view(name: string, who?: Who, room?: RoomInput): Promise<Json>;
   /**
@@ -169,6 +194,7 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
   const dice = scriptedDice(options.dice);
   const defaultWho = options.who ?? who("Player");
   const seedPrefix = options.seed ?? "test";
+  const now = options.now ?? Date.now;
   let runner = new ModuleRunner({ dice });
   let description: ModuleDescription;
   let lastTurn = 0;
@@ -182,7 +208,7 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
   }
   start(definition, options.snapshot);
 
-  function report(value: CallValue): TestCall {
+  function report(value: Pick<CallValue, "effects" | "failures" | "refused">): TestCall {
     const failure = value.failures.find((entry) => entry.module === description.id);
     const effects = value.effects;
     return {
@@ -195,6 +221,7 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
       writes: effects.filter((effect) => effect.kind === "setVar"),
       blocks: effects.filter((effect) => effect.kind === "blocks"),
       rolls: effects.filter((effect) => effect.kind === "roll"),
+      seats: effects.filter((effect) => effect.kind === "seat"),
       logs: effects.flatMap((effect) => (effect.kind === "log" ? [effect.text] : [])),
     };
   }
@@ -215,18 +242,35 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     return rendered;
   }
 
-  async function runCommand(by: CommandOrigin["by"], name: string, args: JsonObject, caller: Who | undefined, room: RoomInput | undefined) {
+  /** A command and its further steps, as the engine runs them (`runSteps`); every step's effects together. */
+  async function runCommand(by: CommandOrigin["by"], name: string, args: JsonObject, caller: Who | undefined, room: RoomInput | undefined): Promise<TestCommand> {
     const seen = snapshot(room);
-    const value = await runner.command({
-      module: description.id,
-      command: name,
-      args,
-      who: caller ?? defaultWho,
-      by,
-      seed: `${seedPrefix}:${seen.turn}:command:${name}`,
-      room: seen,
+    const effects: Effect[] = [];
+    const refused: Refusal[] = [];
+    const failures: CallValue["failures"][number][] = [];
+    const run = await runSteps<Extract<CommandOutcome, { status: "ok" }>, CommandValue>(`${seedPrefix}:${seen.turn}:command:${name}`, now, async (step, seed) => {
+      const value = await runner.command({ module: description.id, command: name, args, who: caller ?? defaultWho, by, seed, step, room: seen });
+      effects.push(...value.effects);
+      refused.push(...value.refused);
+      failures.push(...value.failures);
+      if (value.outcome.status !== "ok") return { ok: false, value };
+      const result = value.outcome.result;
+      const more = typeof result === "object" && result !== null && !Array.isArray(result) && result.more === true;
+      return { ok: true, value: value.outcome, more };
     });
-    return { ...report(value), outcome: value.outcome };
+    const called = report({ effects, refused, failures });
+    if (run.kind === "first") return { ...called, outcome: run.value.outcome, steps: 0, stopped: null };
+    if (run.steps === 1 && run.stopped === null) return { ...called, outcome: run.last, steps: 1, stopped: null };
+    // A command that asked for more is answered as the engine answers it: its last step's text, and its data wrapped.
+    const last = run.last.result;
+    const record = typeof last === "object" && last !== null && !Array.isArray(last) ? last : {};
+    const answer = commandAnswer(
+      { text: typeof record.text === "string" ? record.text : null, data: record.data === undefined ? null : (record.data as Json) },
+      run.steps,
+      run.stopped,
+    );
+    const result = { ...(answer.text === null ? {} : { text: answer.text }), data: answer.data };
+    return { ...called, outcome: { status: "ok", result }, steps: run.steps, stopped: run.stopped };
   }
 
   return {

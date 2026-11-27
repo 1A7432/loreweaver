@@ -17,7 +17,8 @@ import type { DiceData, MediaData, NarrativeData } from "loreweaver-protocol/v3"
 import type { ClockAdvance } from "../../core/clock/index.ts";
 import type { Document, JsonObject } from "../../core/documents/model.ts";
 import type { RoomContext } from "../context.ts";
-import type { CommandInfo, CommandOutcome } from "../modules.ts";
+import type { EffectEvent } from "../effects.ts";
+import type { CommandInfo, SteppedCommandOutcome } from "../modules.ts";
 import type { ArgsOf, ParamSet } from "./params.ts";
 
 /** Where a handler may suspend: a model call, a room-worker exchange, outbound network. */
@@ -56,8 +57,8 @@ export interface Bookkeeping {
   readonly dice: boolean;
   readonly variableWrites: readonly VariableWrite[];
   readonly clockAdvances: readonly ClockAdvance[];
-  /** A module command the call ran, with the worker's answer: its effects are the turn engine's to apply. */
-  readonly moduleCommand: { readonly module: string; readonly command: string; readonly outcome: CommandOutcome } | null;
+  /** A module command the call ran, and what came of it: its steps' effects are already applied. */
+  readonly moduleCommand: { readonly module: string; readonly command: string; readonly outcome: ModuleCommandRun } | null;
 }
 
 export const NO_BOOKKEEPING: Bookkeeping = Object.freeze({ dice: false, variableWrites: Object.freeze([]), clockAdvances: Object.freeze([]), moduleCommand: null });
@@ -155,8 +156,17 @@ export interface RunCommandRequest {
   readonly args: JsonObject;
 }
 
-/** One module command, run by the room's worker for the Keeper (`run_command`). */
-export type RunCommand = (request: RunCommandRequest) => Promise<CommandOutcome>;
+/**
+ * One module command and its further steps (`more: true`), as the turn engine runs it for the
+ * Keeper: each completed step's effects already applied and its events already on the table.
+ */
+export type ModuleCommandRun = SteppedCommandOutcome & {
+  /** The events the command's steps put on the table, in order (their dice count as the turn's rolls). */
+  readonly events: readonly EffectEvent[];
+};
+
+/** One module command, run by the room's worker for the Keeper (`run_command`): ONE tool call however many steps it takes. */
+export type RunCommand = (request: RunCommandRequest) => Promise<ModuleCommandRun>;
 
 /** One command of the room's module command table. */
 export interface ModuleCommand {

@@ -123,7 +123,14 @@ interface Who {
 
 `member` is null when the call concerns nobody in particular (the Keeper, the engine). A
 member with no `character` is a spectator. Seating is the engine's: a module never keeps
-its own.
+seats of its own. It may ask for one — seat a member on one of its own characters, or stand
+them up — with `fx.seat` (see [Characters and seats](#characters-and-seats)), and reads the
+result here on its next call.
+
+`character.id` is the id the engine knows the character by — except for one of **this**
+module's own characters, which comes as the module's own id for it (`"ana"`). A character
+of another module comes namespaced as `<module>:<id>` (`"colony:ana"`); an engine
+character's id never has that shape.
 
 ## The room snapshot
 
@@ -172,7 +179,7 @@ defineModule({
     replyPhase(event, fx) {},
   },
 
-  commands: { attack: { title, description?, params?, text?, role?, keeper?, danger?, available?(who, room), run(args, who, fx, room, call) } },
+  commands: { attack: { title, description?, params?, text?, role?, keeper?, danger?, available?(who, room), run(args, who, fx, room, call) /* → { text?, data?, more? } */ } },
   views: { status: { title?, schema, for(who, room) } },
 });
 ```
@@ -269,9 +276,10 @@ commands: {
   seed is: the same call replayed over the same room state gets the same seed (`fx.roll`
   already derives its dice from it). `who` is the member the action belongs to either way: when the
   Keeper runs it, the member who spoke this turn, or `member: null` when nobody did. What
-  `run` returns (`{ text?, data? }`) answers whoever ran it and nobody else: the member, or
-  the Keeper as its tool result. To tell the table, use `fx.fact`. Effects are applied the
-  same way whoever ran the command.
+  `run` returns (`{ text?, data?, more? }`) answers whoever ran it and nobody else: the member,
+  or the Keeper as its tool result. To tell the table, use `fx.fact`. Effects are applied the
+  same way whoever ran the command. `more: true` asks for another step ([A long action in
+  steps](#a-long-action-in-steps)); `call.step` says which step this is (0 for the first).
 
 Commands are addressed as `<module id>/<command name>`, and every command can be typed as
 that id followed by a JSON object: `.duel/attack {"target": "Bo"}`.
@@ -359,6 +367,45 @@ commands: {
 },
 ```
 
+#### A long action in steps
+
+One call into a module must end within the call limit (5 seconds): past it, the worker is
+ended and the call's effects are lost. A long action — a simulation that advances three
+years — runs in **steps**: a result with `more: true` asks the engine to call `run` again.
+
+```ts
+advance: {
+  title: "Advance the colony",
+  params: { type: "object", properties: { years: { type: "integer" } }, required: ["years"] },
+  run(args, _who, fx, _room, call) {
+    year += 1;                                   // one year a step
+    fx.fact({ text: `Year ${year}: the harvest is in.` });
+    const done = call.step + 1 >= Number(args.years);
+    return done ? { text: `Year ${year}.`, data: { year } } : { text: `Year ${year}.`, more: true };
+  },
+},
+```
+
+The engine then applies that call's effects and keeps its checkpoint as for any call, and
+calls `run` again with the **same arguments** and the next `call.step` (0, then 1, 2, …),
+until a result without `more`, 8 calls, or 20 seconds since the first call began — whichever
+comes first.
+
+- Each step is its own call: its own time limit, its own effect limits, its own checkpoint
+  and its own `call.seed` (derived from the first call's seed and the step, so a replay is the
+  same). `available` is asked before the first step only.
+- A step that fails or times out loses only itself: the steps before it stand.
+- The table gets every step's events as they happen. Module views are rendered once, after
+  the last step.
+- Whoever ran the command gets **one** answer: the last completed step's `text`, and as
+  `data` — only for a command that asked for `more` — `{ steps, data, stopped? }`: how many
+  steps ran, the last step's own `data` (or `null`), and when the loop was cut, why: `"steps"`
+  (the step limit), `"time"` (the time limit) or `"failed"` (a step failed). The Keeper's
+  `run_command` runs the same loop, as one tool call with one result.
+
+Keep the state between steps in the module (it is checkpointed after each step), so a cut
+loop can be picked up by running the command again.
+
 ### Views
 
 ```ts
@@ -377,12 +424,61 @@ only for the viewers who asked for it (subscribed to it, or asked for it once); 
 none of whose views anyone asked for is not read for views at all. Listing a room's views
 (their names, titles and schemas) reads nothing: it comes from the module's description.
 
-### Characters and the clock
+### Characters and seats
 
-`characters(room)` (read-only) lists characters with optional resources
-(`{ id, label, value, max? }`). The engine reads and validates the list on every render,
-but nothing consumes it yet: seating a member on a module's character is designed
-separately and not built.
+`characters(room)` (read-only) lists the characters the module keeps itself — `{ id, name,
+blurb?, resources?: [{ id, label, value, max? }] }` — a simulation's settlers, a duel's
+fighters. The engine reads it at every render and keeps the last list beside the module's
+views. It never writes a sheet for such a character: the character stays the module's, and
+the engine records only who sits on it.
+
+- Outside the module the character is `<module id>:<id>` (`colony:ana`), so a module never
+  names an engine character and two modules never collide. The table's views show it: `me`
+  and `party` with its name and the resources you gave (and the module's id), the
+  `characters` view among what can be played.
+- A member is seated on one by **the module**, never by the engine's roster: `pc claim` of a
+  module's character is refused. The engine's sheet and check commands, and the Keeper's
+  sheet tools, know there is no sheet for it.
+- The list is the module's offer to the table: name, blurb and resources are table-grade.
+  Put nothing secret in it.
+
+```ts
+characters() {
+  return settlers.filter((s) => s.alive).map((s) => ({
+    id: s.id, name: s.name, resources: [{ id: "hp", label: "HP", value: s.hp, max: 10 }],
+  }));
+},
+commands: {
+  join: {
+    title: "Join the colony",
+    params: { type: "object", properties: { settler: { type: "string" } }, required: ["settler"] },
+    run(args, who, fx) {
+      if (who.member) fx.seat(who.member.id, String(args.settler));   // the module's own id
+      return { text: "Welcome." };
+    },
+  },
+},
+```
+
+**`fx.seat(member, character | null)`** seats `member` (a member id of `room.members`) on one
+of this module's characters, or with `null` stands them up from one of this module's
+characters. It works wherever a module may write (`turnStart`, `replyPhase`, a command's
+`run`; not `toolUse`) and is applied with the call's other effects, through the room's
+journal: undoing the turn takes it back. The id is resolved against your `characters()` as it
+reads **after** the call, so a character the call itself created can be seated at once. The
+engine refuses a seat, tells the operator and changes nothing when the member is not a member
+of the room (`not_member`), already plays a character that is not this module's — an engine
+character is never displaced (`member_has_character`) — the character is not one you offer
+now (`unknown_character`), or another member plays it (`character_taken`). Standing up a
+member who holds none of your characters is no change at all.
+
+Death and replacement are yours to say: unseat the dead settler's player, then seat them on
+the new one. A seat on a character your list no longer offers stays, shown by its id, until
+you unseat it. A member may also stand up by themselves (`pc release`): you see
+`who.character === null` on your next call. `reset chars` clears every seat, and disabling the
+pack releases the seats on its modules' characters.
+
+### The clock
 
 `clock(room)` (read-only) returns the room's current time (`room.clock` is the last
 reading the engine has). Defining it **claims the room's
@@ -399,6 +495,7 @@ modules.
 | `fx.blocks(blocks, options?)` | yes | | yes | yes |
 | `fx.roll(notation, label?)` | yes | | yes | yes |
 | `fx.deny(callId, reason)` | | yes | | |
+| `fx.seat(member, character)` | yes | | yes | yes |
 | `fx.log(text)` | yes | yes | yes | yes |
 
 The types of each handler's `fx` only offer what works there. An effect used where it
@@ -425,6 +522,8 @@ and reported to the operator.
   rolls the module has made in this call, so a replayed call rolls the same faces and a
   sibling module's rolls never shift yours. Bad notation throws.
 - **`fx.deny(callId, reason)`** — refuse one tool call of the round.
+- **`fx.seat(member, character | null)`** — seat a member on one of this module's characters
+  (its own id), or stand them up from one; see [Characters and seats](#characters-and-seats).
 - **`fx.log(text)`** — a line for the operator's log, never shown at the table.
 
 ### Limits
@@ -440,6 +539,8 @@ are per module per call unless noted.
 | Variable writes | 32; path 200 characters; value 16 KB |
 | Block emissions | 8; 64 KB each |
 | Dice rolls | 16 (a roll over the limit is not shown at the table, though your code saw it) |
+| Seat requests | 16 |
+| Steps of one command (`more: true`) | 8 calls, and no further step 20 seconds after the first began |
 | Log lines | 32; 2,000 characters each |
 | Denial reasons | 500 characters |
 | Command result | text 4,000 characters; data 256 KB |
@@ -447,7 +548,7 @@ are per module per call unless noted.
 | A view's data | 512 KB |
 | Commands / views per module | 64 / 32 |
 | Titles / descriptions | 200 / 2,000 characters; text forms 16 of 200 characters (a command word at most 32); schemas 64 KB |
-| Characters | 64 per module; id and name 200 characters; blurb 2,000; 16 resources each |
+| Characters | 64 per module; id and name 200 characters (an id with a space at either end is dropped: no seat could hold it); blurb 2,000; 16 resources each |
 | Clock reading | `time` 200 characters |
 | Variables snapshot sent to modules | 1 MB (larger: `{}` is sent instead) |
 | Members sent to modules | 256 (more: the first 256) |
@@ -493,6 +594,7 @@ test("shouting raises the alarm, and the alarm survives a restart", async () => 
 | `options` | The module's `init.options`, as a manifest would give them (default `{}`). |
 | `variables`, `clock`, `members` | The room snapshot for calls that set none (default `{}`, null and none). |
 | `fresh` | Returns a new instance of the module, for `restart()`. Import the entry file with a changing query string, as above: without it `restart()` reuses the same object, and state that `load` forgets to assign would wrongly survive. |
+| `now` | Milliseconds, for the time limit of a command that runs in steps (default `Date.now`): to test that limit, pass a clock you move yourself. |
 
 The host:
 
@@ -501,7 +603,7 @@ The host:
 | `turnStart({ text, who?, turn?, seed?, variables?, clock? })` | Fires the event. `turn` defaults to one past the last. |
 | `toolUse(calls, who?, room?)` | `calls` are `{ id?, name, args? }`; returns `verdicts` in call order: `true` or the first denial's reason. |
 | `replyPhase({ reply, who?, turn?, seed?, variables?, clock?, rolls?, clockAdvances?, variableWrites? })` | Fires the event. |
-| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks; `outcome` is `{ status: "ok", result }`, `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`. The arguments are passed as given: the host does not check them against `params` or match text forms (that is the engine's half). |
+| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks, and its further steps while it answers `more: true`, as the engine does; `outcome` is `{ status: "ok", result }` (`result` as its caller is answered: for a stepped command the last step's `text` and `data: { steps, data, stopped? }`), `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`; `steps` is how many steps completed and `stopped` why the loop was cut (`"steps"`, `"time"`, `"failed"`) or null. The arguments are passed as given: the host does not check them against `params` or match text forms (that is the engine's half). |
 | `view(name, who?, room?)` | The view's data for `who`; throws if it failed. |
 | `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones and those declaring `keeper: false` are refused with `reason: "role"`. |
 | `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (a `keeper` command: for everyone but an admin), else what `available` answers — the question the engine asks at the moment of use. |
@@ -510,10 +612,13 @@ The host:
 | `description` | The static description the engine reads at load. |
 | `restart()` | A new instance, `load`-ed from the checkpoint. |
 
-Every call returns what it did: `effects` (in order; empty when the call failed),
-`refused` (effects dropped as misplaced or malformed), `error` (when it threw),
-`checkpoint` (after the call), and shortcuts `injected`, `facts`, `writes`, `blocks`,
-`rolls`, `logs`. `who(name, { id?, role?, character? })` builds a `Who`.
+Every call returns what it did: `effects` (in order; empty when the call failed; a stepped
+command's are every completed step's), `refused` (effects dropped as misplaced or malformed),
+`error` (when it threw), `checkpoint` (after the call), and shortcuts `injected`, `facts`,
+`writes`, `blocks`, `rolls`, `seats` (each with the `name` the module's `characters()` gave
+after the call, or null when it does not offer that character), `logs`.
+`who(name, { id?, role?, character? })` builds a `Who`; give `character` the module's own id
+for one of its own characters.
 
 `room` is `{ turn?, variables?, clock?, members? }`: what you leave out comes from the
 options, and `turn` from the last turn started (1 before any).

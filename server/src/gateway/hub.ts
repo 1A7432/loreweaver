@@ -110,6 +110,7 @@ export class Hub {
         reviewFact: (context) => this.room(context.room).reviewFactFor(context),
         moduleClock: (room) => this.room(room).moduleClock,
         members: (room) => this.room(room).members(),
+        publish: (context, events) => this.room(context.room).publishCommandEvents(context, events),
       }),
       deps.keys === undefined ? null : { book: deps.keys, online: (room) => this.online(room) },
     );

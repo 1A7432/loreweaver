@@ -2,16 +2,19 @@
 //
 // `seating` (one per room, owned by the engine): member id → character id. A member holds
 // at most one character at a time; a member with none is a spectator; a character nobody
-// holds is unclaimed. Payload `{ seats: [{ member, character, memberName }] }` — an ordered
+// holds is unclaimed. The character is an engine character document, or a module's character
+// by its namespaced id (`module_characters.ts`: a seat is all the engine records of one).
+// Payload `{ seats: [{ member, character, memberName }] }` — an ordered
 // list, because member and character ids are content (`__proto__`, `10`) and the table
 // wants seats in the order they were taken. `memberName` is the display name the member
 // had when they sat down, so the table can say who holds a character while that member is
 // offline and no presence list names them.
 //   - every viewer: every seat. Who plays what is table talk.
 //
-// `claimable_characters` (one per room): the characters a room offers — pregenerated ones
-// from packs and ones a module registers. Payload `{ characters: [{ id, name, blurb,
-// source: { kind, id }, keeperNote }] }`; `id` is the character a claim seats a member on.
+// `claimable_characters` (one per room): the pregenerated characters a room's packs offer
+// (a module's characters are not documents: the room keeps them as an overlay). Payload
+// `{ characters: [{ id, name, blurb, source: { kind: "pack", id }, keeperNote }] }`; `id` is
+// the character a claim seats a member on, never a module's namespaced id.
 //   - keeper: every entry whole, including the author's `keeperNote` about the character
 //     ("secretly the cultist's brother");
 //   - everyone else (admin, player, observer, NPC actors): id, name, the one-line
@@ -21,6 +24,7 @@
 // the world's offer, the seating is the table's state, and they reset at different times.
 import type { Document, DocumentType, JsonObject, Viewer, WriteViolation } from "../documents/model.ts";
 import { MAX_CHARACTER_NAME_CHARS, MAX_MEMBER_ID_CHARS } from "./character.ts";
+import { isModuleCharacterId, MAX_SEAT_CHARACTER_CHARS } from "./module_characters.ts";
 import { cleanOptionalText, cleanText, isRecord, onlyKeys } from "./text.ts";
 
 export const SEATING_TYPE = "seating";
@@ -85,7 +89,7 @@ export function memberOf(seating: Seating, character: string): string | null {
 
 function newSeat(member: string, character: string, memberName: string): Seat | SeatingRefusal {
   if (cleanText(member, MAX_MEMBER_ID_CHARS) !== member) return "bad_member";
-  if (cleanText(character, MAX_CHARACTER_ID_CHARS) !== character) return "bad_character";
+  if (cleanText(character, MAX_SEAT_CHARACTER_CHARS) !== character) return "bad_character";
   const name = cleanOptionalText(memberName, MAX_MEMBER_NAME_CHARS);
   if (name === null) return "bad_member_name";
   return Object.freeze({ member, character, memberName: name });
@@ -213,7 +217,7 @@ export const seatingDocument: DocumentType<SeatingView> = {
 // claimable_characters
 // ---------------------------------------------------------------------------
 
-export type ClaimableSource = { readonly kind: "pack" | "module"; readonly id: string };
+export type ClaimableSource = { readonly kind: "pack"; readonly id: string };
 
 export type ClaimableCharacter = {
   readonly id: string;
@@ -233,13 +237,14 @@ export type ClaimableRefusal = "bad_id" | "bad_name" | "bad_blurb" | "bad_source
 export type ClaimableChange = { readonly ok: true; readonly data: ClaimableList } | { readonly ok: false; readonly code: ClaimableRefusal };
 
 function cleanEntry(entry: ClaimableCharacter): ClaimableCharacter | ClaimableRefusal {
-  if (cleanText(entry.id, MAX_CHARACTER_ID_CHARS) !== entry.id) return "bad_id";
+  // A module's namespaced id is the overlay's, never an entry here.
+  if (cleanText(entry.id, MAX_CHARACTER_ID_CHARS) !== entry.id || isModuleCharacterId(entry.id)) return "bad_id";
   const name = cleanText(entry.name, MAX_CHARACTER_NAME_CHARS);
   if (name === null) return "bad_name";
   const blurb = cleanOptionalText(entry.blurb, MAX_BLURB_CHARS);
   if (blurb === null) return "bad_blurb";
   const kind = entry.source.kind;
-  if ((kind !== "pack" && kind !== "module") || cleanText(entry.source.id, MAX_SOURCE_ID_CHARS) !== entry.source.id) return "bad_source";
+  if (kind !== "pack" || cleanText(entry.source.id, MAX_SOURCE_ID_CHARS) !== entry.source.id) return "bad_source";
   const keeperNote = cleanOptionalText(entry.keeperNote, MAX_KEEPER_NOTE_CHARS);
   if (keeperNote === null) return "bad_keeper_note";
   return Object.freeze({ id: entry.id, name, blurb, source: Object.freeze({ kind, id: entry.source.id }), keeperNote });
@@ -280,7 +285,7 @@ function readEntry(item: unknown): ClaimableCharacter | null {
   const { id, name, blurb, keeperNote } = item;
   const { kind, id: sourceId } = item.source;
   if (typeof id !== "string" || typeof name !== "string" || typeof blurb !== "string" || typeof keeperNote !== "string") return null;
-  if ((kind !== "pack" && kind !== "module") || typeof sourceId !== "string") return null;
+  if (kind !== "pack" || typeof sourceId !== "string") return null;
   return Object.freeze({ id, name, blurb, source: Object.freeze({ kind, id: sourceId }), keeperNote });
 }
 
@@ -348,9 +353,8 @@ function validateClaimable(data: JsonObject): WriteViolation[] {
 
 export const claimableDocument: DocumentType<ClaimableView> = {
   name: CLAIMABLE_TYPE,
-  // A pack's pregens and a module's registered characters belong to the installed world:
-  // a story or character reset replays the same module with the same cast on offer, and
-  // only removing the world takes them away.
+  // A pack's pregens belong to the installed world: a story or character reset keeps the
+  // same cast on offer, and only removing the world takes them away.
   lifecycle: { reset: "all" },
   version: 1,
   project: projectClaimable,

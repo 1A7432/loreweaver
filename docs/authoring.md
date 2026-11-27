@@ -471,9 +471,16 @@ What a module can do, in short:
 - **The room** comes with every call: the turn, the variables, the clock and every member
   of the room. `create` and `load` get `init`: the module entry's `options` from
   `pack.yaml` and a seed for this life of the room.
-- **Characters and the clock:** `characters(room)` is read and validated, but nothing
-  consumes it yet (seating a member on a module's character is designed separately and
-  not built); `clock(room)` claims the room's clock.
+- **Characters and seats:** `characters(room)` lists the characters the module keeps itself
+  (a simulation's settlers), with their resources; the table sees them as `<module>:<id>`
+  in the `me`, `party` and `characters` views. The module seats a member on one with
+  `fx.seat(member, id)` and stands them up with `fx.seat(member, null)`; the engine records
+  only the seat (undone with the turn) and keeps no sheet for such a character, so its sheet
+  and check commands refuse a member on one (`no_sheet`).
+- **A long action in steps:** a command's result with `more: true` is called again, step
+  after step (up to 8 calls and 20 seconds), each step its own call with its own time limit
+  and checkpoint; the caller gets one answer.
+- **The clock:** `clock(room)` claims the room's clock.
 
 A module entry in `pack.yaml` may carry `options`, a JSON object of at most 16 KiB that
 its `create` and `load` receive as `init.options` — one module, configured per pack:
@@ -589,9 +596,9 @@ A 2.x pack does not install on 3.0. What changed for an author:
 - There is no forge (generating a skill, rule pack or module from a description), no
   live-reload dev room and no separate lint: build, install, look (§2).
 - A native card's `pregens` and AI companions are not in 3.0: a player imports a
-  `character` card and `genchar` makes a character from a description. A module's
-  `characters()` is read and validated but nothing consumes it yet: seating on a module's
-  character is designed separately and not built.
+  `character` card and `genchar` makes a character from a description. A module that keeps
+  its own characters lists them in `characters()` and seats members on them with `fx.seat`
+  (§4).
 
 ## Where to look next
 

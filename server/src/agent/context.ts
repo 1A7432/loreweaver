@@ -8,6 +8,7 @@
 // Nothing here is global: a server builds one `Services` at start-up and passes it down.
 import type { Who } from "loreweaver/module";
 
+import type { ModuleCharacter } from "../core/characters/index.ts";
 import { type DocumentTypes, type Viewer } from "../core/documents/model.ts";
 import type { RawDocuments } from "../core/documents/raw.ts";
 import type { DocumentViews } from "../core/documents/views.ts";
@@ -70,6 +71,11 @@ export interface RoomContext {
   readonly who: Who;
   /** Randomness for this piece of work, derived from persisted inputs so it can be replayed. */
   readonly random: RandomSource;
+  /**
+   * The characters the room's modules offered at the last render, when the work was made: what
+   * a seat on a module's character is shown as (its name, its resources). Absent: none known.
+   */
+  readonly moduleCharacters?: readonly ModuleCharacter[];
 }
 
 /** The viewer a context's own actor is, for projections addressed to them. */

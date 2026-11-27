@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import type { CommandInfo, CommandOutcome } from "../../../src/agent/modules.ts";
-import { type RunCommandRequest, queryLore } from "../../../src/agent/tools/index.ts";
+import type { CommandInfo } from "../../../src/agent/modules.ts";
+import { type ModuleCommandRun, type RunCommandRequest, queryLore } from "../../../src/agent/tools/index.ts";
 import { CHRONICLE_RECORD_TYPE, PLOT_THREAD_TYPE, plotThreadId } from "../../../src/core/chronicle/index.ts";
 import {
   EMPTY_OVERLAY,
@@ -204,7 +204,7 @@ describe("generate_image (gated)", () => {
 
 describe("module commands", () => {
   const rest: CommandInfo = { name: "rest", title: "Rest", description: "Take a long rest.", params: { type: "object", properties: { hours: { type: "integer" } } }, forms: [], role: "player", keeper: true, danger: false, checksAvailability: true };
-  const ok: CommandOutcome = { status: "ok", result: { text: "You rest for 8 hours.", data: null }, problems: [], facts: [], writes: [], blocks: [], rolls: [], logs: [] };
+  const ok: ModuleCommandRun = { status: "ok", result: { text: "You rest for 8 hours.", data: null }, steps: 1, stopped: null, problems: [], events: [] };
 
   test("lookup_command describes a command; run_command runs it through the injected worker call", async () => {
     const room = bench();
@@ -257,7 +257,7 @@ describe("module commands", () => {
     const room = bench();
     const catalog = room.catalog({
       commands: [{ module: "camp", info: rest }],
-      deps: { runCommand: async () => ({ status: "refused", reason: "args", text: null, problem: { code: "invalid_arg", path: "hours" }, problems: [] }) },
+      deps: { runCommand: async () => ({ status: "refused", reason: "args", text: null, problem: { code: "invalid_arg", path: "hours" }, problems: [], events: [] }) },
     });
     const refused = await room.call(catalog, "run_command", { id: "camp/rest", args: { hours: "eight" } });
     expect([refused.code, refused.text]).toEqual(["command_args", "camp/rest refused: the arguments do not fit its schema (invalid_arg at hours); call lookup_command for the schema."]);
@@ -265,12 +265,12 @@ describe("module commands", () => {
 
   test("an unknown command, a refusal and a failure come back as text", async () => {
     const room = bench();
-    const refusing = room.catalog({ commands: [{ module: "camp", info: rest }], deps: { runCommand: async () => ({ status: "refused", reason: "unavailable", text: "Not while enemies are near.", problems: [] }) } });
+    const refusing = room.catalog({ commands: [{ module: "camp", info: rest }], deps: { runCommand: async () => ({ status: "refused", reason: "unavailable", text: "Not while enemies are near.", problems: [], events: [] }) } });
     expect((await room.call(refusing, "run_command", { id: "camp/sleep" })).code).toBe("unknown_command");
     expect((await room.call(refusing, "lookup_command", { id: "nope" })).code).toBe("unknown_command");
     const refused = await room.call(refusing, "run_command", { id: "camp/rest" });
     expect([refused.status, refused.text]).toEqual(["refused", "camp/rest refused: the module says it is unavailable now: Not while enemies are near."]);
-    const failing = room.catalog({ commands: [{ module: "camp", info: rest }], deps: { runCommand: async () => ({ status: "failed", problems: ["boom"] }) } });
+    const failing = room.catalog({ commands: [{ module: "camp", info: rest }], deps: { runCommand: async () => ({ status: "failed", problems: ["boom"], events: [] }) } });
     const failed = await room.call(failing, "run_command", { id: "camp/rest" });
     expect(failed.status).toBe("failed");
     expect(failed.text).not.toContain("boom");

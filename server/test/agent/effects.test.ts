@@ -32,9 +32,9 @@ import {
 import { contextFor, putModuleVariable, putTree, ROOM, setup } from "./room_fixture.ts";
 
 const pass: TextReview = (text) => ({ text, allowed: true });
-const options = (overrides: Partial<EffectOptions> = {}): EffectOptions => ({ review: pass, action: "line-1", work: "action", ...overrides });
+const options = (overrides: Partial<EffectOptions> = {}): EffectOptions => ({ review: pass, action: "line-1", work: "action", members: [], ...overrides });
 
-const NONE: Applied = { facts: [], writes: [], blocks: [], rolls: [], logs: [] };
+const NONE: Applied = { facts: [], writes: [], blocks: [], rolls: [], seats: [], logs: [] };
 
 function fact(overrides: Partial<FactRequest> = {}): FactRequest {
   return { module: "clock", text: "The bell tolls.", data: null, to: "table", importance: "normal", narrateNow: false, ...overrides };

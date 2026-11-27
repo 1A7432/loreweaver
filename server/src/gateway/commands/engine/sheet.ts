@@ -9,8 +9,13 @@ import {
   CLAIMABLE_TYPE,
   type ClaimableView,
   createCharacter,
+  isModuleCharacterId,
   memberOf,
+  type ModuleCharacter,
+  moduleCharacterId,
+  moduleCharacterName,
   releaseCharacter,
+  splitModuleCharacterId,
   SEATING_ID,
   SEATING_TYPE,
   type SeatingView,
@@ -38,6 +43,7 @@ import {
   callerCharacter,
   callerViewer,
   isAdmin,
+  moduleSeatRefusal,
   saveCharacter,
   saveSeating,
   seating,
@@ -225,6 +231,8 @@ export function sheetItems(call: CommandCall, pack: RulePack, sheet: Sheet): str
 function runShow(call: CommandCall): Done | Refused {
   const seat = call.context.who.character;
   if (seat === null) return refuse("no_character");
+  const kept = moduleSeatRefusal(call);
+  if (kept !== null) return kept;
   const view = call.context.services.views.view(call.context.room, CHARACTER_TYPE, seat.id, callerViewer(call)) as CharacterView | null;
   if (view === null) return refuse("no_character");
   const stored = storedCharacter(call, seat.id);
@@ -354,17 +362,43 @@ function findEntry(roster: ClaimableView, name: string): ClaimableView["characte
   return roster.characters.find((entry) => entry.id === wanted) ?? roster.characters.find((entry) => entry.name.toLowerCase() === wanted.toLowerCase());
 }
 
+/** The room's modules' characters as the last render listed them. */
+function moduleCharacters(call: CommandCall): readonly ModuleCharacter[] {
+  return call.context.moduleCharacters ?? [];
+}
+
+/** A module's character by its namespaced id, else by name (case-insensitive). */
+function findModuleEntry(call: CommandCall, name: string): ModuleCharacter | undefined {
+  const wanted = name.trim();
+  const all = moduleCharacters(call);
+  return all.find((entry) => moduleCharacterId(entry.module, entry.id) === wanted) ?? all.find((entry) => entry.name.toLowerCase() === wanted.toLowerCase());
+}
+
 function runList(call: CommandCall): Done {
   const { roster, seats } = rosterViews(call);
-  if (roster.characters.length === 0) return { text: call.say("pc.empty"), data: { characters: [] } };
-  const lines = [call.say("pc.header", { count: roster.characters.length })];
-  const entries = roster.characters.map((entry) => {
+  const kept = moduleCharacters(call);
+  const count = roster.characters.length + kept.length;
+  if (count === 0) return { text: call.say("pc.empty"), data: { characters: [] } };
+  const lines = [call.say("pc.header", { count })];
+  const entries: { id: string; name: string; blurb: string; heldBy: string | null; module?: string }[] = roster.characters.map((entry) => {
     const seat = seats.seats.find((item) => item.character === entry.id);
     lines.push(
       seat === undefined ? call.say("pc.line_free", { name: entry.name, blurb: entry.blurb }) : call.say("pc.line_taken", { name: entry.name, blurb: entry.blurb, member: seat.memberName }),
     );
     return { id: entry.id, name: entry.name, blurb: entry.blurb, heldBy: seat?.memberName ?? null };
   });
+  // A module's characters are listed too, as the module's: only the module seats a member on one.
+  for (const entry of kept) {
+    const id = moduleCharacterId(entry.module, entry.id);
+    const seat = seats.seats.find((item) => item.character === id);
+    const blurb = entry.blurb ?? "";
+    lines.push(
+      seat === undefined
+        ? call.say("pc.line_module", { name: entry.name, blurb, module: entry.module })
+        : call.say("pc.line_module_taken", { name: entry.name, blurb, module: entry.module, member: seat.memberName }),
+    );
+    entries.push({ id, name: entry.name, blurb, heldBy: seat?.memberName ?? null, module: entry.module });
+  }
   return { text: lines.join("\n"), data: { characters: entries } };
 }
 
@@ -372,7 +406,13 @@ function runClaim(call: CommandCall, name: string): Done | Refused {
   const member = call.context.who.member;
   if (member === null) return refuse("no_member");
   const entry = findEntry(rosterViews(call).roster, name);
-  if (entry === undefined) return refuse("unknown_character", { name });
+  if (entry === undefined) {
+    // A module's character is seated by its module, through the module's own command.
+    const kept = findModuleEntry(call, name);
+    const split = splitModuleCharacterId(name.trim());
+    if (kept !== undefined || split !== null) return refuse("module_character", { name: kept?.name ?? name.trim(), module: kept?.module ?? split?.module ?? "" });
+    return refuse("unknown_character", { name });
+  }
   const seats = seating(call);
   if (isRefused(seats)) return seats;
   const seated = switchCharacter(seats, member.id, entry.id, member.name);
@@ -401,7 +441,8 @@ function runRelease(call: CommandCall, name: string | undefined): Done | Refused
   if (name === undefined) id = call.context.who.character?.id ?? null;
   else {
     const entry = findEntry(rosterViews(call).roster, name);
-    id = entry?.id ?? seats.seats.find((seat) => seat.character === name.trim())?.character ?? null;
+    const kept = findModuleEntry(call, name);
+    id = entry?.id ?? (kept === undefined ? null : moduleCharacterId(kept.module, kept.id)) ?? seats.seats.find((seat) => seat.character === name.trim())?.character ?? null;
     if (id === null) {
       // A seated character that is not on the roster (one a member made), by its name.
       for (const seat of seats.seats) {
@@ -417,8 +458,9 @@ function runRelease(call: CommandCall, name: string | undefined): Done | Refused
   const freed = releaseCharacter(seats, id);
   if (!freed.ok) return refuse("unclaimed", { name: name ?? id });
   saveSeating(call, freed.data);
-  const view = call.context.services.views.view(call.context.room, CHARACTER_TYPE, id, callerViewer(call)) as CharacterView | null;
-  const label = view?.name ?? findEntry(rosterViews(call).roster, id)?.name ?? id;
+  // A module's character reads as its module last named it; the module sees the seat gone on its next call.
+  const view = isModuleCharacterId(id) ? null : (call.context.services.views.view(call.context.room, CHARACTER_TYPE, id, callerViewer(call)) as CharacterView | null);
+  const label = view?.name ?? findEntry(rosterViews(call).roster, id)?.name ?? moduleCharacterName(moduleCharacters(call), id);
   return {
     data: { id },
     events: [{ kind: "narrative", data: { speaker: "system", text: call.tell("pc.released", { name: label }), format: "plain" } }],

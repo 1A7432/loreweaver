@@ -33,8 +33,8 @@ import {
   readChronicleRecord,
   readPlotThread,
 } from "../../core/chronicle/index.ts";
-import { CHARACTER_TYPE, readSeating, SEATING_ID, SEATING_TYPE } from "../../core/characters/index.ts";
-import type { CharacterTableView } from "../../core/characters/index.ts";
+import { CHARACTER_TYPE, findModuleCharacter, readSeating, SEATING_ID, SEATING_TYPE } from "../../core/characters/index.ts";
+import type { CharacterTableView, ModuleCharacter } from "../../core/characters/index.ts";
 import {
   CLOCK_OWNER_ID,
   CLOCK_OWNER_TYPE,
@@ -329,12 +329,19 @@ export function readRecords(services: Pick<Services, "documents">, room: string)
   return records;
 }
 
-function party(services: Services, room: string, viewer: Viewer): PartyMember[] {
+function party(services: Services, room: string, viewer: Viewer, moduleCharacters: readonly ModuleCharacter[]): PartyMember[] {
   const seatingDocument = services.documents.get(room, SEATING_TYPE, SEATING_ID);
   const seating = seatingDocument === null || seatingDocument.corrupt ? null : readSeating(seatingDocument.data);
   if (seating === null) return [];
   const members: PartyMember[] = [];
   for (const seat of seating.seats) {
+    // A member seated on a module's character is at the table like any other: the Keeper is
+    // shown the name and the meters the module gave. (No sheet stands behind it.)
+    const kept = findModuleCharacter(moduleCharacters, seat.character);
+    if (kept !== null) {
+      members.push({ name: kept.name, resources: kept.resources.map((meter) => ({ label: meter.label, value: meter.value, max: meter.max })), status: [] });
+      continue;
+    }
     const document = services.documents.get(room, CHARACTER_TYPE, seat.character);
     if (document === null) continue;
     const view = services.types.project(document, viewer) as CharacterTableView | null;
@@ -401,7 +408,7 @@ export function readKeeperSnapshot(context: RoomContext, parts: SnapshotParts): 
     lore: parts.lore,
     scene,
     clock,
-    party: party(services, room, viewer),
+    party: party(services, room, viewer, context.moduleCharacters ?? []),
     keeperNotes,
     initiative,
     relationships,

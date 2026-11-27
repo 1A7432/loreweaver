@@ -3,6 +3,7 @@ import type { Role } from "loreweaver-protocol/v3";
 import type { Who } from "loreweaver/module";
 
 import type { Services } from "../../agent/context.ts";
+import type { ModuleCharacter } from "../../core/characters/index.ts";
 import type { Viewer } from "../../core/documents/index.ts";
 import { whoIn } from "../commands/index.ts";
 
@@ -23,9 +24,9 @@ export interface ViewerContext {
   readonly character: { readonly id: string; readonly name: string } | null;
 }
 
-/** The viewer `member` is in `room` now: the seating gives their character. */
-export function viewerContext(services: Services, room: string, member: ViewMemberInfo, locale: string): ViewerContext {
-  const who = whoIn(services, room, member, locale);
+/** The viewer `member` is in `room` now: the seating gives their character (a module's is named from `moduleCharacters`). */
+export function viewerContext(services: Services, room: string, member: ViewMemberInfo, locale: string, moduleCharacters: readonly ModuleCharacter[] = []): ViewerContext {
+  const who = whoIn(services, room, member, locale, moduleCharacters);
   return { member: { id: member.id, name: member.name, role: member.role }, locale, character: who.character };
 }
 

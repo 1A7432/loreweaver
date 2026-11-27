@@ -14,6 +14,7 @@ import { disableSkill, enableSkill, readEnabledSkills, skillDescription, skillNa
 import { stopPlaying } from "../../audio.ts";
 import type { LoadedPack, RoomPacks, RuntimeInstallOutcome } from "../../packs.ts";
 import { firstWord } from "../parse.ts";
+import { releaseModuleSeats } from "../support.ts";
 import { compact, object, oneOf, text } from "../schema.ts";
 import { MAX_ENABLED_PACKS, ROOM_PACKS, ROOM_PANELS_OFF } from "../state.ts";
 import type { RoomContext } from "../../../agent/context.ts";
@@ -297,6 +298,8 @@ export function packCommand(packs: RoomPacks, formDrops: FormDrops = () => Promi
       }
       // Its cues leave the room's audio library with it: what plays one of them stops.
       const stopped = stopPlaying(writer, store, services.clock, (sound) => sound.id.startsWith(`${id}/`));
+      // Its modules go, and with them the characters they kept: whoever sat on one stands up.
+      if (loaded !== null) releaseModuleSeats(call, new Set(loaded.pack.modules.map((module) => module.id)));
       const name = loaded === null ? id : packName(loaded, call.locale);
       const lines = [call.say("pack.disabled", { name })];
       if (dropped.length > 0) lines.push(call.say("pack.skills_dropped", { list: dropped.join(call.say("list.separator")) }));

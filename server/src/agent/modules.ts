@@ -10,8 +10,9 @@
 // every drop is reported in `problems` for the operator's log (never shown at the table).
 import { charCount } from "loreweaver-protocol/v3";
 import type { CommandOrigin, CommandRole, Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
-import { isValidName, mayRun, type ViewerRequest } from "loreweaver/runner";
+import { commandAnswer, isValidName, mayRun, runSteps, type StepStop, type ViewerRequest } from "loreweaver/runner";
 
+import { MAX_MODULE_CHARACTER_ID_CHARS, type ModuleCharacter, type ModuleResource } from "../core/characters/index.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
 import { type ArgsProblem, checkModuleArgs } from "./module_args.ts";
 import { parseForm, type TextForm } from "./module_forms.ts";
@@ -38,6 +39,8 @@ export interface ModuleCaps {
   readonly blockEmissions: number;
   readonly blockBytes: number;
   readonly rolls: number;
+  /** Seat requests (`fx.seat`). */
+  readonly seats: number;
   readonly logs: number;
   readonly logChars: number;
   readonly denyReasonChars: number;
@@ -76,6 +79,7 @@ export const DEFAULT_CAPS: ModuleCaps = {
   blockEmissions: 8,
   blockBytes: 64 * 1024,
   rolls: 16,
+  seats: 16,
   logs: 32,
   logChars: 2000,
   denyReasonChars: 500,
@@ -93,7 +97,8 @@ export const DEFAULT_CAPS: ModuleCaps = {
   textFormChars: 200,
   schemaBytes: 64 * 1024,
   characters: 64,
-  characterTextChars: 200,
+  // A character's id is bound by what a seat can hold of it (`MAX_SEAT_CHARACTER_CHARS`).
+  characterTextChars: MAX_MODULE_CHARACTER_ID_CHARS,
   blurbChars: 2000,
   resources: 16,
   clockChars: 200,
@@ -169,12 +174,25 @@ export interface ModuleLog {
   readonly text: string;
 }
 
+/**
+ * A module's `fx.seat`. `character` is the module's own id for one of its characters, or null
+ * to unseat; `name` is that character's name as the module's `characters()` read right after
+ * the call, null when it does not offer that character (the engine refuses the seat).
+ */
+export interface SeatRequest {
+  readonly module: string;
+  readonly member: string;
+  readonly character: string | null;
+  readonly name: string | null;
+}
+
 /** The effects a mutating exchange may apply, in module order. */
 export interface Applied {
   readonly facts: readonly FactRequest[];
   readonly writes: readonly VariableWriteRequest[];
   readonly blocks: readonly BlocksRequest[];
   readonly rolls: readonly ModuleRoll[];
+  readonly seats: readonly SeatRequest[];
   readonly logs: readonly ModuleLog[];
 }
 
@@ -211,6 +229,8 @@ export type CommandOutcome =
       readonly status: "ok";
       /** Answers whoever ran the command (the member, or the Keeper), and nobody else. */
       readonly result: { readonly text: string | null; readonly data: Json | null };
+      /** The module asked to be called again (`more: true`): `runModuleCommand` takes the next step. */
+      readonly more: boolean;
       readonly problems: readonly string[];
     })
   | {
@@ -233,20 +253,10 @@ export interface ViewerOutcome {
   readonly views: readonly { readonly module: string; readonly view: string; readonly data: Json }[];
 }
 
-export interface Resource {
-  readonly id: string;
-  readonly label: string;
-  readonly value: number;
-  readonly max: number | null;
-}
+export type Resource = ModuleResource;
 
-export interface CharacterInfo {
-  readonly module: string;
-  readonly id: string;
-  readonly name: string;
-  readonly blurb: string | null;
-  readonly resources: readonly Resource[];
-}
+/** One character a module offers, validated; the room keeps the last render's list (`core/characters/module_characters.ts`). */
+export type CharacterInfo = ModuleCharacter;
 
 export interface RenderOutcome {
   /** One per requested viewer, in request order. */
@@ -331,14 +341,14 @@ function reportCall(raw: Rec, problems: string[]): void {
   }
 }
 
-type Kind = "fact" | "inject" | "setVar" | "blocks" | "roll" | "deny" | "log";
+type Kind = "fact" | "inject" | "setVar" | "blocks" | "roll" | "deny" | "seat" | "log";
 
 interface Sorted extends Applied {
   readonly injections: string[];
   readonly denials: { module: string; callId: string; reason: string }[];
 }
 
-const COUNTED = ["fact", "setVar", "blocks", "roll", "log"] as const;
+const COUNTED = ["fact", "setVar", "blocks", "roll", "seat", "log"] as const;
 
 /**
  * Sort a list of raw effects into validated requests, keeping only `accepted` kinds and
@@ -350,6 +360,7 @@ function sortEffects(raw: unknown, accepted: ReadonlySet<Kind>, caps: ModuleCaps
     writes: [] as VariableWriteRequest[],
     blocks: [] as BlocksRequest[],
     rolls: [] as ModuleRoll[],
+    seats: [] as SeatRequest[],
     logs: [] as ModuleLog[],
     injections: [] as string[],
     denials: [] as { module: string; callId: string; reason: string }[],
@@ -359,6 +370,7 @@ function sortEffects(raw: unknown, accepted: ReadonlySet<Kind>, caps: ModuleCaps
     setVar: caps.writes,
     blocks: caps.blockEmissions,
     roll: caps.rolls,
+    seat: caps.seats,
     log: caps.logs,
   };
   const counts = new Map<string, Record<(typeof COUNTED)[number], number>>();
@@ -382,7 +394,7 @@ function sortEffects(raw: unknown, accepted: ReadonlySet<Kind>, caps: ModuleCaps
     }
     if ((COUNTED as readonly string[]).includes(kind)) {
       const counted = kind as (typeof COUNTED)[number];
-      const mine = counts.get(module) ?? { fact: 0, setVar: 0, blocks: 0, roll: 0, log: 0 };
+      const mine = counts.get(module) ?? { fact: 0, setVar: 0, blocks: 0, roll: 0, seat: 0, log: 0 };
       counts.set(module, mine);
       if (mine[counted] >= limits[counted]) {
         drop(`over ${limits[counted]} per call`);
@@ -451,6 +463,17 @@ function sortEffects(raw: unknown, accepted: ReadonlySet<Kind>, caps: ModuleCaps
         else out.denials.push({ module, callId, reason });
         break;
       }
+      case "seat": {
+        // Ids are content: kept as given, checked for shape; the engine decides the rest when it applies.
+        const member = get(effect, "member");
+        const character = get(effect, "character");
+        const name = get(effect, "name");
+        if (typeof member !== "string" || member === "") drop("its member is not a member id");
+        else if (character !== null && typeof character !== "string") drop("its character is not a string or null");
+        else if (name !== null && typeof name !== "string") drop("its name is not a string or null");
+        else out.seats.push({ module, member, character, name: character === null ? null : name });
+        break;
+      }
       case "log": {
         const text = get(effect, "text");
         if (typeof text !== "string" || charCount(text) > caps.logChars) drop(`not a string of up to ${caps.logChars} characters`);
@@ -463,14 +486,14 @@ function sortEffects(raw: unknown, accepted: ReadonlySet<Kind>, caps: ModuleCaps
 }
 
 function applied(sorted: Sorted): Applied {
-  return { facts: sorted.facts, writes: sorted.writes, blocks: sorted.blocks, rolls: sorted.rolls, logs: sorted.logs };
+  return { facts: sorted.facts, writes: sorted.writes, blocks: sorted.blocks, rolls: sorted.rolls, seats: sorted.seats, logs: sorted.logs };
 }
 
-const NO_EFFECTS: Applied = { facts: [], writes: [], blocks: [], rolls: [], logs: [] };
+const NO_EFFECTS: Applied = { facts: [], writes: [], blocks: [], rolls: [], seats: [], logs: [] };
 
-const TURN_START = new Set<Kind>(["fact", "inject", "setVar", "blocks", "roll", "log"]);
+const TURN_START = new Set<Kind>(["fact", "inject", "setVar", "blocks", "roll", "seat", "log"]);
 const TOOL_USE = new Set<Kind>(["deny", "log"]);
-const PHASE = new Set<Kind>(["fact", "setVar", "blocks", "roll", "log"]);
+const PHASE = new Set<Kind>(["fact", "setVar", "blocks", "roll", "seat", "log"]);
 
 function clockInfo(raw: unknown, caps: ModuleCaps, problems: string[], claimer: string | null): ClockInfo | null {
   if (!isRecord(raw)) return null;
@@ -694,6 +717,8 @@ export function validateCommand(raw: unknown, caps: ModuleCaps = DEFAULT_CAPS): 
   const result = get(outcome, "result");
   let text: string | null = null;
   let data: Json | null = null;
+  // Strictly `true`: anything else a module sent is not a request for another step.
+  const more = isRecord(result) && get(result, "more") === true;
   if (isRecord(result)) {
     const rawText = get(result, "text");
     const rawData = get(result, "data");
@@ -709,7 +734,7 @@ export function validateCommand(raw: unknown, caps: ModuleCaps = DEFAULT_CAPS): 
     problems.push("the command's result is not an object and was dropped");
   }
   const sorted = sortEffects(get(raw, "effects"), PHASE, caps, problems);
-  return { status: "ok", result: { text, data }, ...applied(sorted), problems };
+  return { status: "ok", result: { text, data }, more, ...applied(sorted), problems };
 }
 
 /**
@@ -785,6 +810,11 @@ function validateCharacters(module: string, raw: unknown, caps: ModuleCaps, prob
     const name = isRecord(entry) ? shortText(get(entry, "name"), caps.characterTextChars) : null;
     if (!isRecord(entry) || id === null || name === null) {
       problems.push(`module ${module}: a character without an id and a name of 1 to ${caps.characterTextChars} characters was dropped`);
+      continue;
+    }
+    // A seat holds the id as given: one with surrounding spaces could never be seated.
+    if (id.trim() !== id) {
+      problems.push(`module ${module}: a character whose id begins or ends with a space was dropped`);
       continue;
     }
     if (out.some((character) => character.id === id)) {
@@ -921,6 +951,8 @@ export interface CommandCall {
   /** Who is running it: the Keeper (`run_command`) or the member in `who`. The role is checked against this. */
   readonly by: CommandOrigin["by"];
   readonly seed: string;
+  /** 0 for a command's first call; the further steps `runModuleCommand` takes count on. */
+  readonly step: number;
   /** The room when the command is used. */
   readonly room: RoomSnapshot;
 }
@@ -946,12 +978,72 @@ export async function dispatchCommand(worker: RoomWorker | null, call: CommandCa
   if (problem !== null) return { status: "refused", reason: "args", text: null, problem, problems };
   try {
     const room = boundedSnapshot(call.room, caps, problems);
-    const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, by: call.by, seed: call.seed, room });
+    const raw = await worker.command({ module: call.module, command: call.command, args: call.args as JsonObject, who: call.who, by: call.by, seed: call.seed, step: call.step, room });
     const outcome = validateCommand(raw, caps);
     return { ...outcome, problems: [...problems, ...outcome.problems] };
   } catch (error) {
     return { status: "failed", problems: [...problems, message(error)] };
   }
+}
+
+export interface CommandSteps {
+  /** Milliseconds, for `MAX_COMMAND_TOTAL_MS` (the services' clock). */
+  readonly now: () => number;
+  /**
+   * Apply one completed step's effects, at once and in one synchronous block, as for any call;
+   * false when the room moved on and nothing was applied: no further step is taken.
+   */
+  readonly apply: (outcome: Extract<CommandOutcome, { status: "ok" }>, step: number) => boolean;
+  /** The room for each step: read again before each, since the step before it changed it. */
+  readonly room: () => RoomSnapshot;
+}
+
+export type SteppedCommandOutcome =
+  /** The first call was refused or failed: nothing was applied. */
+  | Extract<CommandOutcome, { status: "refused" }>
+  | { readonly status: "failed"; readonly problems: readonly string[] }
+  /** The room moved on under the command: its later effects were not applied. */
+  | { readonly status: "stale"; readonly problems: readonly string[] }
+  | {
+      readonly status: "ok";
+      /** What the caller is answered (`commandAnswer`): the last completed step's, its data wrapped when the command asked for more. */
+      readonly result: { readonly text: string | null; readonly data: Json | null };
+      /** Steps that completed and were applied. */
+      readonly steps: number;
+      /** Why the loop was cut: `steps`, `time`, a step that `failed`; null when the command ended by itself. */
+      readonly stopped: StepStop | null;
+      readonly problems: readonly string[];
+    };
+
+/**
+ * One command and the further steps it asks for (`more: true`), each its own call through
+ * `dispatchCommand` — its own time limit, effect caps, checkpoint and seed (`stepSeed`) — with
+ * its effects handed to `apply` as soon as it completes, so a later step that fails or times
+ * out loses only itself. The loop and its limits are the SDK's (`runSteps`), the same the
+ * authors' test host runs.
+ */
+export async function runModuleCommand(worker: RoomWorker | null, call: Omit<CommandCall, "step" | "room">, steps: CommandSteps, caps: ModuleCaps = DEFAULT_CAPS): Promise<SteppedCommandOutcome> {
+  const problems: string[] = [];
+  let stale = false;
+  type Ok = Extract<CommandOutcome, { status: "ok" }>;
+  type NotOk = Exclude<CommandOutcome, { status: "ok" }> | null;
+  const run = await runSteps<Ok, NotOk>(call.seed, steps.now, async (step, seed) => {
+    const outcome = await dispatchCommand(worker, { ...call, seed, step, room: steps.room() }, caps);
+    problems.push(...outcome.problems);
+    if (outcome.status !== "ok") return { ok: false, value: outcome };
+    if (!steps.apply(outcome, step)) {
+      stale = true;
+      return { ok: false, value: null };
+    }
+    return { ok: true, value: outcome, more: outcome.more };
+  });
+  if (stale) return { status: "stale", problems };
+  if (run.kind === "first") {
+    const first = run.value;
+    if (first !== null && first.status === "refused") return { ...first, problems };
+    return { status: "failed", problems };
+  }
+  return { status: "ok", result: commandAnswer(run.last.result, run.steps, run.stopped), steps: run.steps, stopped: run.stopped, problems };
 }
 
 /** The read-only outputs for these viewers (each with the views they asked for), all seeing the same `room`. */

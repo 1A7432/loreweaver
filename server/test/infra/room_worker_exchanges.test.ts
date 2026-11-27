@@ -66,7 +66,7 @@ function kitchen(who: Who, ...views: string[]) {
 }
 
 function command(name: string, args: Record<string, Json> = {}, who: Who = ada) {
-  return { module: "kitchen", command: name, args, who, by: "member" as const, seed: `room:1:command:${name}`, room: ROOM };
+  return { module: "kitchen", command: name, args, who, by: "member" as const, seed: `room:1:command:${name}`, step: 0, room: ROOM };
 }
 
 test("load describes every module; a fresh module's state is kept at once", async () => {
@@ -228,7 +228,7 @@ test("init: create and load get the manifest's options and the room's seed with 
   const w = worker(["seeded"], { init: () => ({ seed: `table:${epoch}`, options: new Map([[path, { depth: 3, names: ["a"] }]]) }) });
   const view = async () => (await w.render([{ who: ada, views: [{ module: "seeded", view: "init" }] }], ROOM)).viewers[0]?.views[0];
   expect(await view()).toEqual({ module: "seeded", view: "init", data: { how: "create", options: { depth: 3, names: ["a"] }, seed: "table:1:seeded" } });
-  const ran = await w.command({ module: "seeded", command: "seed", args: {}, who: ada, by: "member", seed: "table:1:1:act:command", room: ROOM });
+  const ran = await w.command({ module: "seeded", command: "seed", args: {}, who: ada, by: "member", seed: "table:1:1:act:command", step: 0, room: ROOM });
   expect(ran.outcome).toEqual({ status: "ok", result: { text: "table:1:1:act:command" } });
   // A restart of the same life loads with the same seed.
   await w.stop();

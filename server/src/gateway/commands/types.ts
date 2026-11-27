@@ -50,6 +50,11 @@ export interface CommandSuccess {
   readonly after?: () => Promise<readonly string[]>;
   /** See `Done.disconnect`. */
   readonly disconnect?: readonly string[];
+  /**
+   * `events` are already on the table: a module command's steps published their own as each
+   * completed. The gateway records them as what the player did and does not publish them again.
+   */
+  readonly published?: true;
 }
 
 export interface CommandRefusal {

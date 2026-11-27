@@ -35,6 +35,7 @@ import {
   callerCharacter,
   callerViewer,
   memberIdOf,
+  moduleSeatRefusal,
   readDocument,
   saveCharacter,
   saveSeating,
@@ -193,11 +194,20 @@ function checkPack(call: CommandCall, character: StoredCharacter | null): RulePa
   return character?.pack ?? call.context.pack;
 }
 
-/** The caller's character, or null for a spectator (a refusal only when it cannot be read). */
+/**
+ * The caller's character, or null when there is no sheet to read: a spectator, or a member on
+ * a module's character (a check with a target given needs none). A refusal only when it
+ * cannot be read.
+ */
 function optionalCharacter(call: CommandCall): StoredCharacter | null | Refused {
   const found = callerCharacter(call);
   if (!isRefused(found)) return found;
-  return found.refused === "no_character" ? null : found;
+  return found.refused === "no_character" || found.refused === "no_sheet" ? null : found;
+}
+
+/** Why a check that needs the caller's sheet cannot have one: `no_sheet` on a module's character, else `no_character`. */
+function noSheet(call: CommandCall): Refused {
+  return moduleSeatRefusal(call) ?? refuse("no_character");
 }
 
 function pairs(map: ReadonlyMap<string, number>): [string, number][] {
@@ -288,7 +298,7 @@ function runCheck(call: CommandCall, args: Args): Done | Refused {
     if (explicit !== undefined) target = explicit;
     else {
       if (skill === undefined) return refuse("missing_arg", { path: "skill" });
-      if (character === null) return refuse("no_character");
+      if (character === null) return noSheet(call);
       const value = readStat(pack, character.character.sheet, skill);
       if (typeof value !== "number") return value;
       target = value;
@@ -296,7 +306,7 @@ function runCheck(call: CommandCall, args: Args): Done | Refused {
   } else if (resolution.targetKind === "dc") {
     target = explicit ?? null;
     if (skill !== undefined) {
-      if (character === null) return refuse("no_character");
+      if (character === null) return noSheet(call);
       const value = readStat(pack, character.character.sheet, skill);
       if (typeof value !== "number") return value;
       modifier = value;
@@ -397,7 +407,7 @@ function runOpposed(call: CommandCall, args: Args, subsystem: string | null): Do
   };
   const activeSide = side(a, aSkill);
   const passiveSide = side(b, bSkill);
-  if (character === null && (activeSide.value === null || passiveSide.value === null)) return refuse("no_character");
+  if (character === null && (activeSide.value === null || passiveSide.value === null)) return noSheet(call);
   const result = runSubsystem(pack, id, { template: "opposed", active: activeSide, passive: passiveSide, variant: call.context.variant }, call.context.random);
   if (!result.ok) {
     if ("refusal" in result && (result.refusal === "unknown_skill" || result.refusal === "not_numeric")) {

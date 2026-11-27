@@ -271,6 +271,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 - 引擎的形式优先于规则包的形式。每个命令都有一张英文别名表和一张中文别名表；两张总是都查，调用者的语言优先。
 - 模组命令按它的模组声明的文字写法来打，写法以 `commands` 视图列出的为准（[6.5](#65-发现命令commands-视图)）：`.strike Bo`。引擎和规则包的命令词优先于模组的；本房间两个模组都用了的词，哪个都不运行；同一个词有两个写法都对得上一行时，字面词多的那个胜出。命令词归某个模组写法所有、但一个写法都对不上的行，以 `usage` 拒绝。打出来的词按对应参数声明的类型转换（整数、数、`true`/`false`，其余是文本），然后像任何参数一样校验。
 - 每条模组命令也都能用完整 id 加一个 JSON 对象来打：`.duel/strike {"target":"Bo"}`（没有参数字符串即 `{}`；不是 JSON 对象的一律以 `module_args` 拒绝）。
+- 模组命令可以分步运行（一个长动作：模组要求再调用它一次，最多 8 次调用、20 秒）。桌面随时收到每一步的事件；调用者只收到一个结果，`text` 是最后一步的，`data` 是 `{steps, data, stopped?}`：跑了几步、最后一步自己的 `data`（没有则为 `null`），以及被截断时的原因——`steps`（步数上限）、`time`（时间上限）或 `failed`（某一步出错；之前的各步照样算数）。一次调用就跑完的命令，`data` 原样是它自己的。
 
 **内联掷骰。** 发言里最多可以带 8 个写成 `[[expr]]` 的内联掷骰，如 `I swing the lantern [[1d6]]`。每个都会掷出，并紧跟在这一行的 `narrative` 事件之后作为 `dice` 事件发布。解析失败的掷骰被跳过，并在结果的 `text` 里写出；超过 8 个则一个都不掷。
 
@@ -289,6 +290,7 @@ Loreweaver 让 AI 担任游戏主持人，带一桌人跑桌面角色扮演。�
 | `stale_generation` | 命令等待期间，房间被回退、重置或替换了。请重试。 |
 | `rate_limited` | 成员的突发额度用完了。 |
 | `module_args`、`module_unavailable` | 模组命令的参数不是 JSON 对象；模组拒绝了（原样显示它自己的理由）。 |
+| `no_sheet`、`module_character` | 调用者扮演的是模组的角色，由模组管理，没有角色卡：需要调用者角色卡的命令（`sheet`、`rename`、对技能的检定、对抗骰、规则系统的子系统、按角色卡投先攻 `init`）以 `no_sheet` 拒绝。`pc claim` 认领模组的角色以 `module_character` 拒绝：只有它的模组能让成员扮演它。 |
 | `command_failed` | 服务器出错；什么都没改。 |
 
 命令还有自己的错误码（`bad_dice`、`no_character`、`name_taken`、`reset_not_armed`、`undo_out_of_range`、`undo_beyond_depth`、`not_uploaded`、`save_not_uploaded`、`not_a_card`、`last_admin`……）。没有专属文字的错误码，用一条包含该错误码的通用消息表述。不认识的错误码当作普通拒绝处理，显示 `message`。
@@ -354,7 +356,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 | `rename` | player | `rename`, `nn` / `nn` | `name`（1–64） | 给你扮演的角色改名。 |
 | `new_character` | player | 已安装规则系统的建卡词（内置的有：`coc`、`coc7`、`dnd`、`dnd5e`） | `system`、`name?` | 创建并入座一个角色；一个 `narrative` 系统事件；`data {id, name, system, violations}`。 |
 | `genchar` | player | `genchar` / `genchar`, `生卡`, `生成角色` | `description`（字符串；为空是 `genchar_empty`，超过 2000 个码点是 `genchar_too_long`）、`name?`（1–64；默认同 `new_character`）、`system?`（1–64：规则系统的 id 或名字；默认房间的） | 按描述生成角色。服务器的模型把描述当作数据读，用一次调用提出一个构想——职业或职阶、侧重的属性、几项技能、一行背景；角色卡由规则系统掷出、数值由它分配（模型一个数都不写），模型写的内容经过服务器的词语过滤，角色的创建和入座与 `new_character` 相同（同样一个 `narrative` 系统事件；没有规则系统的房间采用这次指定的系统）。`text` 是用文字写出的角色卡；`data {id, name, system, method: "rolled"\|"standard_array", violations, dropped}`（`dropped`：模型回答中超出上限的部分）。不排在房间的回合后面。每个成员每小时最多 5 次，角色导入也算在内（`genchar_rate_limited`）。拒绝：`genchar_no_system`、`unknown_system`、`name_taken`、`genchar_no_model`（没有配置模型）、`genchar_failed`（模型出错，或它的回答不能用；消息里说明是哪种）。文本形式：`genchar [system] [name] \| <description>`、`genchar [system] <description>`（第一个词是规则系统名时选中它；`｜` 等同 `\|`）。 |
-| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op`（`list`\|`claim`\|`release`）、`name?`（≤128） | 可供选用的角色池。`claim` 先把 `name`（去掉首尾空白）当作角色池里某个角色的 id（`characters` 视图列出的那个）来找，找不到再当作它的名字找，不分大小写（`unknown_character`）。 |
+| `pc` | player | `pc`, `roster` / `pc`, `角色池`, `预设角色` | `op`（`list`\|`claim`\|`release`）、`name?`（≤128） | 可供选用的角色池。`claim` 先把 `name`（去掉首尾空白）当作角色池里某个角色的 id（`characters` 视图列出的那个）来找，找不到再当作它的名字找，不分大小写（`unknown_character`）。`list` 也列出房间里各模组的角色，各自注明模组；认领其中一个会被拒绝（`module_character`）：只有它的模组能让成员扮演它。`release` 让调用者从任何角色上下来，模组的角色也一样（模组在下一次调用时就能看到）。 |
 | `recap` | player, observer | `recap` / `recap`, `前情提要`, `前情` | — | 不剧透的前情提要。 |
 | `lore` | player；`list` 以外的全部，以及带 `disabled` 的 `list`：admin | `lore` / `lore`, `设定`, `設定` | `op`（`list`\|`add`\|`enable`\|`disable`\|`bind`\|`unbind`\|`restore`）、`title?`（≤200）、`content?`（≤16000）、`condition?`（≤500）、`disabled?` | 房间的设定。玩家的 `list` 只有正在用、且公开的条目：秘密的条目，或被关掉的条目（文件里自己关的，或管理员 `disable` 的），对玩家不存在，标题和内容都没有。`enable` / `disable` / `bind` / `unbind` / `restore` 是管理员按准确标题对导入设定做的开关。 |
 | `var` | admin | `var`, `vars` / `var`, `变量`, `變量` | `op`（`list`\|`expose`\|`hide`\|`set`\|`add`）、`path?`（≤200）、`value?`（≤4000）、`delta?` | 房间的变量；`expose` 把一个分支展示给玩家。`set` 和 `add` 只写已有的叶子：路径指向一个分支时被拒绝（`var_branch`，消息里列出它下面的叶子），分支不会被一个值替换。`set` 读 `value`（一个字符串；文本形式里是路径后面的整行），按第一条合用的规则：`true`、`false`、`null` 这三个词；JSON（`42`、`-3.5`、`1e3`、`"42"`、`[1, 2]`、`{"a": 1}`）；带括号的 JSON5 对象或列表（`{a: 1}`）；单引号里的文本（`'42'` 是文本 `42`，里面的 `''` 是一个引号）；数的四则运算，用 `+ - * / ^` 和括号（`2*3+1` 是 7——`2026-11-27` 也就是 1988）；YAML（`TRUE` 是 true，`~` 是 null，`0x10` 是 16，`time: dusk` 是一个映射，以 `#` 开头的值是 null）；都不是，就是文本本身，去掉两端的引号、反引号、反斜杠和空格。`undefined` 被拒绝（`var_refused`）。要设一个看起来像数的文本，给它加引号：`'42'` 或 `"42"`。原来是数的叶子收到文本会当作数（不是数时为 `not_a_number`）；声明过的变量按它的类型检查值。 |
@@ -369,7 +371,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 | `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op`（`export`\|`import`）、`file?`（64 位十六进制：上传过的存档） | 生命周期；见 [6.7](#67-房间生命周期命令客户端视角)。拒绝：`save_not_uploaded`、`save_not_stored`（导出没能存下；消息里写出媒体错误码）、`bad_bundle`、`no_media`。文本形式：`save [export]`、`save import <hash>`。 |
 | `uploads` | player, observer；`on`：admin | `uploads` / `uploads`, `上传` | `on?`（布尔） | 查看或设置房间的上传开关（`data {on}`，`text` 说明现在是开是关）。这个开关管房间的所有上传：成员分享的文件、带来导入的卡、管理员给音频库加的声音都一样。服务器保存文件时可用（`no_media`）。 |
 | `import` | player；`as: "world"`：admin | `import` / `import`, `导入` | `file?`（64 位十六进制内容哈希）、`pack?`（1–64）、`card?`（1–512）、`as`（`world`\|`character`）、`name?`（1–64） | 导入调用者以 `purpose: "import"` 上传的卡片文件（[11.6](#116-导入卡片)），或某个已启用扩展包自带的卡片（`pack` 和 `card`，即卡片在包里的路径；`pack_not_enabled`、`card_not_in_pack`）。没有媒体存储且没装任何扩展包时为 `no_media`。作为角色导入：按房间规则系统掷出一张角色卡，并像 `genchar` 那样偏向服务器的模型从卡片人设里读出的东西（与它共用每小时上限）；没有模型、超出上限或回答不能用时，角色卡就照常掷出，`text` 说明原因——`data.concept` 为 `applied`、`no_model`、`rate_limited`、`model_failed`、`unusable`、`aborted` 或 `none`。角色导入不排在房间的回合后面。 |
-| `pack` | player；`enable`、`disable`、`install`：admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op`（`list`\|`enable`\|`disable`\|`install`）、`id?`（1–64）、`ref?`（1–2000） | `list`：管理员看到所有已安装的扩展包，玩家按名字看到本房间的。`enable`/`disable` 在本房间开关一个已安装的扩展包（`unknown_pack`、`too_many_packs`、`module_id_taken`）；禁用时，正在播放它某个音频提示的层会停止（每层一个 `audio` `stop` 信号）。`install`（文本形式 `install <ref>`）：`ref` 是服务器上的路径、一个 `https://` URL 或 `gh:owner/repo[@tag]`；在服务器上安装扩展包并在这里启用它和它的技能；`data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`，`text` 是用文字写出的信任卡；一个 `narrative` 系统事件。它不排在房间的回合后面，下载和安装都完成时才给出它唯一的结果。拒绝：`not_https`、`bad_gh_ref`、`source_not_found`、`archive_too_large`、`fetch_failed`、`too_many_redirects`、`no_pack_asset`、`bad_release`、`bad_archive`、`invalid_pack`、`engine_too_old`、`already_installed`、`index_unreadable`、`install_failed`、`install_unavailable`。 |
+| `pack` | player；`enable`、`disable`、`install`：admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op`（`list`\|`enable`\|`disable`\|`install`）、`id?`（1–64）、`ref?`（1–2000） | `list`：管理员看到所有已安装的扩展包，玩家按名字看到本房间的。`enable`/`disable` 在本房间开关一个已安装的扩展包（`unknown_pack`、`too_many_packs`、`module_id_taken`）；禁用时，正在播放它某个音频提示的层会停止（每层一个 `audio` `stop` 信号），扮演它的模组的角色的成员也都下座。`install`（文本形式 `install <ref>`）：`ref` 是服务器上的路径、一个 `https://` URL 或 `gh:owner/repo[@tag]`；在服务器上安装扩展包并在这里启用它和它的技能；`data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`，`text` 是用文字写出的信任卡；一个 `narrative` 系统事件。它不排在房间的回合后面，下载和安装都完成时才给出它唯一的结果。拒绝：`not_https`、`bad_gh_ref`、`source_not_found`、`archive_too_large`、`fetch_failed`、`too_many_redirects`、`no_pack_asset`、`bad_release`、`bad_archive`、`invalid_pack`、`engine_too_old`、`already_installed`、`index_unreadable`、`install_failed`、`install_unavailable`。 |
 | `skill` | admin | `skill`, `skills` / `skill`, `技能` | `op`（`list`\|`enable`\|`disable`）、`id?`（1–64） | 本房间可以启用的守秘人技能：内置的，以及已启用扩展包的（`skill_not_available`、`too_many_skills`）。 |
 | `report` | player, observer；`reveal`：admin | `report` / `report`, `团报`, `跑团记录` | `format?`（`text`\|`html`）、`reveal?`（布尔） | 团报。不带参数：结果的 `text` 是一份简短的成绩单（`data {format: "text", players, turns, lines}`）。`html`：整场会话印成一个自包含的页面；`data {format: "html", edition, media: {hash, mime, size, name}}`——见下文。`reveal`（文本形式 `reveal`、`复盘`）：管理员的版本，还印出对玩家隐藏的内容。不产生事件；不等房间锁。服务器没有文件存储时为 `report_no_files`。 |
 | `jrrp` | player | `jrrp`, `luck` / `jrrp` | — | 今日人品。 |
@@ -692,17 +694,18 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 |---|---|---|
 | `member` | `{id, name, role, roleLabel}` | `roleLabel` 是查看者语言里的身份名。 |
 | `character` | object 或 `null` | 旁观的人（没有角色）为 `null`。 |
-| `character.id`, `.name`, `.pack` | string | `pack` 是角色的规则系统 id。 |
+| `character.id`, `.name`, `.pack` | string | `pack` 是角色的规则系统 id；模组的角色为空。 |
+| `character.module` | string，可选 | 模组的角色才有：管理它的模组的 id（`character.id` 是 `<module>:<id>`）。这样的角色只有模组给的名字和量表，没有状态、属性和技能：引擎不为它存角色卡。模组还没被读过一次之前，`name` 就是 id。 |
 | `character.status` | string[] | 状态。 |
-| `character.resources` | `[{id, label, value, max}]` | HP、理智之类的量表。 |
+| `character.resources` | `[{id, label, value, max?}]` | HP、理智之类的量表。只有模组的角色、而模组没给这一项上限时，才没有 `max`。 |
 | `character.attributes`, `.skills` | `[{key, label, value, derived?}]` | `value` 是数或字符串。只有角色卡是查看者自己的时才填。`derived: true` 标出规则系统由别的值算出来、角色卡上不存的值（排在存着的值后面）。不要提供修改推算出的属性：设置它会被拒绝（`sheet_write`）。设置推算出的技能会让这个技能有自己的值，此后列出时就不再带这个标记。 |
 
 **`party`**：谁在桌上，各自扮演什么，以及战斗的顺序。
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
-| `members` | `[{id, name, role, online, character}]` | 先是在线成员，再是不在线但已入座的成员。不在线的 `role` 为 `null`；`character` 是角色 id 或 `null`。 |
-| `characters` | `[{id, name, pack, status, resources, player}]` | 每个已入座的角色，以及房间保存的、不在角色池里供选用的其他角色（同伴）。`player` 是 `{id, name}` 或 `null`。 |
+| `members` | `[{id, name, role, online, character}]` | 先是在线成员，再是不在线但已入座的成员。不在线的 `role` 为 `null`；`character` 是角色 id（模组的角色为 `<module>:<id>`）或 `null`。 |
+| `characters` | `[{id, name, pack, status, resources, player, module?}]` | 每个已入座的角色，以及房间保存的、不在角色池里供选用的其他角色（同伴）。`player` 是 `{id, name}` 或 `null`。已入座的模组角色带 `module`，和 `me` 里一样；没人扮演的只在 `characters` 里列出。 |
 | `initiative` | `{round, acting, order: [{name, value}]}` 或 `null` | 没有战斗时为 `null`。`acting` 是名字或 `null`。 |
 
 **`scene`**：桌面正在看的东西，以及时间。
@@ -728,7 +731,7 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
-| `claimable` | `[{id, name, blurb, source: {kind, id}, player}]` | 供选用的角色；`source.kind` 是 `pack` 或 `module`；`player` 是扮演它的人的 `{id, name}`，或 `null`。 |
+| `claimable` | `[{id, name, blurb, source: {kind, id}, player}]` | 供选用的角色；`player` 是扮演它的人的 `{id, name}`，或 `null`。`source.kind` 是 `pack`（扩展包的预设角色，用 `pc claim` 认领）或 `module`（房间里各模组提供的每个角色，`id` 为 `<module>:<id>`，`source.id` 是模组）：只有它的模组能让成员扮演它，用的是模组自己的命令。 |
 | `systems` | `[{id, label, active}]` | 能创建新角色的规则系统；`active` 标出房间用的那个。 |
 | `mine` | string 或 `null` | 查看者扮演的角色的 id。 |
 

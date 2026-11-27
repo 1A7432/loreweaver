@@ -38,6 +38,7 @@ import { readDirectorImageState } from "../agent/lanes/director.ts";
 import type { RoomKit } from "../agent/lanes/presentation.ts";
 import { readScribeSnapshot } from "../agent/lanes/scribe.ts";
 import { type ClockInfo, describeModules, dispatchRender } from "../agent/modules.ts";
+import type { ModuleCharacter } from "../core/characters/index.ts";
 import type { TurnEnvironment, TurnInput, TurnPorts, TurnResult } from "../agent/turn/types.ts";
 import { SeededRandom } from "../core/random.ts";
 import type { RulePack } from "../core/rulepacks/index.ts";
@@ -210,6 +211,11 @@ export class Room {
   /** The module views of the last render; null until described (and after a lifecycle operation). */
   #moduleViews: ModuleViewSet | null = null;
   #moduleClock: ClockInfo | null = null;
+  /**
+   * The characters the modules offered at the last render, kept beside the module views and
+   * the clock: what a seat on a module's character shows (`core/characters/module_characters.ts`).
+   */
+  #moduleCharacters: readonly ModuleCharacter[] = [];
   /** The player action each command context was made for (the module seam reads it). */
   readonly #actions = new WeakMap<RoomContext, string>();
   /** Turns in flight: aborted when the room's generation moves under them. */
@@ -246,6 +252,21 @@ export class Room {
   /** The clock a module keeps, from the last render. */
   get moduleClock(): ClockInfo | null {
     return this.#moduleClock;
+  }
+
+  /**
+   * A module command step's events, on the table now: turn-less, through the command's writer,
+   * as a command's events are. False when the room moved on meanwhile.
+   */
+  publishCommandEvents(context: RoomContext, events: readonly CommandEvent[]): boolean {
+    const clock = this.#host.services.clock;
+    try {
+      for (const event of events) this.#publish(context.writer, event.kind, eventIdOf(event) ?? clock.id(), event.data, false);
+    } catch (error) {
+      if (error instanceof StaleGeneration) return false;
+      throw error;
+    }
+    return true;
   }
 
   /** The player action a command context was made for. */
@@ -375,6 +396,7 @@ export class Room {
     void this.#lock.run(async () => {
       this.#moduleViews = null;
       this.#moduleClock = null;
+      this.#moduleCharacters = [];
       this.#host.reloadWorker(this.id);
       await this.#host.packs.registerAssets(this.id, this.#host.services.store);
       await this.refreshViews();
@@ -472,6 +494,7 @@ export class Room {
       const swap = (): void => {
         this.#moduleViews = null;
         this.#moduleClock = null;
+        this.#moduleCharacters = [];
         this.#host.reloadWorker(this.id);
       };
       if (locked) swap();
@@ -492,19 +515,24 @@ export class Room {
       }
     }
     // A command may have changed what a module view shows — the module's own state, a variable,
-    // a character — so the module views are rendered again for whoever watches one; without
-    // this a panel fed by a module view stayed as it was until the next Keeper turn. (With no
+    // a character — so the module views are rendered again for whoever watches one, and the
+    // modules' characters read again (a seat, a resource); without this a panel stayed as it
+    // was until the next Keeper turn. Once per command, however many steps it ran. (With no
     // rendering yet, the refresh below makes the first one.)
-    if (published && this.#moduleViews !== null && this.views.moduleRequests().length > 0) await this.#renderModules();
+    if (published && this.#moduleViews !== null && (this.views.moduleRequests().length > 0 || (await this.#offersCharacters()))) await this.#renderModules();
     await this.refreshViews();
     if (locked && published) await this.#maybeNarrateNow(context, action, actorName(context));
   }
 
-  /** Publish a command's events (turn-less) and signals; false when the room moved on meanwhile. */
+  /**
+   * Publish a command's events (turn-less) and signals; false when the room moved on meanwhile.
+   * Events a module command's steps already published (`published`) are not sent again.
+   */
   #publishOutcome(writer: RoomWriter, outcome: Extract<CommandOutcome, { ok: true }>): boolean {
     const clock = this.#host.services.clock;
+    if (outcome.published === true && !writer.current()) return false;
     try {
-      for (const event of outcome.events) this.#publish(writer, event.kind, eventIdOf(event) ?? clock.id(), event.data, false);
+      for (const event of outcome.published === true ? [] : outcome.events) this.#publish(writer, event.kind, eventIdOf(event) ?? clock.id(), event.data, false);
     } catch (error) {
       if (error instanceof StaleGeneration) return false;
       throw error;
@@ -544,6 +572,7 @@ export class Room {
     this.#publishOutcome(fresh, outcome);
     this.#moduleViews = null;
     this.#moduleClock = null;
+    this.#moduleCharacters = [];
     this.#host.reloadWorker(this.id);
     if (lifecycle.kind === "import") {
       // The room was REPLACED: another log, another numbering. No event can say that to a
@@ -828,7 +857,7 @@ export class Room {
   }
 
   #viewerOf(member: Member): ViewerContext {
-    return viewerContext(this.#host.services, this.id, { id: member.id, name: member.name, role: member.role }, member.locale);
+    return viewerContext(this.#host.services, this.id, { id: member.id, name: member.name, role: member.role }, member.locale, this.#moduleCharacters);
   }
 
   #online(): OnlineMember[] {
@@ -847,6 +876,7 @@ export class Room {
       online: this.#online(),
       commands: { registry: host.registry, contextFor: (who) => this.#contextFor(who, host.services.store.writer(this.id), "view") },
       moduleClock: this.#moduleClock,
+      moduleCharacters: this.#moduleCharacters,
       uploads: host.uploads?.enabled(this.id) ?? false,
       packs: host.packs,
       media: host.uploads?.media ?? null,
@@ -877,13 +907,21 @@ export class Room {
     if (worker === null) return NO_MODULE_VIEWS;
     const described = await describeModules(worker);
     for (const problem of described.problems) this.#report(problem);
-    if (this.views.moduleRequests().length > 0 || described.modules.some((module) => module.clock)) {
+    // The clock and the characters are read by a render too: a seat shows its character's name and resources.
+    if (this.views.moduleRequests().length > 0 || described.modules.some((module) => module.clock || module.characters)) {
       await this.#renderModules();
       if (this.#moduleViews !== null) return this.#moduleViews;
     }
     const listed = listedModuleViews(described.modules);
     this.#moduleViews = listed;
     return listed;
+  }
+
+  /** Whether a loaded module offers characters (its `characters()` is read at every render). */
+  async #offersCharacters(): Promise<boolean> {
+    const worker = this.#host.moduleWorker(this.id);
+    if (worker === null) return false;
+    return (await describeModules(worker)).modules.some((module) => module.characters);
   }
 
   /**
@@ -910,6 +948,7 @@ export class Room {
     );
     for (const problem of [...described.problems, ...outcome.problems]) this.#report(problem);
     this.#moduleClock = outcome.clock;
+    this.#moduleCharacters = outcome.characters;
     const merged = mergeModuleViews(
       outcome,
       viewers.map((entry) => entry.viewer),
@@ -922,7 +961,7 @@ export class Room {
   // --- contexts -----------------------------------------------------------------------
 
   #who(member: Member): Who {
-    return whoIn(this.#host.services, this.id, { id: member.id, name: member.name, role: member.role }, this.locale);
+    return whoIn(this.#host.services, this.id, { id: member.id, name: member.name, role: member.role }, this.locale, this.#moduleCharacters);
   }
 
   #context(member: Member, writer: RoomWriter, input: string): RoomContext {
@@ -951,6 +990,7 @@ export class Room {
       variant,
       who,
       random: new SeededRandom(`${this.id}:${writer.epoch}:${writer.turn}:${input}`),
+      moduleCharacters: this.#moduleCharacters,
     };
   }
 

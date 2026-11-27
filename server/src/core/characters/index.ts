@@ -4,8 +4,10 @@
  * `character` documents wrap the rule-pack sheet (`core/sheets`) with the pack id, the
  * owning member, an avatar and status effects; the type is built by
  * `characterDocumentType(specFor)` from a sheet-spec lookup. `seating` maps members to the
- * characters they play; `claimable_characters` is what a room offers to be played. Every
- * function returns new data and never mutates; refusals are codes.
+ * characters they play; `claimable_characters` is what a room's packs offer to be played; a
+ * module's characters are an overlay the room keeps from the module's last render
+ * (`module_characters.ts`), never documents. Every function returns new data and never
+ * mutates; refusals are codes.
  */
 export {
   addStatus,
@@ -88,3 +90,15 @@ export {
   switchCharacter,
   withdrawCharacter,
 } from "./seating.ts";
+export {
+  findModuleCharacter,
+  isModuleCharacterId,
+  MAX_MODULE_CHARACTER_ID_CHARS,
+  MAX_MODULE_ID_CHARS,
+  MAX_SEAT_CHARACTER_CHARS,
+  type ModuleCharacter,
+  moduleCharacterId,
+  moduleCharacterName,
+  type ModuleResource,
+  splitModuleCharacterId,
+} from "./module_characters.ts";

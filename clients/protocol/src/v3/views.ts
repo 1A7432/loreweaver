@@ -20,7 +20,8 @@ export interface ViewResource {
   id: string;
   label: string;
   value: number;
-  max: number;
+  /** Absent only on a module's character whose module gave this resource no maximum. */
+  max?: number;
 }
 
 /** One attribute or skill: the pack's storage key, its label for the viewer, its value. */
@@ -45,7 +46,11 @@ export interface ViewPerson {
 /** `me`: the viewer, their role and the character they play. */
 export interface MeView {
   member: { id: string; name: string; role: Role; roleLabel: string };
-  /** Null for a spectator. `attributes` and `skills` are empty unless the sheet is the viewer's own. */
+  /**
+   * Null for a spectator. `attributes` and `skills` are empty unless the sheet is the viewer's
+   * own. A module's character (`module`: the module's id) has the name and resources its module
+   * gave, an empty `pack`, and no status, attributes or skills: the module keeps it, not a sheet.
+   */
   character: {
     id: string;
     name: string;
@@ -54,15 +59,19 @@ export interface MeView {
     resources: ViewResource[];
     attributes: ViewStat[];
     skills: ViewStat[];
+    module?: string;
   } | null;
 }
 
 /** `party`: who is at the table, what they play, and the fight's order. */
 export interface PartyView {
-  /** Members online, then seated members who are not. `role` is null for one who is offline. */
+  /** Members online, then seated members who are not. `role` is null for one who is offline. `character`: the id they play (a module's as `<module>:<id>`). */
   members: { id: string; name: string; role: Role | null; online: boolean; character: string | null }[];
-  /** Characters in play: every seated one, and any other the room keeps that is not on offer (a companion). */
-  characters: { id: string; name: string; pack: string; status: string[]; resources: ViewResource[]; player: ViewPerson | null }[];
+  /**
+   * Characters in play: every seated one, and any other the room keeps that is not on offer (a
+   * companion). A seated module's character carries `module`, as in `me`.
+   */
+  characters: { id: string; name: string; pack: string; status: string[]; resources: ViewResource[]; player: ViewPerson | null; module?: string }[];
   /** Null while no fight is on. */
   initiative: { round: number; acting: string | null; order: { name: string; value: number }[] } | null;
 }
@@ -109,7 +118,12 @@ export interface VariablesView {
   tree: ViewTreeLeaf[];
 }
 
-/** `characters`: what can be played, and the systems that can make a new character. */
+/**
+ * `characters`: what can be played, and the systems that can make a new character. `claimable`
+ * lists a pack's pregens (`source.kind: "pack"`, taken with `pc claim`) and every character the
+ * room's modules offer (`source.kind: "module"`, id `<module>:<id>`): only its module seats a
+ * member on one, by the module's own command.
+ */
 export interface CharactersView {
   claimable: { id: string; name: string; blurb: string; source: { kind: "pack" | "module"; id: string }; player: ViewPerson | null }[];
   systems: { id: string; label: string; active: boolean }[];
@@ -358,7 +372,7 @@ function nullable(schema: ViewSchema): ViewSchema {
   return { anyOf: [schema, { type: "null" }] };
 }
 
-const RESOURCE = record({ id: STRING, label: STRING, value: NUMBER, max: NUMBER });
+const RESOURCE = record({ id: STRING, label: STRING, value: NUMBER, max: NUMBER }, ["max"]);
 const STAT = record({ key: STRING, label: STRING, value: { type: ["number", "string"] }, derived: { const: true } }, ["derived"]);
 const PERSON = record({ id: STRING, name: STRING });
 const SCALAR = { type: ["null", "boolean", "number", "string"] } as const;
@@ -366,13 +380,16 @@ const SCALAR = { type: ["null", "boolean", "number", "string"] } as const;
 export const ME_VIEW_SCHEMA: ViewSchema = record({
   member: record({ id: STRING, name: STRING, role: ROLE, roleLabel: STRING }),
   character: nullable(
-    record({ id: STRING, name: STRING, pack: STRING, status: list(STRING), resources: list(RESOURCE), attributes: list(STAT), skills: list(STAT) }),
+    record(
+      { id: STRING, name: STRING, pack: STRING, status: list(STRING), resources: list(RESOURCE), attributes: list(STAT), skills: list(STAT), module: STRING },
+      ["module"],
+    ),
   ),
 });
 
 export const PARTY_VIEW_SCHEMA: ViewSchema = record({
   members: list(record({ id: STRING, name: STRING, role: { anyOf: [ROLE, { type: "null" }] }, online: BOOLEAN, character: NULLABLE_STRING })),
-  characters: list(record({ id: STRING, name: STRING, pack: STRING, status: list(STRING), resources: list(RESOURCE), player: nullable(PERSON) })),
+  characters: list(record({ id: STRING, name: STRING, pack: STRING, status: list(STRING), resources: list(RESOURCE), player: nullable(PERSON), module: STRING }, ["module"])),
   initiative: nullable(record({ round: INTEGER, acting: NULLABLE_STRING, order: list(record({ name: STRING, value: INTEGER })) })),
 });
 

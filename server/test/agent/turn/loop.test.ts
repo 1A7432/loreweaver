@@ -209,4 +209,19 @@ describe("with a real room worker", () => {
     expect(ran.result.contentWrites.has("kitchen.luck")).toBe(true);
     expect(saved.has("kitchen")).toBe(true);
   });
+
+  test("run_command on a command that runs in steps is ONE tool call: one result, every step's events on the table before the reply", async () => {
+    const h = new Harness();
+    const worker = new RoomWorker(() => spawnWorker(WORKER_ENTRY), [fixtureModule("colony")], { timeoutMs: 5000 });
+    workers.push(worker);
+    h.keeper.script([{ toolCalls: [toolCall("run_command", { id: "colony/advance", args: { years: 3 } })] }, "Three winters pass."]);
+    const ran = await h.turn("We wait out the years.", { worker });
+    expect(ran.result.status).toBe("replied");
+    const texts = ran.events.filter((event) => event.kind === "narrative").map((event) => String(event.data.text));
+    expect(texts).toEqual(["year 1", "year 2", "year 3", "Three winters pass."]);
+    expect(ran.events.filter((event) => event.kind === "dice")).toHaveLength(3);
+    const tools = (h.keeper.requests[1]?.messages ?? []).filter((message) => message.role === "tool").map((message) => message.content);
+    expect(tools).toEqual(["colony/advance: year 3\n(Ran in 3 steps.)"]);
+    expect(ran.result.toolsCalled).toEqual(["run_command"]);
+  });
 });

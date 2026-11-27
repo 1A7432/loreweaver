@@ -5,7 +5,7 @@
 // not in that list; the tools still find them by id, describe them as not the Keeper's, and
 // refuse to run them. The command table and the function that runs a command in the room's
 // worker are the turn engine's.
-import { keeperMayRun } from "loreweaver/runner";
+import { keeperMayRun, type StepStop } from "loreweaver/runner";
 
 import type { JsonObject } from "../../core/documents/model.ts";
 import { param } from "./params.ts";
@@ -39,6 +39,18 @@ const WHO_MAY_RUN: Readonly<Record<ModuleCommand["info"]["role"], string>> = {
 
 /** A member's own verb: the Keeper does not run it, whatever its role allows a member. */
 const MEMBERS_ONLY = "the players themselves (it is a player's own action); you cannot run it";
+
+const STOPPED: Readonly<Record<StepStop, string>> = {
+  steps: "the step limit",
+  time: "the time limit",
+  failed: "the next step failed inside the module and nothing it did was kept; the steps before it stand",
+};
+
+/** What a command that ran in steps says besides its answer: how many, and why it stopped early. Empty for one call. */
+function stepsNote(steps: number, stopped: StepStop | null): string {
+  if (stopped !== null) return `(Stopped after ${steps} step${steps === 1 ? "" : "s"}: ${STOPPED[stopped]}.)`;
+  return steps > 1 ? `(Ran in ${steps} steps.)` : "";
+}
 
 /** Who may run a command, as the Keeper is told. */
 function whoMayRun(info: ModuleCommand["info"]): string {
@@ -94,8 +106,11 @@ export const runCommandTool = defineTool({
       case "ok": {
         const { text, data } = outcome.result;
         const answer = text ?? (data === null ? "done." : JSON.stringify(data));
-        return { text: `${id}: ${answer}`, bookkeeping };
+        const steps = stepsNote(outcome.steps, outcome.stopped);
+        return { text: `${id}: ${answer}${steps === "" ? "" : `\n${steps}`}`, bookkeeping };
       }
+      case "stale":
+        return { status: "failed", code: "command_failed", text: `${id} was cut short: the room moved on while it ran. Carry on without it.`, bookkeeping };
       case "refused": {
         const reasons = {
           unknown: "the module does not have this command",

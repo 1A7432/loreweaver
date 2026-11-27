@@ -3,17 +3,20 @@
 // them a room really takes is the registry's to decide — and run through the worker
 // (`agent/modules.ts`, which checks the arguments against the command's `params` first);
 // the effects a command asks for are applied by `applyModuleEffects` under the command's own
-// context, with the room's fact review.
+// context, with the room's fact review. A command that answers `more: true` is called again
+// (`runModuleCommand`): each step's effects are applied and its events published by the room
+// as the step completes, so the command's outcome carries them marked `published`, for the
+// record of what the player did, never to be published twice.
 //
-// The events come back in the command's outcome like any command's. One kind does not fit
-// the registry's event shape: a `blocks` event a module emits WITH an id replaces the
-// earlier one of that id, and `CommandEvent` has no id. Such an event carries its id as an
-// extra field (`eventIdOf` reads it back) and the room publishes it under that id.
+// One kind of event does not fit the registry's event shape: a `blocks` event a module emits
+// WITH an id replaces the earlier one of that id, and `CommandEvent` has no id. Such an event
+// carries its id as an extra field (`eventIdOf` reads it back) and the room publishes it
+// under that id.
 import type { JsonObject, RoomMember, RoomSnapshot } from "loreweaver/module";
 
 import type { RoomContext, Services } from "../agent/context.ts";
 import { applyModuleEffects, type EffectEvent, type TextReview } from "../agent/effects.ts";
-import { type ClockInfo, describedModules, describeModules, dispatchCommand, type ModuleInfo } from "../agent/modules.ts";
+import { type ClockInfo, type CommandOutcome as DispatchOutcome, describedModules, describeModules, type ModuleInfo, runModuleCommand } from "../agent/modules.ts";
 import { clockReading, moduleVariablesJson } from "../agent/turn/reader.ts";
 import { translate } from "../infra/i18n.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
@@ -32,6 +35,11 @@ export interface ModuleCommandRooms {
   moduleClock(room: string): ClockInfo | null;
   /** Every member of the room, as a module call carries them (`roomMembers`). */
   members(room: string): readonly RoomMember[];
+  /**
+   * Put a command step's events on the table now, turn-less, through the context's writer;
+   * false when the room moved on and they could not be.
+   */
+  publish(context: RoomContext, events: readonly IdentifiedEvent[]): boolean;
 }
 
 /** A command event, with the id of the event it replaces when a module gave one. */
@@ -126,16 +134,24 @@ export class RoomModuleCommands implements ModuleCommands {
     const command = id.slice(at + 1);
     const room = context.room;
     const action = this.#rooms.actionOf(context);
+    const events: IdentifiedEvent[] = [];
+    // Every step's effects are applied, and its events go to the table, as the step completes:
+    // a later step that fails or times out loses only itself.
+    const apply = (step: Extract<DispatchOutcome, { status: "ok" }>): boolean => {
+      const applied = applyModuleEffects(context, step, { review: this.#rooms.reviewFact(context), action, work: "action", members: this.#rooms.members(room) });
+      if (applied.stale) return false;
+      for (const log of step.logs) context.services.report(room, `module command ${id}: module ${log.module} log — ${log.text}`);
+      for (const problem of applied.problems) context.services.report(room, `module command ${id}: ${problem.code}${problem.detail === undefined ? "" : ` (${problem.detail})`}`);
+      const stepEvents = applied.events.map(asCommandEvent);
+      events.push(...stepEvents);
+      return this.#rooms.publish(context, stepEvents);
+    };
     const outcome = await runAsWork(context.writer, () =>
-      dispatchCommand(this.#rooms.worker(room), {
-        module,
-        command,
-        args,
-        who: context.who,
-        by: "member",
-        seed: `${room}:${context.writer.epoch}:${context.turn}:${action}:command`,
-        room: moduleRoom(context.services, room, context.turn, this.#rooms.moduleClock(room), this.#rooms.members(room)),
-      }),
+      runModuleCommand(
+        this.#rooms.worker(room),
+        { module, command, args, who: context.who, by: "member", seed: `${room}:${context.writer.epoch}:${context.turn}:${action}:command` },
+        { now: () => context.services.clock.now(), apply, room: () => moduleRoom(context.services, room, context.turn, this.#rooms.moduleClock(room), this.#rooms.members(room)) },
+      ),
     );
     for (const problem of outcome.problems) context.services.report(room, problem);
     switch (outcome.status) {
@@ -158,16 +174,18 @@ export class RoomModuleCommands implements ModuleCommands {
         break;
       case "failed":
         return refusal(locale, "command_failed");
+      case "stale":
+        return refusal(locale, "stale_generation");
       case "ok": {
-        const applied = applyModuleEffects(context, outcome, { review: this.#rooms.reviewFact(context), action, work: "action" });
-        if (applied.stale) return refusal(locale, "stale_generation");
-        for (const problem of applied.problems) context.services.report(room, `module command ${id}: ${problem.code}${problem.detail === undefined ? "" : ` (${problem.detail})`}`);
-        const success: { ok: true; text?: string; data?: unknown; events: readonly CommandEvent[]; signals: [] } = {
+        const success: { ok: true; text?: string; data?: unknown; events: readonly CommandEvent[]; signals: []; published: true } = {
           ok: true,
-          events: applied.events.map(asCommandEvent),
+          events,
           signals: [],
+          published: true,
         };
-        if (outcome.result.text !== null && outcome.result.text !== "") success.text = outcome.result.text;
+        // A command cut short says so after its own answer, in the caller's language.
+        const lines = [outcome.result.text ?? "", outcome.stopped === null ? "" : translate(COMMANDS_CATALOG, locale, `module.stopped_${outcome.stopped}`, { steps: outcome.steps })].filter((line) => line !== "");
+        if (lines.length > 0) success.text = lines.join("\n");
         if (outcome.result.data !== null) success.data = outcome.result.data;
         return success;
       }

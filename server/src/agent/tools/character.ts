@@ -20,7 +20,7 @@ import {
 } from "../../core/sheets/index.ts";
 import type { RoomContext } from "../context.ts";
 import { param } from "./params.ts";
-import { activeCharacter, getDocument, type LoadedCharacter, listDocuments, loadCharacter, refuse, saveCharacter, saveSheet, shown, violationNotice } from "./shared.ts";
+import { activeCharacter, getDocument, type LoadedCharacter, listDocuments, loadCharacter, moduleCharacterLines, refuse, saveCharacter, saveSheet, shown, violationNotice } from "./shared.ts";
 import { defineTool, type ToolResult } from "./types.ts";
 
 /** A sheet's attributes (stored, then derived) and its meters, one line each. */
@@ -42,6 +42,10 @@ export const getCharacterSheetTool = defineTool({
   flags: { readOnly: true },
   suspends: null,
   run(context): ToolResult {
+    // A module's character: what the module gave, and whose it is; reading it is no failure.
+    const seat = context.who.character;
+    const kept = seat === null ? null : moduleCharacterLines(context, seat.id);
+    if (kept !== null) return { text: kept.join("\n") };
     const active = activeCharacter(context);
     if (!active.ok) return active.result;
     const { pack, character } = active.loaded;
@@ -94,6 +98,11 @@ export const listPartySheetsTool = defineTool({
   run(context): ToolResult {
     const blocks: string[] = [];
     for (const id of partyCharacterIds(context)) {
+      const kept = moduleCharacterLines(context, id);
+      if (kept !== null) {
+        blocks.push(`— ${kept.join("\n")}`);
+        continue;
+      }
       const loaded = loadCharacter(context, id);
       // One unreadable character must not cost the Keeper the whole roster.
       if (!loaded.ok) continue;

@@ -56,4 +56,22 @@ describe("PartyRoster", () => {
     expect(frame).toContain("▸ Armitage")
     expect(frame).toContain("✓ Wilmarth · claimed by Bao")
   })
+
+  test("a module's character: its module named, a resource with no maximum as its value, no sheet assumed; a module's free character is not offered to claim", async () => {
+    const own = { id: "colony:ana", name: "Ana", pack: "", status: [], resources: [{ id: "food", label: "Food", value: 2 }], attributes: [], skills: [], module: "colony" }
+    const party: PartyView = { members: [{ id: "m1", name: "Ada", role: "player", online: true, character: "colony:ana" }], characters: [{ ...own, player: { id: "m1", name: "Ada" } }], initiative: null }
+    const offer = { claimable: [{ id: "colony:bo", name: "Bo", blurb: "", source: { kind: "module" as const, id: "colony" }, player: null }], systems: [], mine: "colony:ana" }
+    expect(freeClaimables(offer)).toEqual([])
+    const { renderer, flush, captureCharFrame } = await testRender(
+      <PartyRoster character={own} party={party} characters={offer} theme={themes.lamplight} locale="en" focused={false} onFocus={() => {}} />,
+      { width: 60, height: 16 },
+    )
+    destroy.push(() => renderer.destroy())
+    await flush()
+    const frame = captureCharFrame()
+    expect(frame).toContain("Ana (you)")
+    expect(frame).toContain("Food 2")
+    expect(frame).toContain("Bo · kept by colony")
+    expect(frame).not.toContain("▸ Bo")
+  })
 })

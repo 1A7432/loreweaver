@@ -22,7 +22,12 @@
 //     replacing `blocks` event under a stable event id;
 //   - a roll: a `dice` event;
 //   - prompt injections (turn start): written to the per-turn record `TURN_INJECTIONS`, so
-//     what reached the model can be reconstructed.
+//     what reached the model can be reconstructed;
+//   - a seat (`fx.seat`): through the seating document, so it is journaled and undone with the
+//     turn. A module seats a member of the room on one of ITS characters (by the namespaced id,
+//     `core/characters/module_characters.ts`) or unseats them from one; it never displaces a
+//     member who holds a character that is not its own, nor takes a character another member
+//     holds. A refusal is a problem with its code, nothing changed.
 //
 // Narrate now (decision 35, and ruling 2 at the top of §12): a fact may ask the engine to
 // open a Keeper turn over the pending facts. At most one such turn opens per player action
@@ -33,8 +38,23 @@
 // A writer that is no longer current (the room was undone, reset or replaced while the
 // exchange was out) applies nothing: the whole outcome is reported as stale.
 import { type Block, type BlocksData, charCount, type DiceData, type NarrativeData } from "loreweaver-protocol/v3";
-import type { Json } from "loreweaver/module";
+import type { Json, RoomMember } from "loreweaver/module";
 
+import {
+  characterOf,
+  EMPTY_SEATING,
+  MAX_MODULE_CHARACTER_ID_CHARS,
+  memberOf,
+  moduleCharacterId,
+  readSeating,
+  release,
+  type Seating,
+  seatingData,
+  SEATING_ID,
+  SEATING_TYPE,
+  splitModuleCharacterId,
+  switchCharacter,
+} from "../core/characters/index.ts";
 import { DocumentRefused } from "../core/documents/raw.ts";
 import {
   applyUpdates,
@@ -56,7 +76,7 @@ import {
 import { jsonStateKey, type StateKey } from "../infra/lifecycle/declarations.ts";
 import type { Store } from "../infra/store.ts";
 import type { RoomContext } from "./context.ts";
-import type { Applied, BlocksRequest, FactRequest } from "./modules.ts";
+import type { Applied, BlocksRequest, FactRequest, SeatRequest } from "./modules.ts";
 
 // ---------------------------------------------------------------- caps
 
@@ -135,7 +155,17 @@ export type EffectProblemCode =
   /** The pending-facts list is full: the new fact took the place of an older, less important one (`detail`: that fact's importance). */
   | "pending_displaced"
   /** The injection record refused an injection over its cap. */
-  | "injection_dropped";
+  | "injection_dropped"
+  /** A seat for someone who is not a member of the room (`detail`: the member id given). */
+  | "not_member"
+  /** A seat for a member who holds a character that is not this module's: never displaced. */
+  | "member_has_character"
+  /** A seat on a character the module does not offer now (`detail`: its id). */
+  | "unknown_character"
+  /** A seat on a character another member holds. */
+  | "character_taken"
+  /** The seating refused the seat, or cannot be read (`detail`: its code). */
+  | "seat_refused";
 
 /** For the operator's log; never shown at the table. */
 export interface EffectProblem {
@@ -160,6 +190,8 @@ export interface EffectOptions {
   readonly action: string;
   /** `facts_turn`: this is the narrate-now turn itself; its marks wait for the next turn. */
   readonly work: WorkKind;
+  /** Every member of the room (`fx.seat` seats only one of them). */
+  readonly members: readonly RoomMember[];
 }
 
 export interface EffectsApplied {
@@ -711,6 +743,76 @@ export function recordInjections(context: RoomContext, injections: readonly stri
 
 const NOTHING: WriteCommit = { applied: [], refused: [] };
 
+/** Whether `character` (a seat's id) is one of `module`'s characters. */
+function isOwnCharacter(module: string, character: string): boolean {
+  return splitModuleCharacterId(character)?.module === module;
+}
+
+/**
+ * Apply the seat requests in order, as one write of the seating document. A request that
+ * cannot be applied changes nothing and is a problem with its code; unseating a member who
+ * holds none of the module's characters is no change and no problem.
+ */
+export function applySeats(context: RoomContext, seats: readonly SeatRequest[], members: readonly RoomMember[]): EffectProblem[] {
+  if (seats.length === 0) return [];
+  const problems: EffectProblem[] = [];
+  const document = context.services.documents.get(context.room, SEATING_TYPE, SEATING_ID);
+  const stored = document === null ? EMPTY_SEATING : document.corrupt ? null : readSeating(document.data);
+  if (stored === null) return seats.map((seat) => ({ code: "seat_refused", module: seat.module, detail: "document_unreadable" }));
+  let seating: Seating = stored;
+  let changed = false;
+  const byId = new Map(members.map((member) => [member.id, member] as const));
+  for (const seat of seats) {
+    const member = byId.get(seat.member);
+    if (member === undefined) {
+      problems.push({ code: "not_member", module: seat.module, detail: charCount(seat.member) <= MAX_BLOCK_LABEL_CHARS ? seat.member : "" });
+      continue;
+    }
+    const current = characterOf(seating, member.id);
+    if (seat.character === null) {
+      if (current === null || !isOwnCharacter(seat.module, current)) continue;
+      const freed = release(seating, member.id);
+      if (freed.ok) {
+        seating = freed.data;
+        changed = true;
+      }
+      continue;
+    }
+    const id = seat.character;
+    if (seat.name === null || id === "" || id.trim() !== id || charCount(id) > MAX_MODULE_CHARACTER_ID_CHARS) {
+      problems.push({ code: "unknown_character", module: seat.module, detail: charCount(id) <= MAX_MODULE_CHARACTER_ID_CHARS ? id : "" });
+      continue;
+    }
+    const target = moduleCharacterId(seat.module, id);
+    if (current === target) continue;
+    if (current !== null && !isOwnCharacter(seat.module, current)) {
+      problems.push({ code: "member_has_character", module: seat.module, detail: member.id });
+      continue;
+    }
+    const holder = memberOf(seating, target);
+    if (holder !== null && holder !== member.id) {
+      problems.push({ code: "character_taken", module: seat.module, detail: id });
+      continue;
+    }
+    const moved = switchCharacter(seating, member.id, target, member.name);
+    if (!moved.ok) {
+      problems.push({ code: "seat_refused", module: seat.module, detail: moved.code });
+      continue;
+    }
+    seating = moved.data;
+    changed = true;
+  }
+  if (changed) {
+    try {
+      context.services.documents.put(context.writer, SEATING_TYPE, SEATING_ID, seatingData(seating));
+    } catch (error) {
+      if (!(error instanceof DocumentRefused)) throw error;
+      return [...problems, { code: "seat_refused", module: null, detail: "document_refused" }];
+    }
+  }
+  return problems;
+}
+
 /**
  * Commit a validated module outcome (turn start, reply phase or a command) to the room in
  * one synchronous block, and return the events to publish, in order: dice first (the
@@ -783,6 +885,8 @@ export function applyModuleEffects(
   if (added > 0) context.writer.statePut(PENDING_FACTS, pending);
 
   events.push(...blockEvents(outcome.blocks, options.review, problems));
+
+  problems.push(...applySeats(context, outcome.seats, options.members));
 
   if (outcome.injections !== undefined) problems.push(...recordInjections(context, outcome.injections));
 

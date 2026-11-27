@@ -13,6 +13,7 @@ import {
   EMPTY_CLAIMABLE,
   EMPTY_SEATING,
   MAX_CLAIMABLE,
+  MAX_SEAT_CHARACTER_CHARS,
   MAX_SEATS,
   MAX_STATUS_CHARS,
   MAX_STATUS_EFFECTS,
@@ -287,7 +288,7 @@ describe("seating", () => {
 
   test("ids and names are capped and refused", () => {
     expect(claim(EMPTY_SEATING, "", "ada", "x")).toEqual({ ok: false, code: "bad_member" });
-    expect(claim(EMPTY_SEATING, "m1", "a".repeat(129), "x")).toEqual({ ok: false, code: "bad_character" });
+    expect(claim(EMPTY_SEATING, "m1", "a".repeat(MAX_SEAT_CHARACTER_CHARS + 1), "x")).toEqual({ ok: false, code: "bad_character" });
     expect(claim(EMPTY_SEATING, "m1", "ada", "n".repeat(65))).toEqual({ ok: false, code: "bad_member_name" });
     let seating = EMPTY_SEATING;
     for (let i = 0; i < MAX_SEATS; i++) seating = seated(seating, `m${i}`, `c${i}`);

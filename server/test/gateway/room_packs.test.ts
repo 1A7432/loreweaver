@@ -239,3 +239,29 @@ test("the packs view and `pack list`: the admin sees every installed pack, a pla
   // The view's shape is the protocol's.
   expect(schemaProblems(PACKS_VIEW_SCHEMA, views(root.sent, "packs").at(-1)?.data)).toEqual([]);
 });
+
+test("disabling a pack releases every seat on its modules' characters, in the same command", async () => {
+  const module = `import { defineModule } from "loreweaver/module";
+export default defineModule({
+  id: "settle",
+  characters() { return [{ id: "ana", name: "Ana", resources: [{ id: "hp", label: "HP", value: 3, max: 3 }] }]; },
+  commands: { join: { title: "Join", run(_args, who, fx) { fx.seat(who.member.id, "ana"); return { text: "joined" }; } } },
+});
+`;
+  const manifest = manifestYaml({ id: "settle" }).replace("{ id: tally, entry: modules/tally.js }", "{ id: settle, entry: modules/tally.js }");
+  const file = join(dir, "settle.lwpack");
+  const entries = packEntries({ "modules/tally.js": text(module) }, manifest);
+  writeFileSync(file, writeZip(entries.sort((a, b) => (a.path === "pack.yaml" ? -1 : b.path === "pack.yaml" ? 1 : a.path < b.path ? -1 : 1))));
+  const outcome = await installPack(join(dir, "settle-data"), file, { yes: true, fetch: () => Promise.reject(new Error("offline")) });
+  if (!outcome.ok) throw new Error(JSON.stringify(outcome));
+  const b = setup(loadInstalledPacks(join(dir, "settle-data")).packs);
+  const ada = b.join(KEYS.ada);
+  ada.receive({ type: "call", rid: "w", method: "view.subscribe", params: { names: ["me"] } });
+  expect(await say(b, KEYS.root, "e", ".pack enable settle")).toMatchObject({ ok: true });
+  expect(await say(b, KEYS.ada, "j", ".settle/join")).toMatchObject({ ok: true, text: "joined" });
+  expect((views(ada.sent, "me").at(-1)?.data as { character: unknown }).character).toMatchObject({ id: "settle:ana", name: "Ana", module: "settle" });
+  expect(await say(b, KEYS.root, "d", ".pack disable settle")).toMatchObject({ ok: true });
+  expect((views(ada.sent, "me").at(-1)?.data as { character: unknown }).character).toBeNull();
+  const seating = b.store.docGet(ROOM, "seating", "seating");
+  expect(seating === null ? [] : (JSON.parse(seating.data) as { seats: unknown[] }).seats).toEqual([]);
+});

@@ -54,7 +54,7 @@ import { FoldBudget, isContextOverflow, prepareFoldCommit, recoveryFold, routine
 import { voiceNpc } from "../lanes/npc_actor.ts";
 import { WHISPERS_KEY, type Whisper } from "../lanes/scribe.ts";
 import { commitLore, loreVariables, runLoreStep } from "../lore_step.ts";
-import { type Applied, describeModules, dispatchCommand, dispatchReplyPhase, dispatchToolUse, dispatchTurnStart, type ModuleInfo, type ToolVerdict } from "../modules.ts";
+import { type Applied, describeModules, dispatchReplyPhase, dispatchToolUse, dispatchTurnStart, type ModuleInfo, runModuleCommand, type ToolVerdict } from "../modules.ts";
 import { assembleKeeperPrompt, keeperMessages, moveInTurnBreakpoint, type PlayerAction } from "../prompt/index.ts";
 import { indexChronicleRecords, recall } from "../recall.ts";
 import {
@@ -64,7 +64,9 @@ import {
   concurrencyGroups,
   mergeBookkeeping,
   type ModuleCommand,
+  type ModuleCommandRun,
   NO_BOOKKEEPING,
+  type RunCommandRequest,
   subsystemTools,
   type TableEvent,
   type ToolDeps,
@@ -455,6 +457,7 @@ class KeeperTurn {
       review: this.#ports.reviewFact,
       action: this.#input.action,
       work: this.#input.work,
+      members: this.#ports.members(),
     });
     if (applied.stale) this.#ensureCurrent();
     for (const write of applied.writes.applied) this.#contentWrites.add(write.path);
@@ -570,25 +573,47 @@ class KeeperTurn {
               return hits.lore;
             },
           }),
-      ...(this.#worker === null
-        ? {}
-        : {
-            runCommand: (request) =>
-              dispatchCommand(this.#worker, {
-                module: request.module,
-                command: request.command,
-                args: request.args,
-                who: context.who,
-                by: "keeper",
-                seed: this.#seed(`command:${++this.#commands}`),
-                room: { turn: context.turn, variables: moduleVariablesJson(services, room), clock: clockReading(services, room, this.#moduleClock), members: this.#ports.members() },
-              }),
-          }),
+      ...(this.#worker === null ? {} : { runCommand: (request: RunCommandRequest) => this.#runCommand(request) }),
     };
     const catalog = buildCatalog({ unlocked: unlockedTools(this.#env.skills, enabled), keeperOwnsClock: !this.#moduleOwnsClock, pack: context.pack, commands, deps });
     for (const problem of catalog.problems) this.#problem("catalog_problem", problem);
     this.#catalog = catalog;
     this.#tools = catalog.definitions();
+  }
+
+  /**
+   * `run_command`: one module command and the further steps it asks for, ONE tool call. Each
+   * completed step's effects are applied and its events published as it completes (the call
+   * is a group of its own, so call order holds), so a later step that fails loses only itself.
+   */
+  async #runCommand(request: RunCommandRequest): Promise<ModuleCommandRun> {
+    const context = this.#context;
+    const { services, room } = context;
+    const events: EffectEvent[] = [];
+    const outcome = await runModuleCommand(
+      this.#worker,
+      { module: request.module, command: request.command, args: request.args, who: context.who, by: "keeper", seed: this.#seed(`command:${++this.#commands}`) },
+      {
+        now: () => services.clock.now(),
+        room: () => ({ turn: context.turn, variables: moduleVariablesJson(services, room), clock: clockReading(services, room, this.#moduleClock), members: this.#ports.members() }),
+        apply: (step) => {
+          if (this.#input.signal?.aborted === true || !context.writer.current()) return false;
+          this.#moduleProblems([], step.logs);
+          const applied = applyModuleEffects(context, step, { review: this.#ports.reviewFact, action: this.#input.action, work: this.#input.work, members: this.#ports.members() });
+          if (applied.stale) return false;
+          for (const write of applied.writes.applied) this.#contentWrites.add(write.path);
+          for (const problem of applied.problems) this.#problem(`effect_${problem.code}`, problem.detail);
+          if (applied.narrateNow) this.#narrateNow = true;
+          for (const event of applied.events) {
+            this.#publishEffect(event);
+            events.push(event);
+          }
+          return true;
+        },
+      },
+    );
+    this.#moduleProblems(outcome.problems);
+    return { ...outcome, events };
   }
 
   /** The NPC actor lane, adapted to the tool's dependency. */
@@ -798,11 +823,11 @@ class KeeperTurn {
       group.forEach((index, at) => {
         executed[index] = settled[at] as Executed;
       });
-      // Published in call order, group by group.
+      // Published in call order, group by group. A module command's events are not among
+      // them: its steps published their own as each completed (`#runCommand`).
       for (const index of group) {
         const item = executed[index] as Executed;
         for (const event of item.outcome.events) this.#publishTableEvent(event);
-        for (const event of item.effects) this.#publishEffect(event);
       }
     }
 
@@ -850,16 +875,9 @@ class KeeperTurn {
       return { outcome, effects: [], denied: true };
     }
     const outcome = await catalog.dispatch(this.#context, request, this.#ledger);
-    // Resumed: the rest is one synchronous stretch.
+    // A module command's effects were applied, step by step, inside the call (`#runCommand`).
     const command = outcome.bookkeeping.moduleCommand;
-    if (command === null) return { outcome, effects: [], denied: false };
-    this.#moduleProblems(command.outcome.problems, command.outcome.status === "ok" ? command.outcome.logs : []);
-    if (command.outcome.status !== "ok" || !this.#context.writer.current()) return { outcome, effects: [], denied: false };
-    const applied = applyModuleEffects(this.#context, command.outcome, { review: this.#ports.reviewFact, action: this.#input.action, work: this.#input.work });
-    for (const write of applied.writes.applied) this.#contentWrites.add(write.path);
-    for (const problem of applied.problems) this.#problem(`effect_${problem.code}`, problem.detail);
-    if (applied.narrateNow) this.#narrateNow = true;
-    return { outcome, effects: applied.events, denied: false };
+    return { outcome, effects: command === null ? [] : command.outcome.events, denied: false };
   }
 
   // ------------------------------------------------------------------ the commit

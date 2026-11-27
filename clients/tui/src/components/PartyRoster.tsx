@@ -4,7 +4,7 @@ import type { KeyEvent } from "@opentui/core"
 import { stripControlChars, type CharactersView, type PartyView, type ViewResource } from "loreweaver-protocol/v3"
 import { tt } from "../i18n"
 import type { Palette } from "../themes"
-import { bar, CharacterPanel, statColor, type SheetCharacter } from "./CharacterPanel"
+import { CharacterPanel, resourceColor, resourceText, type SheetCharacter } from "./CharacterPanel"
 import { FitText } from "./FitText"
 
 type Claimable = CharactersView["claimable"][number]
@@ -16,9 +16,12 @@ export function claimableBlurb(entry: Claimable): string {
   return stripControlChars(entry.blurb.replace(/\s+/g, " ")).trim()
 }
 
-/** The characters still on offer: claimable and held by nobody. */
+/**
+ * The characters still on offer to claim: a pack's, held by nobody. A module's character is
+ * listed in the view too, but only its module seats a player on one (`pc claim` refuses it).
+ */
 export function freeClaimables(characters: CharactersView | null | undefined): Claimable[] {
-  return (characters?.claimable ?? []).filter((entry) => entry.player === null)
+  return (characters?.claimable ?? []).filter((entry) => entry.player === null && entry.source.kind !== "module")
 }
 
 export interface PartyRosterProps {
@@ -48,7 +51,7 @@ const COMPACT_BAR_WIDTH = 6
 const DETAIL_BAR_WIDTH = 10
 
 function resourceLine(res: ViewResource, width: number): string {
-  return `${stripControlChars(res.label || res.id)} ${bar(res.value, res.max, width)} ${res.value}/${res.max}`
+  return resourceText(res, width)
 }
 
 /** The "PARTY" roster from the `party` view: the viewer's own character as an expandable status
@@ -131,7 +134,7 @@ export function PartyRoster({ character, party, characters, theme, locale, focus
             <CharacterPanel character={character} theme={theme} locale={locale} />
           ) : (
             character.resources.map((res) => (
-              <text key={res.id} fg={statColor(res.value, res.max, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
+              <text key={res.id} fg={resourceColor(res, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
                 {resourceLine(res, COMPACT_BAR_WIDTH)}
               </text>
             ))
@@ -154,7 +157,7 @@ export function PartyRoster({ character, party, characters, theme, locale, focus
               {`${canExpand ? (open ? "▾" : "▸") : " "} ${isOnline ? "●" : "○"} ${stripControlChars(entry.name)}${who}`}
             </text>
             {entry.resources.map((res) => (
-              <text key={`${entry.id}-${res.id}`} fg={statColor(res.value, res.max, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
+              <text key={`${entry.id}-${res.id}`} fg={resourceColor(res, theme.hpFull, theme.hpLow)} wrapMode="none" truncate>
                 {resourceLine(res, open ? DETAIL_BAR_WIDTH : COMPACT_BAR_WIDTH)}
               </text>
             ))}
@@ -175,6 +178,11 @@ export function PartyRoster({ character, party, characters, theme, locale, focus
             entry.player ? (
               <FitText key={entry.id} fg={theme.dim}>
                 {`✓ ${stripControlChars(entry.name)} · ${tt(locale, "party.pregenClaimed", { who: stripControlChars(entry.player.name) })}`}
+              </FitText>
+            ) : entry.source.kind === "module" ? (
+              // Its module seats a player on it, by its own command: nothing to claim here.
+              <FitText key={entry.id} fg={theme.dim}>
+                {`  ${stripControlChars(entry.name)} · ${tt(locale, "party.moduleOffer", { module: stripControlChars(entry.source.id) })}`}
               </FitText>
             ) : (
               <box key={entry.id} flexDirection="column" onMouseDown={() => onClaim?.(entry.id)}>

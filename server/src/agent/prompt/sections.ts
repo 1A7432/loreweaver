@@ -151,7 +151,7 @@ function partyLines(locale: string, party: readonly PartyMember[]): string[] {
   const none = promptText(locale, "common.none");
   const lines = ["", promptText(locale, "prompt.game_state.roster_header")];
   for (const member of party) {
-    const meters = member.resources.map((meter) => `${meter.label} ${meter.value}/${meter.max}`).join(" | ") || none;
+    const meters = member.resources.map((meter) => (meter.max === null ? `${meter.label} ${meter.value}` : `${meter.label} ${meter.value}/${meter.max}`)).join(" | ") || none;
     const effects = member.status.join(" | ") || none;
     lines.push(promptText(locale, "prompt.game_state.roster_line", { name: member.name, meters, effects }));
   }

@@ -20,11 +20,18 @@ export type JsonObject = { [key: string]: Json };
 /** A member's standing in the room. */
 export type Role = "player" | "admin" | "observer";
 
-/** Who a call concerns. Seating is engine data: a module never keeps its own. */
+/**
+ * Who a call concerns. Seating is engine data: a module asks for a seat with `fx.seat` and
+ * reads the result here; it never keeps seats of its own.
+ */
 export interface Who {
   /** The member, or null when nobody in particular (the Keeper, the engine). */
   readonly member: { readonly id: string; readonly name: string; readonly role: Role } | null;
-  /** The character that member plays, or null: a member with no character is a spectator. */
+  /**
+   * The character that member plays, or null: a member with no character is a spectator. One
+   * of THIS module's characters carries the module's own id for it; any other character
+   * carries the id the engine knows it by (another module's as `<module>:<id>`).
+   */
   readonly character: { readonly id: string; readonly name: string } | null;
 }
 
@@ -96,6 +103,13 @@ export interface Effects {
   roll(notation: string, label?: string): RollResult;
   /** Refuse one of this round's tool calls. `toolUse` only. */
   deny(callId: string, reason: string): void;
+  /**
+   * Seat a member (a member id of `room.members`) on one of this module's characters (its own
+   * id, as `characters()` lists it once this call has ended), or with `null` unseat them from
+   * one of this module's characters. Applied with the call's other effects, or refused and
+   * reported to the operator. Not in `toolUse`.
+   */
+  seat(member: string, character: string | null): void;
   /** A line for the operator's log; never shown at the table. */
   log(text: string): void;
 }
@@ -203,6 +217,12 @@ export interface PlayableCharacter {
 export interface CommandResult {
   readonly text?: string;
   readonly data?: Json;
+  /**
+   * Ask to be called again: the engine applies this call's effects, keeps its checkpoint and
+   * calls `run` again with the same arguments and the next `call.step`, until a result without
+   * `more` or the engine's limit on steps or on time.
+   */
+  readonly more?: true;
 }
 
 type Awaitable<T> = T | Promise<T>;
@@ -223,6 +243,11 @@ export interface CommandOrigin {
    * the same room state gets the same seed. `fx.roll` already derives its dice from it.
    */
   readonly seed: string;
+  /**
+   * 0 for a command's first call; 1, 2, … for the calls a result with `more: true` asked for.
+   * Every step is a call of its own, with its own seed.
+   */
+  readonly step: number;
 }
 
 /** What `create` and `load` are given: the same for every load of one life of the room. */

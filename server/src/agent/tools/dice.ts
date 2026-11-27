@@ -430,7 +430,7 @@ export const initiativeTrackerTool = defineTool({
         let name = expr;
         if (value === undefined) {
           if (!isActive || seat === null) return refuse("initiative_required", `Give the initiative value for ${named}: only the active character's initiative is rolled automatically.`);
-          const loaded = loadCharacter(context, seat.id);
+          const loaded = activeCharacter(context);
           if (!loaded.ok) return loaded.result;
           name = loaded.loaded.character.sheet.name;
           const rolled = rollInitiative(loaded.loaded.pack.initiative, loaded.loaded.pack.sheet, loaded.loaded.character.sheet, context.random);

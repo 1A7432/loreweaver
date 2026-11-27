@@ -15,7 +15,11 @@ import {
   type CharacterView,
   characterData,
   EMPTY_SEATING,
+  isModuleCharacterId,
+  type ModuleCharacter,
+  moduleCharacterName,
   readCharacter,
+  splitModuleCharacterId,
   readSeating,
   type Seating,
   seatingData,
@@ -28,7 +32,7 @@ import { keptFaces, primaryDice, type Roll } from "../../core/dice/index.ts";
 import type { CheckOutcome } from "../../core/resolution/index.ts";
 import { rankDisplay, type RulePack } from "../../core/rulepacks/index.ts";
 import type { DocumentCatalog } from "../../infra/lifecycle/bundle.ts";
-import { refuse, type CommandCall, type Refused } from "./types.ts";
+import { type CommandCall, isRefused, refuse, type Refused } from "./types.ts";
 
 /** The caller's member id, or null for work nobody at the table started. */
 export function memberIdOf(context: RoomContext): string | null {
@@ -84,6 +88,22 @@ export function saveSeating(call: CommandCall, value: Seating): void {
   putDocument(call, SEATING_TYPE, SEATING_ID, seatingData(value));
 }
 
+/**
+ * Free every seat on a character of one of `modules` (the pack that carried them is being
+ * disabled), in the caller's write. Unreadable seating is left as it is. The number freed.
+ */
+export function releaseModuleSeats(call: CommandCall, modules: ReadonlySet<string>): number {
+  const seats = seating(call);
+  if (isRefused(seats)) return 0;
+  const kept = seats.seats.filter((seat) => {
+    const split = splitModuleCharacterId(seat.character);
+    return split === null || !modules.has(split.module);
+  });
+  if (kept.length === seats.seats.length) return 0;
+  saveSeating(call, { seats: kept });
+  return seats.seats.length - kept.length;
+}
+
 /** A stored character with the pack it belongs to. */
 export interface StoredCharacter {
   readonly id: string;
@@ -102,10 +122,23 @@ export function storedCharacter(call: CommandCall, id: string): StoredCharacter 
   return character === null ? refuse("document_unreadable") : { id, character, pack };
 }
 
-/** The character the caller plays, or a refusal (`no_character` for a spectator). */
+/**
+ * `no_sheet` when the caller sits on a module's character, which a module keeps and the
+ * engine has no sheet for; null otherwise. Every command that needs the caller's sheet
+ * answers it for such a member.
+ */
+export function moduleSeatRefusal(call: CommandCall): Refused | null {
+  const seat = call.context.who.character;
+  const split = seat === null ? null : splitModuleCharacterId(seat.id);
+  return seat === null || split === null ? null : refuse("no_sheet", { name: seat.name, module: split.module });
+}
+
+/** The character the caller plays, or a refusal (`no_character` for a spectator, `no_sheet` on a module's character). */
 export function callerCharacter(call: CommandCall): StoredCharacter | Refused {
   const seat = call.context.who.character;
   if (seat === null) return refuse("no_character");
+  const kept = moduleSeatRefusal(call);
+  if (kept !== null) return kept;
   const found = storedCharacter(call, seat.id);
   return found === null ? refuse("no_character") : found;
 }
@@ -129,13 +162,22 @@ export function tableCharacterNames(call: CommandCall, except: string | null): S
 /**
  * Who a member is in a room: the member and the character the seating gives them. The
  * gateway builds a command's `Who` this way; it reads the seating and the character's
- * table view, both of which every member may see.
+ * table view, both of which every member may see. A seat on a module's character carries
+ * the namespaced id and the name from the modules' last render (`moduleCharacters`), or the
+ * id itself until one has run.
  */
-export function whoIn(services: Services, room: string, member: { readonly id: string; readonly name: string; readonly role: "player" | "admin" | "observer" }, locale: string): Who {
+export function whoIn(
+  services: Services,
+  room: string,
+  member: { readonly id: string; readonly name: string; readonly role: "player" | "admin" | "observer" },
+  locale: string,
+  moduleCharacters: readonly ModuleCharacter[] = [],
+): Who {
   const viewer: Viewer = { grade: "observer", locale };
   const seats = services.views.view(room, SEATING_TYPE, SEATING_ID, viewer) as SeatingView | null;
   const seat = seats?.seats.find((item) => item.member === member.id);
   if (seat === undefined) return { member, character: null };
+  if (isModuleCharacterId(seat.character)) return { member, character: { id: seat.character, name: moduleCharacterName(moduleCharacters, seat.character) } };
   const view = services.views.view(room, CHARACTER_TYPE, seat.character, viewer) as CharacterView | null;
   return { member, character: view === null ? null : { id: seat.character, name: view.name } };
 }

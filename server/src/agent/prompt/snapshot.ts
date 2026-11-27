@@ -15,7 +15,15 @@ import type { RulePack } from "../../core/rulepacks/index.ts";
 import type { ModuleVariables, VarMap } from "../../core/variables/index.ts";
 
 /** A seated character as the state panel shows it: name, meters and status effects. */
-export type PartyMember = Pick<CharacterTableView, "name" | "resources" | "status">;
+/**
+ * One seated character as the state panel lists it. A module's character has the resources its
+ * module gave (a meter may have no maximum) and no status of the engine's.
+ */
+export interface PartyMember {
+  readonly name: string;
+  readonly resources: readonly { readonly id?: string; readonly label: string; readonly value: number; readonly max: number | null }[];
+  readonly status: readonly string[];
+}
 
 /** One command a module offers the Keeper (reached through `run_command` / `lookup_command`). */
 export interface ModuleCommandLine {

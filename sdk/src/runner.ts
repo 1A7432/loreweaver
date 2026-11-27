@@ -42,7 +42,7 @@ import type {
   Who,
 } from "./module.ts";
 
-export type EffectKind = "fact" | "inject" | "setVar" | "blocks" | "roll" | "deny" | "log";
+export type EffectKind = "fact" | "inject" | "setVar" | "blocks" | "roll" | "deny" | "seat" | "log";
 
 export type Effect =
   | {
@@ -66,6 +66,12 @@ export type Effect =
       readonly text: string;
     }
   | { readonly module: string; readonly kind: "deny"; readonly callId: string; readonly reason: string }
+  /**
+   * `character` is the module's own id for one of its characters, or null to unseat. `name` is
+   * that character's name in the module's `characters()` read right after the call succeeded,
+   * or null when that list does not offer it (or `character` is null).
+   */
+  | { readonly module: string; readonly kind: "seat"; readonly member: string; readonly character: string | null; readonly name: string | null }
   | { readonly module: string; readonly kind: "log"; readonly text: string };
 
 /**
@@ -173,6 +179,12 @@ export interface CommandRequest {
   readonly by: CommandOrigin["by"];
   /** Derived from persisted inputs only; handed to `run` as `call.seed`, and the dice derive from it. */
   readonly seed: string;
+  /**
+   * 0 for the command's first call, then 1, 2, … for the calls a `more: true` asked for
+   * (`call.step`). `available` is asked at step 0 only: a later step goes on with an action
+   * that was already allowed.
+   */
+  readonly step: number;
   /** The room when the command is used: the same copy for `available` and `run`. */
   readonly room: RoomSnapshot;
 }
@@ -299,12 +311,88 @@ export function mayRun(role: unknown, by: CommandOrigin["by"], who: Who, keeper?
 type Context = "turnStart" | "toolUse" | "replyPhase" | "command" | "readOnly";
 
 const ALLOWED: Readonly<Record<Context, ReadonlySet<EffectKind>>> = {
-  turnStart: new Set(["fact", "inject", "setVar", "blocks", "roll", "log"]),
+  turnStart: new Set(["fact", "inject", "setVar", "blocks", "roll", "seat", "log"]),
   toolUse: new Set(["deny", "log"]),
-  replyPhase: new Set(["fact", "setVar", "blocks", "roll", "log"]),
-  command: new Set(["fact", "setVar", "blocks", "roll", "log"]),
+  replyPhase: new Set(["fact", "setVar", "blocks", "roll", "seat", "log"]),
+  command: new Set(["fact", "setVar", "blocks", "roll", "seat", "log"]),
   readOnly: new Set(),
 };
+
+/** The most steps one command runs: its first call and the calls `more: true` asked for. */
+export const MAX_COMMAND_STEPS = 8;
+/** Wall time from a command's first call past which no further step is started, in ms. */
+export const MAX_COMMAND_TOTAL_MS = 20_000;
+
+/** Why a stepped command ended before a result without `more`: the step limit, the time limit, or a step that failed. */
+export type StepStop = "steps" | "time" | "failed";
+
+/** The seed of one step: the first call's own, then one derived from it and the step, so a replay is the same. */
+export function stepSeed(seed: string, step: number): string {
+  return step === 0 ? seed : `${seed}:step:${step}`;
+}
+
+/** One step as the loop sees it: completed (asking for `more` or not), or not completed. */
+export type StepResult<T, F> = { readonly ok: true; readonly value: T; readonly more: boolean } | { readonly ok: false; readonly value: F };
+
+export type SteppedRun<T, F> =
+  /** The first call did not complete: what it gave instead (a refusal, a failure). */
+  | { readonly kind: "first"; readonly value: F }
+  /** At least one step completed: the last one's value, how many completed, and why the loop was cut (null: it ended by itself). */
+  | { readonly kind: "ended"; readonly last: T; readonly steps: number; readonly stopped: StepStop | null };
+
+/**
+ * The step loop of one command, as the engine and the test host both run it: `run` is called
+ * with step 0, 1, 2, … and each step's seed until a step completes without `more`, a step does
+ * not complete, `MAX_COMMAND_STEPS` steps have completed, or `MAX_COMMAND_TOTAL_MS` has passed
+ * since the first step began (checked before each further step: a step that has started is
+ * not cut, the call limit bounds it). A step that does not complete loses only itself.
+ */
+export async function runSteps<T, F>(seed: string, now: () => number, run: (step: number, seed: string) => Promise<StepResult<T, F>>): Promise<SteppedRun<T, F>> {
+  const started = now();
+  let last: T | undefined;
+  let steps = 0;
+  for (;;) {
+    const result = await run(steps, stepSeed(seed, steps));
+    if (!result.ok) return last === undefined ? { kind: "first", value: result.value } : { kind: "ended", last, steps, stopped: "failed" };
+    last = result.value;
+    steps += 1;
+    if (!result.more) return { kind: "ended", last, steps, stopped: null };
+    if (steps >= MAX_COMMAND_STEPS) return { kind: "ended", last, steps, stopped: "steps" };
+    if (now() - started >= MAX_COMMAND_TOTAL_MS) return { kind: "ended", last, steps, stopped: "time" };
+  }
+}
+
+/** The `data` a stepped command answers with: how many steps ran, the last step's data, and why it was cut. */
+// A type alias, not an interface, so it is a `Json` value as it is.
+export type SteppedData = {
+  readonly steps: number;
+  /** The last completed step's `data`; null when it gave none. */
+  readonly data: Json | null;
+  /** Absent when the command ended by itself. */
+  readonly stopped?: StepStop;
+};
+
+/**
+ * What the caller of a command is answered: the last completed step's `text` and `data`.
+ * A command that never asked for `more` answers exactly that; one that did has its `data`
+ * wrapped (`SteppedData`) to say how many steps ran and why it stopped when it was cut.
+ */
+export function commandAnswer(last: { readonly text: string | null; readonly data: Json | null }, steps: number, stopped: StepStop | null): { readonly text: string | null; readonly data: Json | null } {
+  if (steps === 1 && stopped === null) return last;
+  const data: SteppedData = { steps, data: last.data, ...(stopped === null ? {} : { stopped }) };
+  return { text: last.text, data };
+}
+
+/**
+ * `who` as module `module` sees it: one of its own characters by the module's own id; every
+ * other character by the id the engine knows it by (another module's is `<module>:<id>`).
+ */
+export function localWho(who: Who, module: string): Who {
+  const character = who.character;
+  const prefix = `${module}:`;
+  if (character === null || typeof character.id !== "string" || !character.id.startsWith(prefix)) return who;
+  return { member: who.member, character: { id: character.id.slice(prefix.length), name: character.name } };
+}
 
 interface Instance {
   readonly id: string;
@@ -433,6 +521,14 @@ class Recorder {
       deny: (callId, reason) => {
         record("deny", () =>
           typeof callId === "string" && typeof reason === "string" ? { module, kind: "deny", callId, reason } : "bad_argument",
+        );
+      },
+      // The name is filled in once the call has succeeded, from `characters()` as it then reads.
+      seat: (member, character) => {
+        record("seat", () =>
+          typeof member === "string" && (character === null || typeof character === "string")
+            ? { module, kind: "seat", member, character, name: null }
+            : "bad_argument",
         );
       },
       log: (text) => {
@@ -586,9 +682,10 @@ export class ModuleRunner {
       }
     }
     const withClock: TurnStartEvent = { ...event, clock: given };
+    const room: RoomSnapshot = { turn: event.turn, variables: event.variables, clock: given, members: event.members };
     for (const instance of handlers) {
-      await this.#mutate(instance, "turnStart", event.seed, out, (fx) =>
-        instance.definition.on?.turnStart?.(structuredClone(withClock), fx),
+      await this.#mutate(instance, "turnStart", event.seed, room, out, (fx) =>
+        instance.definition.on?.turnStart?.(structuredClone({ ...withClock, who: localWho(event.who, instance.id) }), fx),
       );
     }
     return { ...out, clock };
@@ -603,7 +700,7 @@ export class ModuleRunner {
       if (this.#skipBroken(instance, out)) continue;
       const recorder = new Recorder(instance.id, "toolUse", "", this.#dice);
       try {
-        await instance.definition.on?.toolUse?.(structuredClone(event), recorder.fx);
+        await instance.definition.on?.toolUse?.(structuredClone({ ...event, who: localWho(event.who, instance.id) }), recorder.fx);
         recorder.close();
         out.effects.push(...recorder.effects);
       } catch (error) {
@@ -618,10 +715,11 @@ export class ModuleRunner {
 
   async replyPhase(event: ReplyPhaseEvent): Promise<CallValue> {
     const out = accumulator();
+    const room: RoomSnapshot = { turn: event.turn, variables: event.variables, clock: event.clock, members: event.members };
     for (const instance of this.#modules) {
       if (typeof instance.definition.on?.replyPhase !== "function") continue;
-      await this.#mutate(instance, "replyPhase", event.seed, out, (fx) =>
-        instance.definition.on?.replyPhase?.(structuredClone(event), fx),
+      await this.#mutate(instance, "replyPhase", event.seed, room, out, (fx) =>
+        instance.definition.on?.replyPhase?.(structuredClone({ ...event, who: localWho(event.who, instance.id) }), fx),
       );
     }
     return out;
@@ -638,15 +736,16 @@ export class ModuleRunner {
     if (!instance || !spec || typeof spec.run !== "function") return { ...out, outcome: { status: "refused", reason: "unknown" } };
     if (!mayRun(spec.role, request.by, request.who, spec.keeper)) return { ...out, outcome: { status: "refused", reason: "role" } };
     if (this.#skipBroken(instance, out)) return { ...out, outcome: { status: "failed", error: "module is broken" } };
-    if (typeof spec.available === "function") {
-      const verdict = await this.#read(instance, out, () => spec.available?.(structuredClone(request.who), structuredClone(request.room)));
+    const who = localWho(request.who, instance.id);
+    if (typeof spec.available === "function" && request.step === 0) {
+      const verdict = await this.#read(instance, out, () => spec.available?.(structuredClone(who), structuredClone(request.room)));
       if (!("value" in verdict)) return { ...out, outcome: { status: "failed", error: verdict.error } };
       if (verdict.value !== true) return { ...out, outcome: { status: "refused", reason: "unavailable", text: verdict.value } };
     }
     let result: Json = {};
-    const done = await this.#mutate(instance, "command", request.seed, out, async (fx) => {
-      const call: CommandOrigin = { by: request.by, seed: request.seed };
-      const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(request.who), fx, structuredClone(request.room), call);
+    const done = await this.#mutate(instance, "command", request.seed, request.room, out, async (fx) => {
+      const call: CommandOrigin = { by: request.by, seed: request.seed, step: request.step };
+      const value: CommandResult | void = await spec.run(structuredClone(request.args), structuredClone(who), fx, structuredClone(request.room), call);
       if (value === undefined) return;
       const json = toJson(value);
       // Inside the call: an answer JSON cannot carry fails the call like a throw would.
@@ -687,7 +786,7 @@ export class ModuleRunner {
         for (const name of names) {
           const spec = lookup<ViewSpec>(definition.views, name);
           if (!spec || typeof spec.for !== "function") continue;
-          const read = await this.#value(() => spec.for(structuredClone(viewer.who), structuredClone(request.room)));
+          const read = await this.#value(() => spec.for(structuredClone(localWho(viewer.who, instance.id)), structuredClone(request.room)));
           views.push("value" in read ? { module: instance.id, view: name, data: read.value } : { module: instance.id, view: name, error: read.error });
         }
         // Once per render, on its first viewer: one `save()` to see whether reading changed
@@ -725,7 +824,7 @@ export class ModuleRunner {
     if (!instance || !spec) return { error: "unknown command" };
     if (instance.broken) return { error: "module is broken" };
     if (typeof spec.available !== "function") return { value: true };
-    return this.#read(instance, out, () => spec.available?.(structuredClone(request.who), structuredClone(request.room)));
+    return this.#read(instance, out, () => spec.available?.(structuredClone(localWho(request.who, instance.id)), structuredClone(request.room)));
   }
 
   /** Whether the module's `save()` now differs, as JSON text, from its checkpoint. A `save` that throws counts as no difference. */
@@ -755,6 +854,7 @@ export class ModuleRunner {
     instance: Instance,
     context: Context,
     seed: string,
+    room: RoomSnapshot,
     out: Accumulator,
     body: (fx: Effects) => unknown,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -775,10 +875,37 @@ export class ModuleRunner {
       this.#restore(instance, out);
       return { ok: false, error: text };
     }
-    out.effects.push(...recorder.effects);
+    out.effects.push(...(await this.#resolveSeats(instance, recorder.effects, room, out)));
     out.refused.push(...recorder.refused);
     Object.assign(out.checkpoints, checkpoints);
     return { ok: true };
+  }
+
+  /**
+   * The names of the characters a successful call asked to seat members on, from the module's
+   * `characters()` read on the state the call left (read-only, like any read: the module is
+   * restored from the checkpoint the call just made). A character it does not offer then keeps
+   * `name: null`, and the engine refuses that seat.
+   */
+  async #resolveSeats(instance: Instance, effects: readonly Effect[], room: RoomSnapshot, out: Accumulator): Promise<readonly Effect[]> {
+    if (!effects.some((effect) => effect.kind === "seat" && effect.character !== null)) return effects;
+    const names = new Map<string, string>();
+    if (typeof instance.definition.characters === "function") {
+      const read = await this.#read(instance, out, () => instance.definition.characters?.(structuredClone(room)));
+      if ("value" in read && Array.isArray(read.value)) {
+        for (const entry of read.value) {
+          if (!isObject(entry)) continue;
+          const id = own(entry, "id");
+          const name = own(entry, "name");
+          if (typeof id === "string" && typeof name === "string" && !names.has(id)) names.set(id, name);
+        }
+      } else if (!("value" in read)) {
+        out.failures.push({ module: instance.id, error: `characters() failed while seating — ${read.error}` });
+      }
+    }
+    return effects.map((effect) =>
+      effect.kind === "seat" && effect.character !== null ? { ...effect, name: names.get(effect.character) ?? null } : effect,
+    );
   }
 
   /** A read-only call: its value made JSON, then the module restored, whatever happened. */

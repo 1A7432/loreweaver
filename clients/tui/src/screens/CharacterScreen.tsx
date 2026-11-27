@@ -234,7 +234,10 @@ export function CharacterScreen({ connection, theme, themeName, locale, onBack }
 
   const viewActions: ViewAction[] = [{ label: tt(locale, "character.view.new"), run: () => enter("create") }]
   if (free.length > 0) viewActions.push({ label: tt(locale, "character.view.claim"), run: () => enter("claim") })
-  if (character) {
+  if (character && character.module !== undefined) {
+    // A module keeps this character: no sheet to edit, rename or delete; the player may still stand up.
+    viewActions.push({ label: tt(locale, "character.view.release"), run: () => void release() })
+  } else if (character) {
     viewActions.push(
       { label: tt(locale, "character.view.edit"), run: () => enter("edit") },
       { label: tt(locale, "character.view.rename"), run: () => enter("rename") },

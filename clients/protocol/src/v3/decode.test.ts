@@ -160,6 +160,16 @@ test("the view schema checker takes extra fields and refuses missing or mistyped
   expect(matchesSchema({ members: [], characters: [], initiative: null }, PARTY_VIEW_SCHEMA)).toBe(true);
 });
 
+test("a module's character in `me` and `party`: the module's id, a resource with no maximum; the field's type is still checked", () => {
+  const member = { id: "m", name: "Ada", role: "player", roleLabel: "Player" };
+  const kept = { id: "colony:ana", name: "Ana", pack: "", status: [], resources: [{ id: "food", label: "Food", value: 2 }], module: "colony" };
+  expect(matchesSchema({ member, character: { ...kept, attributes: [], skills: [] } }, ME_VIEW_SCHEMA)).toBe(true);
+  expect(matchesSchema({ member, character: { ...kept, attributes: [], skills: [], module: 3 } }, ME_VIEW_SCHEMA)).toBe(false);
+  const party = { members: [{ id: "m", name: "Ada", role: "player", online: true, character: "colony:ana" }], characters: [{ ...kept, player: { id: "m", name: "Ada" } }], initiative: null };
+  expect(matchesSchema(party, PARTY_VIEW_SCHEMA)).toBe(true);
+  expect(matchesSchema({ ...party, characters: [{ ...kept, resources: [{ id: "food", label: "Food", value: 2, max: "5" }], player: null }] }, PARTY_VIEW_SCHEMA)).toBe(false);
+});
+
 test("the audio view: an admin's named library, a player's fetch-only one, and the layers that play", () => {
   const playing = { bgm: { id: "harbor/rain", title: "Rain", hash: "h1", mime: "audio/ogg", size: 10, loop: true, volume: 0.5, paused: false } };
   const admin = {

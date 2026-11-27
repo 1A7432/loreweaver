@@ -317,6 +317,28 @@ test("views: me, party and commands subscribed; a sheet change pushes a new `me`
   expect(ada.session.getSnapshot().lastError).toBeNull();
 });
 
+test("views: a module's character, seated by its module, reaches the client through the views' schemas — `module`, resources without a maximum — for its player and another member", async () => {
+  const b = setup({ modules: ["colony"] });
+  const ada = await join(b, KEYS.ada);
+  const bao = await join(b, KEYS.bao);
+  await done(b, ada.session.viewSubscribe(["me", "party", "characters"]));
+  await done(b, bao.session.viewSubscribe(["party", "characters"]));
+  expect(await done(b, ada.session.runCommand("colony/join", { settler: "ana" }))).toMatchObject({ ok: true, text: "joined" });
+  const resources = [
+    { id: "hp", label: "HP", value: 5, max: 5 },
+    { id: "food", label: "Food", value: 0 },
+  ];
+  expect(ada.session.view("me")?.data.character).toEqual({ id: "colony:ana", name: "Ana", pack: "", status: [], resources, attributes: [], skills: [], module: "colony" });
+  expect(bao.session.view("party")?.data.characters).toEqual([{ id: "colony:ana", name: "Ana", pack: "", status: [], resources, player: { id: expect.any(String), name: "Ada" }, module: "colony" }]);
+  const offered = bao.session.view("characters")?.data.claimable.find((entry) => entry.id === "colony:ana");
+  expect(offered).toMatchObject({ source: { kind: "module", id: "colony" }, player: { name: "Ada" } });
+  // Nothing was dropped as not matching a schema.
+  for (const player of [ada, bao]) {
+    expect(player.session.droppedFrames).toBe(0);
+    expect([...player.session.getSnapshot().viewProblems.values()]).toEqual([]);
+  }
+});
+
 function diceData(player: Player): Extract<EventFrame, { kind: "dice" }>["data"][] {
   return player.session
     .getSnapshot()

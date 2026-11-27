@@ -143,7 +143,7 @@ test("a command is told who runs it; a keeper command is refused to players and 
       },
     }),
   );
-  const call = (command: string, by: "keeper" | "member", who: Who) => r.command({ module: "clockwork", command, args: {}, who, by, seed: "s", room: room(1) });
+  const call = (command: string, by: "keeper" | "member", who: Who) => r.command({ module: "clockwork", command, args: {}, who, by, seed: "s", step: 0, room: room(1) });
   for (const member of [ada, eve]) {
     const refused = await call("advance", "member", member);
     expect(refused.outcome).toEqual({ status: "refused", reason: "role" });
@@ -173,11 +173,11 @@ test("a throwing call loses its effects and its state; the sibling keeps both", 
   expect(value.effects).toEqual([]);
   expect(r.checkpointOf("a")).toEqual({ count: 1 });
 
-  const failed = await r.command({ module: "a", command: "bump", args: { fail: true }, who: ada, by: "member", seed: "c", room: room(2) });
+  const failed = await r.command({ module: "a", command: "bump", args: { fail: true }, who: ada, by: "member", seed: "c", step: 0, room: room(2) });
   expect(failed.outcome).toEqual({ status: "failed", error: "Error: bump failed" });
   expect(failed.effects).toEqual([]);
   expect(failed.checkpoints).toEqual({});
-  const ok = await r.command({ module: "b", command: "bump", args: { by: 5 }, who: ada, by: "member", seed: "c", room: room(2) });
+  const ok = await r.command({ module: "b", command: "bump", args: { by: 5 }, who: ada, by: "member", seed: "c", step: 0, room: room(2) });
   expect(ok.outcome).toEqual({ status: "ok", result: { text: "6" } });
   expect(ok.checkpoints).toEqual({ b: { count: 6 } });
   const next = await r.turnStart(turn("two", 3));
@@ -268,7 +268,7 @@ test("load: two clock claims name both; a bad id or a malformed table fails the 
 test("command names are looked up as own, valid names only", async () => {
   const r = runner(counterModule("a"));
   for (const command of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
-    const value = await r.command({ module: "a", command, args: {}, who: ada, by: "member", seed: "s", room: room(1) });
+    const value = await r.command({ module: "a", command, args: {}, who: ada, by: "member", seed: "s", step: 0, room: room(1) });
     expect(value.outcome).toEqual({ status: "refused", reason: "unknown" });
   }
 });
@@ -338,7 +338,7 @@ test("each module gets its own copy of the room: a write by one never reaches th
   expect(seen).toEqual([{ hp: 7 }, { hp: 7 }, { hp: 7 }, { hp: 7 }]);
   expect(variables).toEqual({ hp: 7 });
 
-  const peek = await r.command({ module: "second", command: "peek", args: {}, who: ada, by: "member", seed: "s", room: room(1, variables) });
+  const peek = await r.command({ module: "second", command: "peek", args: {}, who: ada, by: "member", seed: "s", step: 0, room: room(1, variables) });
   expect(peek.outcome).toEqual({ status: "ok", result: { data: { hp: 7 } } });
   const rendered = await r.render({ viewers: [{ who: ada, views: [{ module: "first", view: "hp" }, { module: "second", view: "hp" }] }, { who: mo, views: [{ module: "first", view: "hp" }, { module: "second", view: "hp" }] }], room: room(1, variables) });
   expect(rendered.viewers.map((viewer) => viewer.views.map((view) => ("data" in view ? view.data : null)))).toEqual([
@@ -436,9 +436,9 @@ test("a render never asks a command's available; the moment of use still does", 
   const r = runner(definition);
   await r.render({ viewers: [asking(ada, "ledger", "second"), asking(mo, "ledger", "second")], room: room(1) });
   expect(counts.availables).toBe(0);
-  const refused = await r.command({ module: "ledger", command: "gated", args: {}, who: ada, by: "member", seed: "s", room: room(1) });
+  const refused = await r.command({ module: "ledger", command: "gated", args: {}, who: ada, by: "member", seed: "s", step: 0, room: room(1) });
   expect(refused.outcome).toEqual({ status: "refused", reason: "unavailable", text: "Admins only today." });
-  const ran = await r.command({ module: "ledger", command: "gated", args: {}, who: mo, by: "member", seed: "s", room: room(1) });
+  const ran = await r.command({ module: "ledger", command: "gated", args: {}, who: mo, by: "member", seed: "s", step: 0, room: room(1) });
   expect(ran.outcome).toEqual({ status: "ok", result: { text: "ran" } });
   expect(counts.availables).toBe(2);
 });
@@ -466,8 +466,8 @@ test("create and load get the manifest's options and a seed of the room and the 
     ["load", { options: { depth: 3 }, seed: "room-a:1:seeded" }],
     ["create", { options: {}, seed: "room-a:2:seeded" }],
   ]);
-  await r.command({ module: "seeded", command: "go", args: {}, who: ada, by: "member", seed: "room-a:2:7:command", room: room(7) });
-  await r.command({ module: "seeded", command: "go", args: {}, who: ada, by: "keeper", seed: "room-a:7:command:1", room: room(7) });
+  await r.command({ module: "seeded", command: "go", args: {}, who: ada, by: "member", seed: "room-a:2:7:command", step: 0, room: room(7) });
+  await r.command({ module: "seeded", command: "go", args: {}, who: ada, by: "keeper", seed: "room-a:7:command:1", step: 0, room: room(7) });
   expect(seeds).toEqual(["room-a:2:7:command", "room-a:7:command:1"]);
 });
 
@@ -476,7 +476,7 @@ test("keeper: false is a member's own verb: the Keeper may not run it, a member 
   expect(keeperMayRun(undefined, undefined)).toBe(true);
   expect(keeperMayRun("admin", true)).toBe(false);
   const r = runner(defineModule({ id: "verbs", commands: { wave: { title: "Wave", keeper: false, run: () => ({ text: "waved" }) } } }));
-  const by = async (who: Who, origin: "keeper" | "member") => (await r.command({ module: "verbs", command: "wave", args: {}, who, by: origin, seed: "s", room: room(1) })).outcome;
+  const by = async (who: Who, origin: "keeper" | "member") => (await r.command({ module: "verbs", command: "wave", args: {}, who, by: origin, seed: "s", step: 0, room: room(1) })).outcome;
   expect(await by(ada, "keeper")).toEqual({ status: "refused", reason: "role" });
   expect(await by(ada, "member")).toEqual({ status: "ok", result: { text: "waved" } });
 });

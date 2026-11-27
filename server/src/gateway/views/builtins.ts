@@ -40,6 +40,10 @@ import {
   CLAIMABLE_ID,
   CLAIMABLE_TYPE,
   type ClaimableView,
+  findModuleCharacter,
+  type ModuleCharacter,
+  moduleCharacterId,
+  splitModuleCharacterId,
   SEATING_ID,
   SEATING_TYPE,
   type SeatingView,
@@ -89,6 +93,8 @@ export interface ViewSource {
   readonly commands: CommandsSource | null;
   /** The clock a module keeps, from the last render, when one does. */
   readonly moduleClock?: ClockInfo | null;
+  /** The characters the room's modules offered at the last render; absent: none. */
+  readonly moduleCharacters?: readonly ModuleCharacter[];
   /** Whether members may upload to the room now; absent (a server without a media store): no. */
   readonly uploads?: boolean;
   /** The installed packs; absent: none. */
@@ -127,6 +133,27 @@ function say(viewer: ViewerContext, key: string): string {
 
 function resources(view: CharacterView): ViewResource[] {
   return view.resources.map((meter) => ({ id: meter.id, label: meter.label, value: meter.value, max: meter.max }));
+}
+
+/** A module character's resources as the module gave them, named fields only; `max` only when it gave one. */
+function moduleResources(character: ModuleCharacter | null): ViewResource[] {
+  return (character?.resources ?? []).map((resource) => {
+    const out: ViewResource = { id: resource.id, label: resource.label, value: resource.value };
+    if (resource.max !== null) out.max = resource.max;
+    return out;
+  });
+}
+
+/**
+ * A seat on a module's character as `me` and `party` show it: the name and the resources the
+ * module gave at the last render (its id while the module does not offer it), the module's
+ * id, and nothing of a sheet — the engine keeps none for it.
+ */
+function moduleSeatCharacter(source: ViewSource, id: string): { id: string; name: string; pack: string; status: string[]; resources: ViewResource[]; module: string } | null {
+  const split = splitModuleCharacterId(id);
+  if (split === null) return null;
+  const character = findModuleCharacter(source.moduleCharacters ?? [], id);
+  return { id, name: character?.name ?? id, pack: "", status: [], resources: moduleResources(character), module: split.module };
 }
 
 function seatsOf(source: ViewSource, viewer: Viewer): SeatingView["seats"] {
@@ -179,6 +206,8 @@ function stats(
 function me(source: ViewSource, viewer: ViewerContext): MeView {
   const member = { id: viewer.member.id, name: viewer.member.name, role: viewer.member.role, roleLabel: say(viewer, `role.${viewer.member.role}`) };
   if (viewer.character === null) return { member, character: null };
+  const kept = moduleSeatCharacter(source, viewer.character.id);
+  if (kept !== null) return { member, character: { ...kept, attributes: [], skills: [] } };
   const view = project<CharacterView>(source, projectionViewer(viewer), CHARACTER_TYPE, viewer.character.id);
   if (view === null) return { member, character: null };
   const character: NonNullable<MeView["character"]> = {
@@ -231,6 +260,12 @@ function party(source: ViewSource, viewer: ViewerContext): PartyView {
     // Named fields only: the viewer's own character arrives whole from the projection,
     // and the party shows every character at table grade.
     characters.push({ id: entry.id, name: view.name, pack: view.pack, status: [...view.status], resources: resources(view), player });
+  }
+  // The seated characters modules keep, in seat order: a module's character nobody plays is
+  // the `characters` view's.
+  for (const seat of seats) {
+    const kept = moduleSeatCharacter(source, seat.character);
+    if (kept !== null) characters.push({ ...kept, player: { id: seat.member, name: seat.memberName } });
   }
 
   const order = project<InitiativeView>(source, projection, INITIATIVE_TYPE, INITIATIVE_ID);
@@ -298,7 +333,7 @@ function characters(source: ViewSource, viewer: ViewerContext): CharactersView {
   const projection = projectionViewer(viewer);
   const seats = seatsOf(source, projection);
   const offer = project<ClaimableView>(source, projection, CLAIMABLE_TYPE, CLAIMABLE_ID)?.characters ?? [];
-  const claimable = offer.map((entry) => {
+  const claimable: CharactersView["claimable"] = offer.map((entry) => {
     const seat = seats.find((item) => item.character === entry.id);
     return {
       id: entry.id,
@@ -308,6 +343,18 @@ function characters(source: ViewSource, viewer: ViewerContext): CharactersView {
       player: seat === undefined ? null : { id: seat.member, name: seat.memberName },
     };
   });
+  // Every character the room's modules offer, by its namespaced id: only its module seats a member on one.
+  for (const entry of source.moduleCharacters ?? []) {
+    const id = moduleCharacterId(entry.module, entry.id);
+    const seat = seats.find((item) => item.character === id);
+    claimable.push({
+      id,
+      name: entry.name,
+      blurb: entry.blurb ?? "",
+      source: { kind: "module", id: entry.module },
+      player: seat === undefined ? null : { id: seat.member, name: seat.memberName },
+    });
+  }
   // A system can make a character when its pack declares a sheet shape.
   const systems = source.services.packs
     .packs()
