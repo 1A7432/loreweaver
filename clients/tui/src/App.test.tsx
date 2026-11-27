@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { App, type AppProps } from "./App"
 import { AudioController } from "./audio"
 import type { HostHandle } from "./hostLocal"
@@ -203,8 +206,9 @@ describe("App", () => {
     harness.mockInput.pressEnter()
     const menu = await screen("the admin's menu", (text) => text.includes("Enter game") && text.includes("Disconnect"))
     expect(menu).toContain("Import a world card")
-    // Enter game, My character, Commands, Import a world card, Add a sound, Access keys, Model, Settings, Disconnect.
-    for (let i = 0; i < 8; i += 1) {
+    // Enter game, My character, Commands, Import a world card, Add a sound, Access keys, Model,
+    // Save the room, Restore the room, Settings, Disconnect.
+    for (let i = 0; i < 10; i += 1) {
       harness.mockInput.pressArrow("down")
       await pump()
     }
@@ -314,6 +318,8 @@ describe("App", () => {
     harness.mockInput.pressEnter()
     const menu = await screen("the admin's menu", (text) => text.includes("Access keys") && text.includes("Model"))
     expect(menu).toContain("Add a sound")
+    expect(menu).toContain("Save the room to a file")
+    expect(menu).toContain("Restore the room from a save file")
     const subscribedNames = () => adminServer.current.calls("view.subscribe").flatMap((call) => call.params.names as string[])
     expect(subscribedNames().filter((name) => name.startsWith("admin/"))).toEqual([])
 
@@ -352,6 +358,8 @@ describe("App", () => {
     expect(menu).not.toContain("Access keys")
     expect(menu).not.toContain("Model")
     expect(menu).not.toContain("Add a sound")
+    expect(menu).not.toContain("Save the room")
+    expect(menu).not.toContain("Restore the room")
     for (let i = 0; i < 3; i += 1) {
       harness.mockInput.pressArrow("down")
       await pump()
@@ -360,5 +368,55 @@ describe("App", () => {
     await screen("the settings", (text) => text.includes("Signed in as"))
     await pump(5)
     expect(server.current.calls("view.subscribe").flatMap((call) => call.params.names as string[]).some((name) => name.startsWith("admin/"))).toBe(false)
+  })
+
+  test("an admin saves and restores the room from the menu: the restore's expected disconnect ends back in the menu, with nothing of the room in the log", async () => {
+    const server = new FakeServer({ role: "admin", name: "Ada" })
+    const bundle = { format: "loreweaver-room", version: 1, turn: 2, documents: [], state: [], modules: [], events: [] }
+    server.onCall = (method, params, transport) => {
+      if (method !== "command.run" || params.id !== "save") return { ok: true }
+      if ((params.args as { op?: string }).op === "export") return { ok: true, text: "Exported the room: 0 documents, 0 log entries.", data: bundle }
+      // An import: answered first, then the server ends the link and the room is in another generation.
+      server.epoch += 1
+      queueMicrotask(() => transport.drop("closed"))
+      return { ok: true, text: "Loaded the bundle; the room continues from turn 2.", data: { epoch: server.epoch, turn: 2 } }
+    }
+    const { harness, screen } = await boot(server)
+    await screen("the connect screen", (text) => text.includes("⚄ Connect"))
+    harness.mockInput.pressEnter()
+    await screen("the menu", (text) => text.includes("Save the room to a file"))
+
+    // Enter game, My character, Commands, Import a world card, Add a sound, Access keys, Model, Save the room.
+    for (let i = 0; i < 7; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the save screen", (text) => text.includes("Save now") && text.includes("Anyone who gets the file can read those secrets"))
+    harness.mockInput.pressEscape()
+    await screen("back in the menu", (text) => text.includes("Enter game"))
+
+    // …and one more row down: Restore the room.
+    for (let i = 0; i < 8; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the restore screen", (text) => text.includes("Restore the room from a save file") && text.includes("Save file"))
+    const dir = await mkdtemp(join(tmpdir(), "lw-app-restore-"))
+    await writeFile(join(dir, "arkham.json"), JSON.stringify(bundle))
+    await harness.mockInput.typeText(join(dir, "arkham.json"))
+    harness.mockInput.pressEnter()
+    await screen("the confirmation", (text) => text.includes("Replace the room with this save?"))
+    harness.mockInput.pressArrow("down")
+    await pump()
+    harness.mockInput.pressEnter()
+
+    // The drop that follows is the server's doing: the client redials by itself and lands in the menu.
+    await waitFor("the redial", () => server.transports.length === 2)
+    const menu = await screen("the menu again", (text) => text.includes("Enter game") && text.includes("Restore the room from a save file"))
+    expect(menu).not.toContain("Not connected")
+    expect(menu).not.toContain("⚄ Connect")
+    expect(server.transports[0]?.calls("command.run").map((call) => (call.params.args as { op?: string }).op)).toEqual(["import"])
   })
 })

@@ -150,8 +150,11 @@ export class LocalFileError extends Error {
   }
 }
 
-/** What a person is uploading: a picture to share, a card to import, a sound for the audio library. */
-export type UploadKind = "image" | "card" | "audio"
+/**
+ * What a person names a file for: a picture to share, a card to import, a sound for the audio
+ * library, or a room save to restore (read here, sent as a command argument, never uploaded).
+ */
+export type UploadKind = "image" | "card" | "audio" | "save"
 
 /**
  * The type a file is offered as, by its name: a picture to share (`image`), a card to import
@@ -160,6 +163,8 @@ export type UploadKind = "image" | "card" | "audio"
  */
 export function uploadMime(path: string, kind: UploadKind): string {
   if (kind === "audio") return detectAudioMime(path)
+  // A save is JSON whatever it is called; what is inside decides, not the extension.
+  if (kind === "save") return "application/json"
   if (kind === "card") {
     const ext = extname(path).toLowerCase()
     return ext === ".png" ? "image/png" : ext === ".json" ? "application/json" : ""

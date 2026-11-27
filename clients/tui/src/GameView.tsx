@@ -22,6 +22,7 @@ import { lastChoicesIndex, logItems, logPictures, type Cleared, type Picture } f
 import type { Palette, ThemeName } from "./themes"
 import { usesAppClipboardCopy } from "./copy"
 import { reportOffer, saveReport } from "./report"
+import { keepSavedResult, saveRoom } from "./save"
 import { writeTranscript } from "./transcript"
 import type { PanelEntry, Result, SessionSnapshot } from "loreweaver-protocol/v3"
 
@@ -43,6 +44,8 @@ export interface GameViewProps {
   transcriptDir?: string
   // Likewise for a report page (`~/.loreweaver/reports`).
   reportDir?: string
+  // Likewise for a room save (`~/.loreweaver/saves`).
+  saveDir?: string
   /** Open the command list (F7). */
   onCommands?: () => void
   /** A picture or the share form opened (true) or closed: while one is open, Esc is theirs, not the shell's. */
@@ -78,7 +81,7 @@ function memberNames(party: { members: { id: string; name: string }[] } | null):
   return new Map((party?.members ?? []).map((member) => [member.id, member.name]))
 }
 
-export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, reportDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true, audio }: GameViewProps) {
+export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, reportDir, saveDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true, audio }: GameViewProps) {
   const snapshot = useSnapshot(connection)
   const local = useConnectionState(connection)
   const sound = useAudioState(audio)
@@ -230,7 +233,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
     if (!text) return
     // No local echo: the server logs the player's own line as a `narrative` event for everyone,
     // this player included. A command's answer comes back to this player alone, as a local line.
-    void connection.input(text).then(keepReport)
+    void connection.input(text).then(keepResult)
     setHistory((current) => [...current, text].slice(-50))
     resetInput()
   }
@@ -238,7 +241,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const pickChoice = (option: UiChoice) => {
     setChoicesFocused(false)
     setPanelFocus(null)
-    void connection.runCommand(option.command, option.args ?? {}).then(keepReport)
+    void connection.runCommand(option.command, option.args ?? {}).then(keepResult)
   }
 
   const claim = (id: string) => {
@@ -269,6 +272,33 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
       connection.note({ kind: "result", level: "info", text: tt(locale, "report.saved", { path }) })
     } catch (error) {
       connection.note({ kind: "result", level: "warn", text: tt(locale, "report.failed", { error: error instanceof Error ? error.message : String(error) }) })
+    }
+  }
+
+  // A `save` answer carries the whole room (every secret of it) in its data: whatever command it
+  // came from, it is written to a private file and only the path is told — the bundle itself is
+  // in no local line, no transcript.
+  const noteSave = (outcome: { ok: boolean; text: string }) => {
+    connection.note({ kind: "result", level: outcome.ok ? "info" : "warn", text: outcome.text })
+  }
+  const keepSave = async (result: Result | null) => {
+    const outcome = await keepSavedResult(connection, result, { locale, ...(saveDir ? { dir: saveDir } : {}) })
+    if (outcome !== null) noteSave(outcome)
+  }
+  const keepResult = async (result: Result | null) => {
+    await keepReport(result)
+    await keepSave(result)
+  }
+  // Ctrl+Shift+S: `save` export, run on purpose and quietly (a refusal — the person is not an
+  // admin — is shown as the server worded it), the room kept as a file.
+  const saving = useRef(false)
+  const saveToFile = async () => {
+    if (saving.current) return
+    saving.current = true
+    try {
+      noteSave(await saveRoom(connection, { locale, ...(saveDir ? { dir: saveDir } : {}) }))
+    } finally {
+      saving.current = false
     }
   }
 
@@ -328,8 +358,8 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
       setCleared({ seq: current.head, lineId: connection.getState().lines.at(-1)?.id ?? 0 })
     }
     if (event.ctrl && name === "s" && !event.shift) void exportTranscript()
-    // Ctrl+Shift+S: the room checkpoint (`.save`, an admin command — a player gets the refusal).
-    if (event.ctrl && name === "s" && event.shift) submit(".save")
+    // Ctrl+Shift+S: the room checkpoint, written to a file (`save`, an admin command — a player gets the refusal).
+    if (event.ctrl && name === "s" && event.shift) void saveToFile()
     if (name === "f6") setNarrowSidebarOpen((value) => !value)
     if (name === "f7") onCommands?.()
     // Tab cycles focus: chat input -> the latest choices select (when one is live) -> the

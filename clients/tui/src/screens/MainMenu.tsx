@@ -29,6 +29,10 @@ export interface MainMenuProps {
   onAccessKeys?: () => void
   /** An admin's "model" screen (which model each lane uses). */
   onModel?: () => void
+  /** An admin's "save the room to a file" screen. */
+  onSaveRoom?: () => void
+  /** An admin's "restore the room from a save file" screen. */
+  onRestoreRoom?: () => void
   /** Leave this server (back to the connect screen; a server this client started is stopped). */
   onDisconnect?: () => void
   // Optional so a caller that does not wire teardown gets no Quit row rather than a dead one.
@@ -53,7 +57,7 @@ export function roleLabel(snapshot: SessionSnapshot, locale: string): string {
   return tt(locale, role === "admin" ? "menu.role.admin" : role === "observer" ? "menu.role.observer" : "menu.role.player")
 }
 
-export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onAddSound, onAccessKeys, onModel, onDisconnect, onQuit }: MainMenuProps) {
+export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onAddSound, onAccessKeys, onModel, onSaveRoom, onRestoreRoom, onDisconnect, onQuit }: MainMenuProps) {
   const snapshot = useSnapshot(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const showSidebar = !sidebarCollapsed(terminalWidth)
@@ -74,6 +78,8 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
   if (isAdmin && onAddSound) adminItems.push({ label: tt(locale, "menu.addSound"), run: onAddSound })
   if (isAdmin && onAccessKeys) adminItems.push({ label: tt(locale, "menu.accessKeys"), run: onAccessKeys })
   if (isAdmin && onModel) adminItems.push({ label: tt(locale, "menu.model"), run: onModel })
+  if (isAdmin && onSaveRoom) adminItems.push({ label: tt(locale, "menu.saveRoom"), run: onSaveRoom })
+  if (isAdmin && onRestoreRoom) adminItems.push({ label: tt(locale, "menu.restoreRoom"), run: onRestoreRoom })
   items.splice(3, 0, ...adminItems)
   // Leaving goes last and is set apart by a blank row: not for a newcomer to hit while arrowing through.
   const leaveIndex = onDisconnect || onQuit ? items.length : -1

@@ -455,7 +455,7 @@ export async function pump(turns = 5): Promise<void> {
  * `act()`, as they do in the app. Rendering then follows React's scheduler, and a test waits for
  * what it needs with `waitForScreen` instead of wrapping each delivery in `act()`.
  */
-export async function liveRender(node: ReactNode, options: { width: number; height: number }): ReturnType<typeof testRender> {
+export async function liveRender(node: ReactNode, options: { width: number; height: number; kittyKeyboard?: boolean }): ReturnType<typeof testRender> {
   const harness = await testRender(node, options)
   const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   env.IS_REACT_ACT_ENVIRONMENT = false
@@ -487,3 +487,25 @@ export async function withoutActWarning<T>(render: () => Promise<T>): Promise<T>
   }
 }
 
+
+/**
+ * Everything written to the console from now until `restore()`: a test that must show a secret
+ * appears in no output looks through `text()`. The text is passed through, so a failure stays loud.
+ */
+export function captureConsole(): { text: () => string; restore: () => void } {
+  const names = ["log", "info", "warn", "error", "debug"] as const
+  const original = new Map(names.map((name) => [name, console[name]]))
+  const written: string[] = []
+  for (const name of names) {
+    console[name] = (...args: unknown[]) => {
+      written.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "))
+      original.get(name)?.(...args)
+    }
+  }
+  return {
+    text: () => written.join("\n"),
+    restore: () => {
+      for (const name of names) console[name] = original.get(name) as (typeof console)[typeof name]
+    },
+  }
+}

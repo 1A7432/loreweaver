@@ -19,6 +19,8 @@ import { ImportWorldScreen } from "./screens/ImportWorldScreen"
 import { LostScreen } from "./screens/LostScreen"
 import { MainMenu } from "./screens/MainMenu"
 import { ModelScreen } from "./screens/ModelScreen"
+import { RestoreRoomScreen } from "./screens/RestoreRoomScreen"
+import { SaveRoomScreen } from "./screens/SaveRoomScreen"
 import { SettingsScreen } from "./screens/SettingsScreen"
 import { defaultTuiLocale, tt, type TuiLocale } from "./i18n"
 import { defaultLocalServerHome } from "./localPaths"
@@ -66,7 +68,7 @@ export interface AppProps {
   platform?: string
 }
 
-type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world" | "add_sound" | "access_keys" | "model"
+type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world" | "add_sound" | "access_keys" | "model" | "save_room" | "restore_room"
 
 // F1..F5 select a theme by its position in themeOrder.
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
@@ -453,6 +455,12 @@ function Table({ connection, audio, muted, onMutedChange, screen, setScreen, the
   if (screen === "model") {
     return <ModelScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
+  if (screen === "save_room") {
+    return <SaveRoomScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
+  }
+  if (screen === "restore_room") {
+    return <RestoreRoomScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} onRestored={() => setScreen("menu")} />
+  }
   if (screen === "commands") {
     return <CommandsScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
@@ -470,6 +478,8 @@ function Table({ connection, audio, muted, onMutedChange, screen, setScreen, the
       onAddSound={() => setScreen("add_sound")}
       onAccessKeys={() => setScreen("access_keys")}
       onModel={() => setScreen("model")}
+      onSaveRoom={() => setScreen("save_room")}
+      onRestoreRoom={() => setScreen("restore_room")}
       onDisconnect={onDisconnect}
       onQuit={onQuit}
     />

@@ -31,13 +31,18 @@ export function reportOffer(result: Result | null): ReportOffer | null {
   return { hash: media.hash, name: typeof media.name === "string" ? media.name : "" }
 }
 
-/** A file name from the server made safe to write here: no path, no control characters, `.html`. */
-export function reportFileName(offer: ReportOffer): string {
-  const base = stripControlChars(offer.name)
+/** A name from the server made safe to be (part of) a file name here: no path, no control characters. */
+export function safeFileStem(name: string): string {
+  return stripControlChars(name)
     .replace(/[\\/:*?"<>|]/g, "-")
     .replace(/^\.+/, "")
     .trim()
     .slice(0, 120)
+}
+
+/** A file name from the server made safe to write here: no path, no control characters, `.html`. */
+export function reportFileName(offer: ReportOffer): string {
+  const base = safeFileStem(offer.name)
   const named = base === "" ? `report-${offer.hash.slice(0, 12)}` : base
   return /\.html?$/i.test(named) ? named : `${named}.html`
 }

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AudioController, type FetchSound } from "./audio"
 import type { Connection } from "./connection"
 import { GameView, type GameViewProps } from "./GameView"
-import { FakeServer, liveRender, pump, waitFor, waitForScreen } from "./testkit"
+import { logItems } from "./log"
+import { captureConsole, FakeServer, liveRender, pump, settle, waitFor, waitForScreen } from "./testkit"
+import { itemsToTranscript } from "./transcript"
 import { PNG } from "pngjs"
 import { themes } from "./themes"
 
@@ -51,13 +53,13 @@ function table(server: FakeServer): void {
   server.views.set("characters", { claimable: [], systems: [{ id: "coc7", label: "Call of Cthulhu 7e", active: true }], mine: "ch-1" })
 }
 
-async function play(server: FakeServer, props: Partial<GameViewProps> = {}, width = 120, height = 40) {
+async function play(server: FakeServer, props: Partial<GameViewProps> = {}, width = 120, height = 40, renderOptions: { kittyKeyboard?: boolean } = {}) {
   // Fetched pictures are cached in a folder of the test's own, never in the person's home.
   const connection = server.connect({ mediaCacheDir: await mkdtemp(join(tmpdir(), "loreweaver-cache-")) })
   connections.push(connection)
   await connection.start()
   await waitFor("the welcome", () => connection.session.status === "online")
-  const harness = await liveRender(<GameView connection={connection} locale="en" theme={themes.lamplight} themeName="lamplight" platform="linux" {...props} />, { width, height })
+  const harness = await liveRender(<GameView connection={connection} locale="en" theme={themes.lamplight} themeName="lamplight" platform="linux" {...props} />, { width, height, ...renderOptions })
   harnesses.push(harness)
   const screen = (what: string, has: (frame: string) => boolean) => waitForScreen(harness, what, has)
   return { connection, harness, screen }
@@ -235,6 +237,113 @@ describe("GameView", () => {
     harness.mockInput.pressEnter()
     await screen("the failure line", (text) => text.includes("Could not save the session report"))
     expect(await readdir(dir)).toEqual(["session-report-arkham.html"])
+  })
+
+  describe("saving the room to a file", () => {
+    const SECRET = "SENTINEL-the-well-hides-the-cult-9d41b7"
+    const BUNDLE = { format: "loreweaver-room", version: 1, turn: 4, documents: [{ type: "lore", id: "l1", version: 1, data: JSON.stringify({ title: SECRET }), meta: "{}" }], state: [], modules: [], events: [] }
+    const EXPORTED = "Exported the room: 1 documents, 0 log entries."
+    // A terminal tells Ctrl+Shift+S from Ctrl+S only through the kitty keyboard protocol, which the app asks for.
+    const KITTY = { kittyKeyboard: true }
+
+    /** Where the secret may be besides the file: the lines, the transcript the log would make, the screen, the console. */
+    const everywhereElse = (connection: Connection, frame: string, output: string) => [
+      frame,
+      JSON.stringify(connection.getState().lines),
+      itemsToTranscript(logItems(connection.session.getSnapshot().events, [], connection.getState().lines), { room: "arkham", at: new Date() }),
+      output,
+    ]
+
+    test("Ctrl+Shift+S asks for the export, writes the bundle to a private file and tells the path; the bundle is nowhere else", async () => {
+      const server = new FakeServer({ role: "admin" })
+      server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: true, text: EXPORTED, data: BUNDLE } : { ok: true })
+      const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
+      const output = captureConsole()
+      try {
+        const { harness, screen, connection } = await play(server, { saveDir: dir }, 120, 40, KITTY)
+        harness.mockInput.pressKey("s", { ctrl: true, shift: true })
+        const frame = await screen("the saved line", (text) => text.includes("Room saved to"))
+        // The command, structured and with nothing typed into the room.
+        expect(server.current.calls("command.run").map((call) => call.params)).toEqual([{ id: "save", args: { op: "export" } }])
+        expect(server.current.inputs()).toEqual([])
+        const files = await readdir(dir)
+        expect(files).toHaveLength(1)
+        expect(files[0]).toMatch(/^arkham-\d{8}-\d{6}\.json$/)
+        const path = join(dir, files[0] as string)
+        expect(JSON.parse(await readFile(path, "utf8"))).toEqual(BUNDLE)
+        if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600)
+        // One local line for the admin: the path. (Run quietly: no second line for the answer's text.)
+        expect(connection.getState().lines.map((line) => line.text)).toHaveLength(1)
+        expect(connection.getState().lines[0]?.text).toBe(`Room saved to ${path} (${(await readFile(path)).length} B)`)
+        for (const place of everywhereElse(connection, frame, output.text())) expect(place).not.toContain(SECRET)
+      } finally {
+        output.restore()
+      }
+    })
+
+    test("a typed .save ends up as a file too, like a report page, and its bundle stays out of the lines", async () => {
+      const server = new FakeServer({ role: "admin" })
+      server.onInput = (text) => (text === ".save" ? { ok: true, text: EXPORTED, data: BUNDLE } : { ok: true })
+      const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
+      const output = captureConsole()
+      try {
+        const { harness, screen, connection } = await play(server, { saveDir: dir })
+        await harness.mockInput.typeText(".save")
+        harness.mockInput.pressEnter()
+        const frame = await screen("the saved line", (text) => text.includes("Room saved to"))
+        expect(server.current.inputs()).toEqual([".save"])
+        const files = await readdir(dir)
+        expect(files).toHaveLength(1)
+        expect(JSON.parse(await readFile(join(dir, files[0] as string), "utf8"))).toEqual(BUNDLE)
+        // The server's own words, then the path.
+        expect(connection.getState().lines.map((line) => line.text.split(" ").slice(0, 3).join(" "))).toEqual(["Exported the room:", "Room saved to"])
+        expect(frame).toContain(EXPORTED)
+        for (const place of everywhereElse(connection, frame, output.text())) expect(place).not.toContain(SECRET)
+      } finally {
+        output.restore()
+      }
+    })
+
+    test("a command whose answer is not a bundle makes no file: an import's answer, a roll's", async () => {
+      const server = new FakeServer({ role: "admin" })
+      server.onInput = (text) => (text.startsWith(".save import") ? { ok: true, text: "Loaded the bundle.", data: { epoch: 2, turn: 4 } } : { ok: true, text: "Rolled 4.", data: { totals: [4] } })
+      const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
+      const { harness, screen } = await play(server, { saveDir: dir })
+      await harness.mockInput.typeText(".save import {}")
+      harness.mockInput.pressEnter()
+      await screen("the import's line", (text) => text.includes("Loaded the bundle."))
+      await harness.mockInput.typeText(".r")
+      harness.mockInput.pressEnter()
+      await screen("the roll's line", (text) => text.includes("Rolled 4."))
+      await settle()
+      expect(await readdir(dir)).toEqual([])
+    })
+
+    test("a player's Ctrl+Shift+S gets the server's refusal and no file", async () => {
+      const server = new FakeServer({ role: "player" })
+      server.onCall = (method, params) => (method === "command.run" && params.id === "save" ? { ok: false, code: "forbidden", message: "Only room admins may do that." } : { ok: true })
+      const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
+      const { harness, screen } = await play(server, { saveDir: dir }, 120, 40, KITTY)
+      harness.mockInput.pressKey("s", { ctrl: true, shift: true })
+      await screen("the refusal", (text) => text.includes("Only room admins may do that."))
+      expect(await readdir(dir)).toEqual([])
+    })
+
+    test("a second press while the first export is still coming asks for nothing more", async () => {
+      const server = new FakeServer({ role: "admin" })
+      // The answer is held: the test hands it over when it wants.
+      server.onCall = () => null
+      const dir = await mkdtemp(join(tmpdir(), "loreweaver-saves-"))
+      const { harness, screen } = await play(server, { saveDir: dir }, 120, 40, KITTY)
+      harness.mockInput.pressKey("s", { ctrl: true, shift: true })
+      await waitFor("the export asked", () => server.current.calls("command.run").length === 1)
+      harness.mockInput.pressKey("s", { ctrl: true, shift: true })
+      await settle()
+      expect(server.current.calls("command.run")).toHaveLength(1)
+      server.current.push({ type: "result", rid: server.current.calls("command.run")[0]?.rid, ok: true, text: EXPORTED, data: BUNDLE })
+      await screen("the saved line", (text) => text.includes("Room saved to"))
+      expect(await readdir(dir)).toHaveLength(1)
+    })
   })
 
   test("F7 opens the command list; ? shows the keys", async () => {
