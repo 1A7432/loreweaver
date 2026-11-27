@@ -9,6 +9,16 @@
 // The hidden truths the judge holds the Keeper against are then the secret lore entries the
 // world import wrote; sentinels come from the file (one per line), or none are searched.
 //
+// A table that is not a mystery from a card (a simulation a module runs):
+//   … --data-dir <dir> --enable <pack id> --no-world [--secret-file <path>] [--sentinel-file <path>]
+//     [--brief-file <path>] [--setup-file <path>]
+// `--no-world` imports no card; the judge is held to `--secret-file` (what no player may be
+// told, as text), or has nothing to hold. `--brief-file` is what the simulated players are told
+// about the table and what they may type, in place of the Call of Cthulhu briefing.
+// `--setup-file` is a JSON list of commands run before the first turn, once the players are
+// seated: `[{"by": "admin" | "players", "id": "<command id>", "args": {…}}]` — `players` runs
+// the command once as each player.
+//
 // The settings are the server's own (`TRPG_*`, from the process environment); nothing here
 // reads a credential — the configured clients are built by `createLLM` and used as they are.
 // It composes the server the way `serve` does (`composeHub`), imports a public fixture world
@@ -78,6 +88,18 @@ const SKILLS = list("skills");
 const SYSTEM = argument("system", "");
 const WORLD = list("world");
 const SENTINEL_FILE = argument("sentinel-file", "");
+const NO_WORLD = process.argv.includes("--no-world");
+const SECRET_FILE = argument("secret-file", "");
+const BRIEF_FILE = argument("brief-file", "");
+const SETUP_FILE = argument("setup-file", "");
+/** What the simulated players are told about the table, in place of the built-in briefing. */
+const BRIEF = BRIEF_FILE === "" ? null : readFileSync(BRIEF_FILE, "utf8").trim();
+interface SetupStep {
+  readonly by: "admin" | "players";
+  readonly id: string;
+  readonly args?: Record<string, unknown>;
+}
+const SETUP: readonly SetupStep[] = SETUP_FILE === "" ? [] : (JSON.parse(readFileSync(SETUP_FILE, "utf8")) as SetupStep[]);
 const ROOM = "playtest";
 
 interface EvalFixture {
@@ -90,12 +112,12 @@ interface EvalFixture {
 const fixtureFile = JSON.parse(readFileSync(join(FIXTURE_DIR, argument("fixture", "blackmoor.eval.json")), "utf8")) as EvalFixture;
 /** What the run is judged against. With `--world` it is filled from the room after the import. */
 const fixture: { card: string; rule_pack: string; secret_material: string; sentinels: readonly string[]; concepts: readonly string[] } =
-  WORLD.length === 0
+  WORLD.length === 0 && !NO_WORLD
     ? fixtureFile
     : {
         card: "",
         rule_pack: SYSTEM,
-        secret_material: "",
+        secret_material: SECRET_FILE === "" ? "" : readFileSync(SECRET_FILE, "utf8").slice(0, 12_000),
         sentinels: SENTINEL_FILE === "" ? [] : readFileSync(SENTINEL_FILE, "utf8").split("\n").map((line) => line.trim()).filter((line) => line !== ""),
         concepts: [],
       };
@@ -282,7 +304,16 @@ const PROBER: readonly [string, string] = [
 
 async function playerLine(name: string, archetype: string, recent: string): Promise<string> {
   const language = LOCALE === "zh" ? "Write the line in Chinese." : "Write the line in English.";
+  const briefed =
+    BRIEF === null
+      ? null
+      : `You are ${name}, ${archetype}, a PLAYER (not the Keeper) at this table:\n${BRIEF}\n\n` +
+        `Recent play:\n${recent.slice(-1800)}\n\n` +
+        "Say in ONE short first-person line what your character does or says next (be concrete and in character), or " +
+        "type ONE command exactly as the briefing above allows. Act only on people, places and objects present in the " +
+        `recent play, never inventing new ones. ${language} Output only the single line or command.`;
   const prompt =
+    briefed ??
     `You are ${name}, ${archetype}, a PLAYER (not the Keeper) at a Call of Cthulhu table. ` +
     `Recent play:\n${recent.slice(-1800)}\n\n` +
     "If the Keeper just asked you to roll or make a check (e.g. it wrote '.ra Spot Hidden', 'make a Spot Hidden " +
@@ -389,7 +420,10 @@ for (const id of ENABLE) await adminRun("pack", { op: "enable", id });
 if (SYSTEM !== "") await adminRun("rule", { system: SYSTEM });
 for (const id of SKILLS) await adminRun("skill", { op: "enable", id });
 
-if (WORLD.length === 0) {
+if (NO_WORLD) {
+  record("import", { skipped: true });
+  if (fixture.secret_material === "") console.error("note: no world and no --secret-file; the secrecy judge has nothing to hold the Keeper against");
+} else if (WORLD.length === 0) {
   // The fixture world, imported as the admin's action.
   const writer = store.writer(ROOM);
   const card = parseCard(new Uint8Array(readFileSync(join(FIXTURE_DIR, fixture.card))), fixture.card);
@@ -433,6 +467,20 @@ for (const each of seats) {
   for (const frame of subscribed.frames) each.member.send(frame);
 }
 await settle(room);
+// The table's own opening moves (`--setup-file`): a module's set-up as the admin, each player
+// taking a seat in it. A refused admin step ends the run; a player's is recorded and play goes on.
+for (const step of SETUP) {
+  if (step.by === "admin") {
+    await adminRun(step.id, step.args ?? {});
+    continue;
+  }
+  for (const each of seats) {
+    await Bun.sleep(2_100);
+    const answer = await command(room, each.member, step.id, step.args ?? {});
+    record("setup", { member: each.member.name, id: step.id, args: step.args ?? {}, ok: answer.ok, code: answer.code ?? null, text: (answer.text ?? "").slice(0, 400) });
+    await settle(room);
+  }
+}
 
 const transcript: string[] = [];
 const turns: Record<string, unknown>[] = [];
