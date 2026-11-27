@@ -265,9 +265,9 @@ export class FakeServer {
   onInput: (text: string, transport: FakeTransport) => Answer | null = () => ({ ok: true })
   onCall: (method: string, params: Record<string, unknown>, transport: FakeTransport) => Answer | null = () => ({ ok: true })
   /** Files the room holds, by hash (what a GET answers). */
-  readonly files = new Map<string, { bytes: Uint8Array; mime: string; name: string; purpose: "share" | "import" }>()
+  readonly files = new Map<string, { bytes: Uint8Array; mime: string; name: string; purpose: "share" | "import" | "audio" }>()
   /** Accepted offers waiting for their bytes. */
-  readonly offers = new Map<string, { name: string; mime: string; size: number; sha256: string; purpose: "share" | "import" }>()
+  readonly offers = new Map<string, { name: string; mime: string; size: number; sha256: string; purpose: "share" | "import" | "audio" }>()
   /** Every `media.offer` received, in order. */
   readonly offered: Record<string, unknown>[] = []
   /** Refuse every offer with this (the upload switch, an observer…). */
@@ -356,7 +356,7 @@ export class FakeServer {
         this.#answer(transport, frame.rid, { ok: false, ...this.refuseOffer })
         return
       }
-      const params = frame.params as { name: string; mime: string; size: number; sha256: string; purpose?: "share" | "import" }
+      const params = frame.params as { name: string; mime: string; size: number; sha256: string; purpose?: "share" | "import" | "audio" }
       const held = this.files.get(params.sha256)
       if (held) {
         const existing = { hash: params.sha256, size: held.bytes.length, mime: held.mime, name: held.name, from: "m1" }

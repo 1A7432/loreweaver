@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { AudioController, type FetchSound } from "./audio"
 import type { Connection } from "./connection"
 import { GameView, type GameViewProps } from "./GameView"
 import { FakeServer, liveRender, pump, waitFor, waitForScreen } from "./testkit"
@@ -292,6 +293,24 @@ describe("GameView", () => {
     const second = await play(watcher)
     second.harness.mockInput.pressKey("F8")
     await second.screen("the observer's reason", (text) => text.includes("Observers cannot upload files"))
+  })
+
+  test("the header says what the room plays, from the audio view, and the muted mark from the sound controller", async () => {
+    const server = new FakeServer()
+    table(server)
+    const playing = { id: "harbor/rain", title: "Rain on the quay", hash: "b".repeat(64), mime: "audio/ogg", size: 10, loop: true, volume: 1, paused: false }
+    server.views.set("audio", { library: [{ hash: "b".repeat(64), mime: "audio/ogg", size: 10 }], playing: { bgm: playing } })
+    // Muted: the controller never fetches or starts a player, so nothing here makes a sound.
+    const silent: FetchSound = () => Promise.reject(new Error("no fetch while muted"))
+    const { screen, connection } = await play(server, {}, 170)
+    await screen("the music", (text) => text.includes("· Music: Rain on the quay"))
+    server.view("audio", { library: [], playing: { bgm: { ...playing, paused: true }, ambience: { ...playing, id: "harbor/gulls", title: "Gulls" } } })
+    await screen("paused, and the ambience", (text) => text.includes("Music: Rain on the quay (paused) · Ambience: Gulls"))
+
+    const audio = new AudioController({ session: connection.session, fetchSound: silent, muted: true, which: () => null, onProcessExit: () => () => undefined })
+    const second = await play(server, { audio }, 170)
+    await second.screen("the muted mark", (text) => text.includes("Ambience: Gulls · sound muted (F9)"))
+    audio.dispose()
   })
 
   test("a notice reads as a warning line apart from the story; the scene panel lists what the table established", async () => {

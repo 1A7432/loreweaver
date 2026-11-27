@@ -54,7 +54,8 @@ jobs:
         run: bun install && bun run test
       - name: tui (OpenTUI)
         working-directory: clients/tui
-        run: bun install && bun test && bun run build
+        # `check` is `tsc --noEmit` AND the runner, as for the protocol above.
+        run: bun install && bun run check && bun run build
 
   server:
     name: Server + module SDK — TypeScript (bun)

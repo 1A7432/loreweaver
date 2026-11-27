@@ -25,6 +25,8 @@ export interface ConnectMemory {
   // Past successful connections, most-recent first — the connect screen offers them to pick.
   servers?: SavedServer[]
   localKeys?: LocalKey[]
+  /** The sound's mute switch. */
+  muted?: boolean
 }
 
 const MAX_SERVERS = 8
@@ -98,6 +100,7 @@ export async function loadConnectMemory(path = MEMORY_PATH): Promise<ConnectMemo
       localServerHome: clean((parsed as ConnectMemory).localServerHome),
       servers: cleanServers((parsed as ConnectMemory).servers),
       localKeys: cleanLocalKeys((parsed as ConnectMemory).localKeys),
+      ...((parsed as ConnectMemory).muted === true ? { muted: true } : {}),
     }
   } catch {
     return {}
@@ -113,6 +116,7 @@ export async function saveConnectMemory(memory: ConnectMemory, path = MEMORY_PAT
     localServerHome: clean(memory.localServerHome),
     servers: cleanServers(memory.servers),
     localKeys: cleanLocalKeys(memory.localKeys),
+    ...(memory.muted === true ? { muted: true } : {}),
   }
   await mkdir(dirname(path), { recursive: true })
   // Created owner-only, so the keys are never readable by others even for a moment.

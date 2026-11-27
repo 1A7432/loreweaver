@@ -18,6 +18,8 @@ export interface HeaderBarProps {
   theme: Palette
   locale?: string
   link?: LinkStatus
+  /** What the room plays and the local sound marks (`audioLine`); nothing shows when empty. */
+  audio?: string
 }
 // A plain geometric clock face -- single-width in every terminal font (unlike an
 // emoji clock, which typically renders double-width and would throw off column math).
@@ -70,7 +72,7 @@ export function cacheRate(usage: NonNullable<UsageView["last"]>): number | null 
 // A height=4 bordered row -- exactly the two inner rows the `tiny` ascii-font needs --
 // carrying room identity, scene + in-game clock and a ticking wall clock on the top row,
 // and liveness + the last turn's token figures (the `usage` view) on the bottom row.
-export function HeaderBar({ room, scene, usage, online, theme, locale, link }: HeaderBarProps) {
+export function HeaderBar({ room, scene, usage, online, theme, locale, link, audio }: HeaderBarProps) {
   const { width } = useTerminalDimensions()
   const visible = headerVisibility(width)
   const [now, setNow] = useState(() => new Date())
@@ -142,7 +144,18 @@ export function HeaderBar({ room, scene, usage, online, theme, locale, link }: H
               {tt(locale, connKey(link))}
             </text>
           ) : null}
-          <box flexGrow={1} minWidth={0} />
+          {/* What plays shares the liveness row and gives way first: it truncates, never wraps. */}
+          {audio ? (
+            // flexBasis 0: it takes only the room the liveness and the usage figures leave.
+            <box flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} marginRight={1}>
+              <text fg={theme.dim} wrapMode="none" truncate>
+                {" · "}
+                {audio}
+              </text>
+            </box>
+          ) : (
+            <box flexGrow={1} minWidth={0} />
+          )}
           {last && showStatus ? (
             <box flexShrink={0} flexDirection="row">
               {visible.usage ? (

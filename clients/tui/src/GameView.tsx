@@ -12,8 +12,9 @@ import { ShareForm } from "./components/ShareForm"
 import { StatusBar } from "./components/StatusBar"
 import type { UiChoice } from "./components/UiBlocks"
 import { VariablesPanel } from "./components/VariablesPanel"
+import { audioLine, type AudioController } from "./audio"
 import type { Connection, ConnectionState } from "./connection"
-import { useConnectionState, usePanelViews, useSnapshot, viewData } from "./hooks"
+import { useAudioState, useConnectionState, usePanelViews, useSnapshot, viewData } from "./hooks"
 import { tt, type MessageKey } from "./i18n"
 import { CHAT_INPUT_LIMIT, inputLimitState } from "./inputLimits"
 import { sidebarCollapsed, sidebarWidth } from "./layout"
@@ -47,6 +48,8 @@ export interface GameViewProps {
   pictureEnv?: Record<string, string | undefined>
   /** Whether a picture may use the terminal's own graphics (kitty, iTerm2, sixel); tests turn it off. */
   pictureGraphics?: boolean
+  /** The room's sound, for the header's line (muted, no player); absent: no local marks. */
+  audio?: AudioController
 }
 
 /** The link as the header shows it. */
@@ -72,9 +75,10 @@ function memberNames(party: { members: { id: string; name: string }[] } | null):
   return new Map((party?.members ?? []).map((member) => [member.id, member.name]))
 }
 
-export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true }: GameViewProps) {
+export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true, audio }: GameViewProps) {
   const snapshot = useSnapshot(connection)
   const local = useConnectionState(connection)
+  const sound = useAudioState(audio)
   const { width: terminalWidth } = useTerminalDimensions()
   const narrow = sidebarCollapsed(terminalWidth)
   const room = snapshot.welcome?.room.id ?? ""
@@ -334,7 +338,16 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const scene = viewData(snapshot, "scene")
   return (
     <box flexDirection="column" height="100%" width="100%" backgroundColor={theme.bg}>
-      <HeaderBar room={room} scene={scene} usage={viewData(snapshot, "usage")} online={online} theme={theme} locale={locale} link={linkStatus(snapshot, local)} />
+      <HeaderBar
+        room={room}
+        scene={scene}
+        usage={viewData(snapshot, "usage")}
+        online={online}
+        theme={theme}
+        locale={locale}
+        link={linkStatus(snapshot, local)}
+        audio={audioLine(viewData(snapshot, "audio"), sound, locale)}
+      />
 
       <box flexDirection="row" flexGrow={1} minHeight={8}>
         <scrollbox ref={scrollRef} flexGrow={1} border borderColor={theme.border} stickyScroll stickyStart="bottom" viewportCulling={false} onMouseScroll={loadOlder}>

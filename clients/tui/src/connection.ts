@@ -24,7 +24,7 @@ import { ByteError, type Dialer, type Transport } from "./irohLink"
 import { cachedMediaPath, readCachedMedia, sha256Hex, sniffImageMime, writeCachedMedia, type LocalFile } from "./media"
 
 /** Every built-in view the client shows. */
-export const CLIENT_VIEWS: readonly BuiltInViewName[] = ["me", "party", "scene", "variables", "characters", "commands", "room", "usage", "panels"]
+export const CLIENT_VIEWS: readonly BuiltInViewName[] = ["me", "party", "scene", "variables", "characters", "commands", "room", "usage", "panels", "audio"]
 
 /** Local lines kept; the oldest go first. */
 export const MAX_LOCAL_LINES = 200
@@ -413,20 +413,22 @@ export class Connection {
    * stream (then kept in the cache). `hint` is what the log said about it (an event's `mime` and
    * `name`); a cached file has no other record of them. The progress shows in `state.fetches`;
    * a failure rejects with a `ByteError` (`server`: its message is the server's own words).
+   * `hold: false` leaves `state.fetches` alone: a sound, which no picture view shows and which
+   * may be large, is not kept in memory here.
    */
-  fetchMedia(hash: string, hint: { mime?: string; name?: string } = {}): Promise<FetchedMedia> {
+  fetchMedia(hash: string, hint: { mime?: string; name?: string } = {}, options: { hold?: boolean } = {}): Promise<FetchedMedia> {
     if (!isContentHash(hash)) return Promise.reject(new ByteError("bad_hash"))
     const running = this.#inflight.get(hash)
     if (running) return running
-    const fetching = this.#fetch(hash, hint).finally(() => {
+    const fetching = this.#fetch(hash, hint, options.hold ?? true).finally(() => {
       this.#inflight.delete(hash)
     })
     this.#inflight.set(hash, fetching)
     return fetching
   }
 
-  async #fetch(hash: string, hint: { mime?: string; name?: string }): Promise<FetchedMedia> {
-    this.#setFetch(hash, { status: "loading" })
+  async #fetch(hash: string, hint: { mime?: string; name?: string }, hold: boolean): Promise<FetchedMedia> {
+    if (hold) this.#setFetch(hash, { status: "loading" })
     const dir = this.#options.mediaCacheDir
     try {
       let file: FetchedMedia
@@ -441,11 +443,11 @@ export class Connection {
         const path = await writeCachedMedia(hash, got.bytes, dir)
         file = { hash, bytes: got.bytes, mime: got.mime, name: got.name, ...(path ? { path } : {}) }
       }
-      this.#setFetch(hash, { status: "ready", file })
+      if (hold) this.#setFetch(hash, { status: "ready", file })
       return file
     } catch (error) {
       const failure = toByteError(error)
-      this.#setFetch(hash, { status: "failed", code: failure.code, message: failure.server ? failure.message : "" })
+      if (hold) this.#setFetch(hash, { status: "failed", code: failure.code, message: failure.server ? failure.message : "" })
       throw failure
     }
   }

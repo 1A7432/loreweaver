@@ -68,7 +68,7 @@ describe("image viewer", () => {
     const events: string[] = []
     const lines = await viewImage({
       payload: payloadFor(svg, "image/svg+xml"),
-      renderer: { capabilities: { kitty_graphics: true }, suspend: () => events.push("suspend"), resume: () => events.push("resume") },
+      renderer: { capabilities: { kitty_graphics: true }, suspend: () => void events.push("suspend"), resume: () => void events.push("resume") },
       write: () => events.push("write"),
       columns: 20,
       rows: 10,
@@ -83,9 +83,9 @@ describe("image viewer", () => {
     const events: string[] = []
     await viewImage({
       payload: payloadFor(bytes),
-      renderer: { capabilities: { kitty_graphics: true }, suspend: () => events.push("suspend"), resume: () => events.push("resume") },
+      renderer: { capabilities: { kitty_graphics: true }, suspend: () => void events.push("suspend"), resume: () => void events.push("resume") },
       write: (text) => events.push(text.includes("a=d") ? "delete" : "write"),
-      readKey: async () => events.push("read"),
+      readKey: async () => void events.push("read"),
       columns: 20,
       rows: 10,
     })
@@ -111,9 +111,9 @@ describe("image viewer", () => {
 
     await viewImage({
       payload: payloadFor(bytes),
-      renderer: { capabilities: { sixel: true }, suspend: () => events.push("suspend"), resume: () => events.push("resume") },
+      renderer: { capabilities: { sixel: true }, suspend: () => void events.push("suspend"), resume: () => void events.push("resume") },
       write: (text) => events.push(text.startsWith("\x1bPq") ? "sixel" : "write"),
-      readKey: async () => events.push("read"),
+      readKey: async () => void events.push("read"),
       queryWindowPixels: async () => ({ width: 20, height: 40 }),
       columns: 2,
       rows: 2,

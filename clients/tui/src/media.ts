@@ -48,6 +48,11 @@ export interface RgbaImage {
 export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 /** The largest file read back from the cache (the largest the byte channel accepts). */
 const MAX_CACHED_BYTES = 128 * 1024 * 1024
+/**
+ * The largest sound this client reads for upload: the largest file the byte channel carries.
+ * The server's own (lower) audio limit is its to say, with a coded refusal.
+ */
+export const MAX_AUDIO_UPLOAD_BYTES = MAX_CACHED_BYTES
 
 /** The picture types the server stores as room media. */
 export const SHAREABLE_IMAGE_MIMES: readonly string[] = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]
@@ -145,11 +150,16 @@ export class LocalFileError extends Error {
   }
 }
 
+/** What a person is uploading: a picture to share, a card to import, a sound for the audio library. */
+export type UploadKind = "image" | "card" | "audio"
+
 /**
- * The type a file is offered as, by its name: a picture to share (`image`), or a card to import
- * (`card`: a PNG with the card inside, or the card as JSON). "" when it is not one of those.
+ * The type a file is offered as, by its name: a picture to share (`image`), a card to import
+ * (`card`: a PNG with the card inside, or the card as JSON), or a sound (`audio`). "" when it
+ * is not one of those.
  */
-export function uploadMime(path: string, kind: "image" | "card"): string {
+export function uploadMime(path: string, kind: UploadKind): string {
+  if (kind === "audio") return detectAudioMime(path)
   if (kind === "card") {
     const ext = extname(path).toLowerCase()
     return ext === ".png" ? "image/png" : ext === ".json" ? "application/json" : ""
@@ -164,7 +174,7 @@ export function uploadMime(path: string, kind: "image" | "card"): string {
  * it is read — the size is checked on the opened file itself, and the read stops at the size it
  * reported (a file that grew meanwhile is refused, not cut).
  */
-export async function readLocalFile(typed: string, kind: "image" | "card", maxBytes: number = MAX_UPLOAD_BYTES): Promise<LocalFile> {
+export async function readLocalFile(typed: string, kind: UploadKind, maxBytes: number = MAX_UPLOAD_BYTES): Promise<LocalFile> {
   const cleaned = coerceDroppedFilePath(typed)
   if (!cleaned) throw new LocalFileError("empty_path", typed)
   const path = resolve(expandHome(cleaned))

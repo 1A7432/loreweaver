@@ -19,6 +19,9 @@ export interface SettingsScreenProps {
   locale: string
   onLocaleChange: (locale: TuiLocale) => void
   onThemeChange: (name: ThemeName) => void
+  /** The local mute switch (F9 anywhere toggles it too). */
+  muted?: boolean
+  onMutedChange?: (muted: boolean) => void
   onBack: () => void
 }
 
@@ -31,6 +34,8 @@ export function SettingsScreen({
   locale,
   onLocaleChange,
   onThemeChange,
+  muted = false,
+  onMutedChange,
   onBack,
 }: SettingsScreenProps) {
   const [selected, setSelected] = useState(Math.max(0, themeOrder.indexOf(themeName)))
@@ -85,6 +90,23 @@ export function SettingsScreen({
             <text fg={theme.dim}>{tt(locale, "settings.languageNote")}</text>
           </box>
         )}
+
+        {/* Sound: a local switch, kept with the client's other settings */}
+        {onMutedChange ? (
+          <box flexDirection="column" marginBottom={1}>
+            <box flexDirection="row">
+              <text fg={theme.dim}>{tt(locale, "settings.sound")}{"  "}</text>
+              <box onMouseDown={() => onMutedChange(false)} backgroundColor={!muted ? theme.accent : theme.bg} paddingX={1}>
+                <text fg={!muted ? theme.bg : theme.fg}>{tt(locale, "settings.soundOn")}</text>
+              </box>
+              <text>{" "}</text>
+              <box onMouseDown={() => onMutedChange(true)} backgroundColor={muted ? theme.accent : theme.bg} paddingX={1}>
+                <text fg={muted ? theme.bg : theme.fg}>{tt(locale, "settings.soundMuted")}</text>
+              </box>
+            </box>
+            <text fg={theme.dim}>{tt(locale, "settings.soundNote")}</text>
+          </box>
+        ) : null}
 
         {/* Theme */}
         <text fg={theme.dim}>{tt(locale, "settings.theme")}</text>

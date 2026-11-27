@@ -2,6 +2,9 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 
 export interface EnvLike {
+  // `process.env` itself must fit: without this, an all-optional interface is a "weak type" that
+  // an environment naming none of these keys is refused for.
+  readonly [name: string]: string | undefined
   HOME?: string
   USERPROFILE?: string
   TRPG_HOME?: string

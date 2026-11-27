@@ -23,6 +23,8 @@ export interface MainMenuProps {
   onSettings: () => void
   /** An admin's "import a world card" screen. */
   onImportWorld?: () => void
+  /** An admin's "add a sound" screen (the room's audio library). */
+  onAddSound?: () => void
   /** Leave this server (back to the connect screen; a server this client started is stopped). */
   onDisconnect?: () => void
   // Optional so a caller that does not wire teardown gets no Quit row rather than a dead one.
@@ -47,7 +49,7 @@ export function roleLabel(snapshot: SessionSnapshot, locale: string): string {
   return tt(locale, role === "admin" ? "menu.role.admin" : role === "observer" ? "menu.role.observer" : "menu.role.player")
 }
 
-export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onDisconnect, onQuit }: MainMenuProps) {
+export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onAddSound, onDisconnect, onQuit }: MainMenuProps) {
   const snapshot = useSnapshot(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const showSidebar = !sidebarCollapsed(terminalWidth)
@@ -63,7 +65,10 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
     { label: tt(locale, "menu.commands"), run: onCommands },
     { label: tt(locale, "menu.settings"), run: onSettings },
   ]
-  if (isAdmin && onImportWorld) items.splice(3, 0, { label: tt(locale, "menu.importWorld"), run: onImportWorld })
+  const adminItems: MenuItem[] = []
+  if (isAdmin && onImportWorld) adminItems.push({ label: tt(locale, "menu.importWorld"), run: onImportWorld })
+  if (isAdmin && onAddSound) adminItems.push({ label: tt(locale, "menu.addSound"), run: onAddSound })
+  items.splice(3, 0, ...adminItems)
   // Leaving goes last and is set apart by a blank row: not for a newcomer to hit while arrowing through.
   const leaveIndex = onDisconnect || onQuit ? items.length : -1
   if (onDisconnect) items.push({ label: tt(locale, "menu.disconnect"), run: onDisconnect })

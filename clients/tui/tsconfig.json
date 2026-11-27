@@ -3,13 +3,20 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ESNext", "DOM"],
+    "customConditions": ["bun"],
+    "lib": ["ESNext"],
+    "types": ["bun"],
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/react",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "../../server/src/core/skills/skill-text.d.ts",
+    "../../server/src/worker/templates/vendor-text.d.ts"
+  ]
 }
-

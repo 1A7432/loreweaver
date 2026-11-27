@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { App, type AppProps } from "./App"
+import { AudioController } from "./audio"
 import type { HostHandle } from "./hostLocal"
 import type { IrohMode } from "./irohLink"
 import { FakeServer, liveRender, pump, waitFor, waitForScreen } from "./testkit"
@@ -202,8 +203,8 @@ describe("App", () => {
     harness.mockInput.pressEnter()
     const menu = await screen("the admin's menu", (text) => text.includes("Enter game") && text.includes("Disconnect"))
     expect(menu).toContain("Import a world card")
-    // Enter game, My character, Commands, Import a world card, Settings, Disconnect.
-    for (let i = 0; i < 5; i += 1) {
+    // Enter game, My character, Commands, Import a world card, Add a sound, Settings, Disconnect.
+    for (let i = 0; i < 6; i += 1) {
       harness.mockInput.pressArrow("down")
       await pump()
     }
@@ -261,5 +262,42 @@ describe("App", () => {
     harness.mockInput.pressEscape()
     const after = await screen("the form closed", (text) => !text.includes("Share a picture with the table"))
     expect(after).toContain("say or command")
+  })
+
+  test("an admin adds a sound from the menu; F9 mutes anywhere, is remembered, and reaches the sound controller", async () => {
+    const server = new FakeServer({ role: "admin" })
+    const controllers: AudioController[] = []
+    const mutes: boolean[] = []
+    const { harness, screen } = await boot(server, {
+      onMutedChange: (muted) => mutes.push(muted),
+      // Players that never run: no sound and no process from a test.
+      makeAudio: (connection, muted) => {
+        const audio = new AudioController({ session: connection.session, fetchSound: () => Promise.reject(new Error("unused")), muted, which: () => null, onProcessExit: () => () => undefined })
+        controllers.push(audio)
+        return audio
+      },
+    })
+    await screen("the connect screen", (text) => text.includes("⚄ Connect"))
+    harness.mockInput.pressEnter()
+    const menu = await screen("the menu", (text) => text.includes("Add a sound"))
+    expect(menu).toContain("Import a world card")
+    // Enter game, My character, Commands, Import a world card, Add a sound.
+    for (let i = 0; i < 4; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the sound form", (text) => text.includes("Add a sound to the room's audio library"))
+    harness.mockInput.pressEscape()
+    await screen("back to the menu", (text) => text.includes("Enter game"))
+
+    expect(controllers).toHaveLength(1)
+    expect(controllers[0]!.getState().muted).toBe(false)
+    harness.mockInput.pressKey("F9")
+    await waitFor("muted", () => controllers[0]!.getState().muted)
+    expect(mutes).toEqual([true])
+    harness.mockInput.pressKey("F9")
+    await waitFor("unmuted", () => !controllers[0]!.getState().muted)
+    expect(mutes).toEqual([true, false])
   })
 })

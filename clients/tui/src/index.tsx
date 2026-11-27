@@ -45,6 +45,7 @@ const prefill: AppPrefill = {
   localServerHome: remembered.localServerHome,
   servers: remembered.servers,
   localKeys: remembered.localKeys,
+  muted: remembered.muted,
 }
 
 // `exitOnCtrlC: false` hands Ctrl+C to the App shell, which copies the current selection when
@@ -69,6 +70,9 @@ createRoot(renderer).render(
     }}
     onLocalKey={(entry) => {
       void loadConnectMemory().then((m) => saveConnectMemory({ ...m, localKeys: rememberLocalKey(m.localKeys, entry) }))
+    }}
+    onMutedChange={(muted) => {
+      void loadConnectMemory().then((m) => saveConnectMemory({ ...m, muted }))
     }}
     onForgetConnect={(entry: SavedServer) => {
       void loadConnectMemory().then((m) => saveConnectMemory({ ...m, servers: forgetServer(m.servers, entry) }))

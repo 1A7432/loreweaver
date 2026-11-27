@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { KeyEvent } from "@opentui/core"
+import { audioFor, type AudioController } from "./audio"
 import { Connection } from "./connection"
 import { forgetServer, rememberLocalKey, type LocalKey, type SavedServer } from "./connectMemory"
 import { copySelection, usesAppClipboardCopy, type ClipboardRenderer, type CopyOutcome } from "./copy"
@@ -9,6 +10,7 @@ import { useConnectionState, useSnapshot } from "./hooks"
 import type { BringUp, HostHandle } from "./hostLocal"
 import { irohDialer, looksLikeTicket, type Dialer, type IrohMode } from "./irohLink"
 import { CharacterScreen } from "./screens/CharacterScreen"
+import { AddSoundScreen } from "./screens/AddSoundScreen"
 import { CommandsScreen } from "./screens/CommandsScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
 import { HostLocalScreen } from "./screens/HostLocalScreen"
@@ -30,6 +32,8 @@ export interface AppPrefill {
   localServerHome?: string
   servers?: SavedServer[]
   localKeys?: LocalKey[]
+  /** The remembered mute switch. */
+  muted?: boolean
 }
 
 export interface AppProps {
@@ -48,6 +52,10 @@ export interface AppProps {
   onLocalKey?: (entry: LocalKey) => void
   // Persist a saved-server deletion.
   onForgetConnect?: (entry: SavedServer) => void
+  /** Persist the mute switch. */
+  onMutedChange?: (muted: boolean) => void
+  /** The sound controller for a connection; tests hand in one with fake players. Defaults to `audioFor`. */
+  makeAudio?: (connection: Connection, muted: boolean) => AudioController
   // Restore the terminal and exit. A no-op when absent (tests).
   onQuit?: () => void
   // The clipboard/selection owner for Ctrl+C (see `copy.ts`); the real `CliRenderer` fits.
@@ -56,7 +64,7 @@ export interface AppProps {
   platform?: string
 }
 
-type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world"
+type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world" | "add_sound"
 
 // F1..F5 select a theme by its position in themeOrder.
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
@@ -64,6 +72,8 @@ const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 
 interface Attempt {
   id: number
   connection: Connection
+  /** The room's sound for this connection: it stops by itself when the session ends. */
+  audio: AudioController
   remember: { host: string; key: string; name?: string } | null
   /** The connection is to the server this client started. */
   local: boolean
@@ -78,6 +88,8 @@ export function App({
   onLocalServerHomeChange,
   onLocalKey,
   onForgetConnect,
+  onMutedChange,
+  makeAudio = audioFor,
   onQuit,
   renderer,
   platform = process.platform,
@@ -92,6 +104,9 @@ export function App({
   const [attempt, setAttempt] = useState<Attempt | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string>()
+  const [muted, setMuted] = useState(() => prefill?.muted ?? false)
+  const mutedRef = useRef(muted)
+  mutedRef.current = muted
   // A server the "host locally" screen started; stopped when the app exits.
   const localServer = useRef<HostHandle | undefined>(undefined)
   const localStopping = useRef<Promise<unknown> | undefined>(undefined)
@@ -124,6 +139,17 @@ export function App({
     [],
   )
 
+  const changeMuted = (next: boolean) => {
+    if (next === mutedRef.current) return
+    mutedRef.current = next
+    setMuted(next)
+    onMutedChange?.(next)
+  }
+  // The switch reaches the playing connection's sound at once.
+  useEffect(() => {
+    attempt?.audio.setMuted(muted)
+  }, [muted, attempt])
+
   const handleQuit = () => {
     current.current?.stop()
     void stopLocal()
@@ -154,6 +180,8 @@ export function App({
     const name = typeof event.name === "string" ? event.name.toLowerCase() : ""
     const index = themeKeyIndex[name]
     if (index !== undefined && themeOrder[index]) setThemeName(themeOrder[index])
+    // F9: sound on/off, from any screen (it never collides with typing).
+    if (name === "f9") changeMuted(!mutedRef.current)
     if (name === "escape" && !modalOpen.current) setScreen((prev) => (prev === "game" || prev === "commands" ? "menu" : prev))
     if (event.ctrl && name === "c") {
       const copyable = screen === "game" && usesAppClipboardCopy(platform)
@@ -177,15 +205,17 @@ export function App({
     setError(undefined)
     setConnecting(true)
     const connection = new Connection({ ticket, key, ...(name ? { name } : {}), locale, client: clientInfo(), dial: dial(mode) })
+    const audio = makeAudio(connection, mutedRef.current)
     try {
       await connection.start()
     } catch (caught) {
+      audio.dispose()
       setConnecting(false)
       setError(tt(locale, "app.error.dialFailed", { reason: caught instanceof Error ? caught.message : String(caught) }))
       setScreen("connect")
       return
     }
-    setAttempt({ id: ++attempts.current, connection, remember: remember ? { host: ticket, key, ...(name ? { name } : {}) } : null, local })
+    setAttempt({ id: ++attempts.current, connection, audio, remember: remember ? { host: ticket, key, ...(name ? { name } : {}) } : null, local })
   }
 
   /** Leave the server by choice: back to the connect screen; a server this client started is stopped. */
@@ -291,6 +321,9 @@ export function App({
     <Table
       key={attempt.id}
       connection={attempt.connection}
+      audio={attempt.audio}
+      muted={muted}
+      onMutedChange={changeMuted}
       screen={screen}
       setScreen={setScreen}
       theme={theme}
@@ -314,6 +347,9 @@ export function App({
 
 interface TableProps {
   connection: Connection
+  audio: AudioController
+  muted: boolean
+  onMutedChange: (muted: boolean) => void
   screen: Screen
   setScreen: (screen: Screen | ((prev: Screen) => Screen)) => void
   theme: Palette
@@ -333,7 +369,7 @@ interface TableProps {
 }
 
 /** Everything behind a connection: it reads the session and routes the screens. */
-function Table({ connection, screen, setScreen, theme, themeName, setThemeName, locale, onLocaleChange, copyNotice, platform, onWelcome, onEnded, onDisconnect, onModalChange, onQuit, waiting }: TableProps) {
+function Table({ connection, audio, muted, onMutedChange, screen, setScreen, theme, themeName, setThemeName, locale, onLocaleChange, copyNotice, platform, onWelcome, onEnded, onDisconnect, onModalChange, onQuit, waiting }: TableProps) {
   const snapshot = useSnapshot(connection)
   const state = useConnectionState(connection)
   const welcome = snapshot.welcome
@@ -378,6 +414,8 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
         locale={locale}
         onLocaleChange={onLocaleChange}
         onThemeChange={setThemeName}
+        muted={muted}
+        onMutedChange={onMutedChange}
         onBack={() => setScreen("menu")}
       />
     )
@@ -393,6 +431,7 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
         platform={platform}
         onCommands={() => setScreen("commands")}
         onModalChange={onModalChange}
+        audio={audio}
       />
     )
   }
@@ -401,6 +440,9 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
   }
   if (screen === "import_world") {
     return <ImportWorldScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
+  }
+  if (screen === "add_sound") {
+    return <AddSoundScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
   if (screen === "commands") {
     return <CommandsScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
@@ -416,6 +458,7 @@ function Table({ connection, screen, setScreen, theme, themeName, setThemeName, 
       onCommands={() => setScreen("commands")}
       onSettings={() => setScreen("settings")}
       onImportWorld={() => setScreen("import_world")}
+      onAddSound={() => setScreen("add_sound")}
       onDisconnect={onDisconnect}
       onQuit={onQuit}
     />

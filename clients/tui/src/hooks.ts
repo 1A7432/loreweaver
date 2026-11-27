@@ -2,6 +2,7 @@
 // each through `useSyncExternalStore`. No component keeps a copy of either.
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { builtInView, panelViewNames, type BuiltInViewName, type BuiltInViews, type PanelEntry, type SessionSnapshot } from "loreweaver-protocol/v3"
+import type { AudioController, AudioLocalState } from "./audio"
 import { CLIENT_VIEWS, type Connection, type ConnectionState } from "./connection"
 
 export function useSnapshot(connection: Connection): SessionSnapshot {
@@ -10,6 +11,14 @@ export function useSnapshot(connection: Connection): SessionSnapshot {
 
 export function useConnectionState(connection: Connection): ConnectionState {
   return useSyncExternalStore(connection.subscribe, connection.getState)
+}
+
+const NO_AUDIO: AudioLocalState = { muted: false, noPlayer: false }
+const noSubscription = (): (() => void) => () => undefined
+
+/** The sound controller's own state (muted, no player); the defaults when there is none. */
+export function useAudioState(audio: AudioController | undefined): AudioLocalState {
+  return useSyncExternalStore(audio?.subscribe ?? noSubscription, audio?.getState ?? (() => NO_AUDIO))
 }
 
 /** A built-in view's latest value, or null until it arrives (or when it was refused). */
