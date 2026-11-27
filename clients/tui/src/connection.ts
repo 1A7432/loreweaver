@@ -103,6 +103,11 @@ export const MAX_HELD_FETCHES = 16
 /** Redials after a drop before the client gives up and says so. */
 export const DEFAULT_MAX_REDIALS = 10
 
+export interface RunCommandOptions {
+  /** Leave the answer out of the local lines (see `Connection.runCommand`). */
+  readonly quiet?: boolean
+}
+
 export interface ConnectionOptions {
   readonly ticket: string
   readonly key: string
@@ -390,9 +395,14 @@ export class Connection {
     return this.#track(this.session.input(text))
   }
 
-  /** `command.run`: the same handler a typed command reaches. */
-  runCommand(id: string, args: Record<string, unknown> = {}): Promise<Result | null> {
-    return this.#track(this.session.runCommand(id, args))
+  /**
+   * `command.run`: the same handler a typed command reaches. `quiet` adds no local line for the
+   * answer, the refusal or a failure: the caller shows the outcome itself. A command whose
+   * answer carries a secret (a minted access key) must be run this way, or the key would sit in
+   * the log lines the narrative view and the transcript are built from.
+   */
+  runCommand(id: string, args: Record<string, unknown> = {}, options: RunCommandOptions = {}): Promise<Result | null> {
+    return this.#track(this.session.runCommand(id, args), options.quiet === true)
   }
 
   // --- the byte channel --------------------------------------------------------------------
@@ -492,10 +502,11 @@ export class Connection {
     }
   }
 
-  async #track(request: Promise<Result>): Promise<Result | null> {
+  async #track(request: Promise<Result>, quiet = false): Promise<Result | null> {
     this.#set({ pending: this.#state.pending + 1 })
     try {
       const result = await request
+      if (quiet) return result
       if (result.ok) {
         if (result.text) this.note({ kind: "result", level: "info", text: result.text })
       } else {
@@ -503,8 +514,7 @@ export class Connection {
       }
       return result
     } catch (error) {
-      const code = error instanceof SessionError ? error.code : "failed"
-      this.note({ kind: "failed", level: "warn", text: "", code })
+      if (!quiet) this.note({ kind: "failed", level: "warn", text: "", code: error instanceof SessionError ? error.code : "failed" })
       return null
     } finally {
       this.#set({ pending: Math.max(0, this.#state.pending - 1) })

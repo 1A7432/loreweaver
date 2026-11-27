@@ -467,3 +467,23 @@ export async function liveRender(node: ReactNode, options: { width: number; heig
   }
   return harness
 }
+
+/**
+ * Run `render` with React's "update not wrapped in act()" warning muted. A screen that subscribes
+ * a view as it mounts gets the server's frames in the few turns between the renderer's own
+ * `act()` and `liveRender` leaving the act environment; that update is real, and nothing is lost,
+ * but React cannot tell. Only that one warning is dropped, and only while `render` runs.
+ */
+export async function withoutActWarning<T>(render: () => Promise<T>): Promise<T> {
+  const original = console.error
+  console.error = (...args: unknown[]) => {
+    if (typeof args[0] === "string" && args[0].includes("was not wrapped in act")) return
+    original(...args)
+  }
+  try {
+    return await render()
+  } finally {
+    console.error = original
+  }
+}
+

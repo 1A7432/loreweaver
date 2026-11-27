@@ -203,8 +203,8 @@ describe("App", () => {
     harness.mockInput.pressEnter()
     const menu = await screen("the admin's menu", (text) => text.includes("Enter game") && text.includes("Disconnect"))
     expect(menu).toContain("Import a world card")
-    // Enter game, My character, Commands, Import a world card, Add a sound, Settings, Disconnect.
-    for (let i = 0; i < 6; i += 1) {
+    // Enter game, My character, Commands, Import a world card, Add a sound, Access keys, Model, Settings, Disconnect.
+    for (let i = 0; i < 8; i += 1) {
       harness.mockInput.pressArrow("down")
       await pump()
     }
@@ -299,5 +299,66 @@ describe("App", () => {
     harness.mockInput.pressKey("F9")
     await waitFor("unmuted", () => !controllers[0]!.getState().muted)
     expect(mutes).toEqual([true, false])
+  })
+  test("an admin's menu offers Access keys and Model, a player's does not; the admin views are subscribed only while their screen is open", async () => {
+    const adminServer = new FakeServer({ role: "admin", name: "Ada" })
+    adminServer.views.set("admin/keys", { keys: [{ id: "k:aaaaaaaaaaaa", name: "Ada", role: "admin", masked: "Ab3x...Zq9w", online: true }] })
+    adminServer.views.set("admin/model", {
+      lanes: [{ lane: "keeper", source: "override", sameAsKeeper: false, provider: "deepseek", model: "deepseek-v4-pro", baseUrl: null, wire: null, effort: null, contextWindow: null, key: { set: true, masked: "sk-a...wxyz" } }],
+      providers: [],
+      imagegen: { source: "default", enabled: false, provider: null, model: null, size: null, baseUrl: null, key: { set: false, masked: null } },
+      imageProviders: [],
+    })
+    const { harness, screen } = await boot(adminServer)
+    await screen("the connect screen", (text) => text.includes("⚄ Connect"))
+    harness.mockInput.pressEnter()
+    const menu = await screen("the admin's menu", (text) => text.includes("Access keys") && text.includes("Model"))
+    expect(menu).toContain("Add a sound")
+    const subscribedNames = () => adminServer.current.calls("view.subscribe").flatMap((call) => call.params.names as string[])
+    expect(subscribedNames().filter((name) => name.startsWith("admin/"))).toEqual([])
+
+    // Enter game, My character, Commands, Import a world card, Add a sound, Access keys.
+    for (let i = 0; i < 5; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the keys screen", (text) => text.includes("Ada · admin · Ab3x...Zq9w · ● online"))
+    expect(subscribedNames().filter((name) => name.startsWith("admin/"))).toEqual(["admin/keys"])
+    harness.mockInput.pressEscape()
+    await screen("the menu again", (text) => text.includes("Enter game"))
+    await waitFor("the keys view dropped", () => adminServer.current.calls("view.unsubscribe").some((call) => (call.params.names as string[]).includes("admin/keys")))
+
+    // The menu starts at the top again: Access keys is the sixth row down, Model the seventh.
+    for (let i = 0; i < 6; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the model screen", (text) => text.includes("Keeper: deepseek / deepseek-v4-pro"))
+    expect(subscribedNames().filter((name) => name.startsWith("admin/"))).toEqual(["admin/keys", "admin/model"])
+    harness.mockInput.pressEscape()
+    await screen("the menu once more", (text) => text.includes("Enter game"))
+    await waitFor("the model view dropped", () => adminServer.current.calls("view.unsubscribe").some((call) => (call.params.names as string[]).includes("admin/model")))
+  })
+
+  test("a player's menu has neither admin screen and a player never subscribes to an admin view", async () => {
+    const server = new FakeServer({ role: "player", name: "Cyd" })
+    server.views.set("admin/keys", { keys: [] })
+    const { harness, screen } = await boot(server)
+    await screen("the connect screen", (text) => text.includes("⚄ Connect"))
+    harness.mockInput.pressEnter()
+    const menu = await screen("the menu", (text) => text.includes("Enter game"))
+    expect(menu).not.toContain("Access keys")
+    expect(menu).not.toContain("Model")
+    expect(menu).not.toContain("Add a sound")
+    for (let i = 0; i < 3; i += 1) {
+      harness.mockInput.pressArrow("down")
+      await pump()
+    }
+    harness.mockInput.pressEnter()
+    await screen("the settings", (text) => text.includes("Signed in as"))
+    await pump(5)
+    expect(server.current.calls("view.subscribe").flatMap((call) => call.params.names as string[]).some((name) => name.startsWith("admin/"))).toBe(false)
   })
 })

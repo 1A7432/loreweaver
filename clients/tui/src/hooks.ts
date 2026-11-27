@@ -50,3 +50,21 @@ export function usePanelViews(connection: Connection, panels: readonly PanelEntr
     if (dropped.length > 0) void connection.session.viewUnsubscribe(dropped).catch(() => undefined)
   }, [key])
 }
+
+/**
+ * Keep the session subscribed to the named views for as long as the calling component is
+ * mounted, and drop them (and their values) when it unmounts. The admin screens use it for the
+ * `admin/*` views: they are subscribed only while the screen is open, and only by an admin —
+ * pass no names for anyone else. Only the NAMES are held here; the values live in the snapshot.
+ */
+export function useViews(connection: Connection, names: readonly string[]): void {
+  const key = names.join("\n")
+  useEffect(() => {
+    if (names.length === 0) return
+    const held = [...names]
+    void connection.session.viewSubscribe(held).catch(() => undefined)
+    return () => {
+      void connection.session.viewUnsubscribe(held).catch(() => undefined)
+    }
+  }, [connection, key])
+}

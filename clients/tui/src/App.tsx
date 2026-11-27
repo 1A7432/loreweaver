@@ -10,6 +10,7 @@ import { useConnectionState, useSnapshot } from "./hooks"
 import type { BringUp, HostHandle } from "./hostLocal"
 import { irohDialer, looksLikeTicket, type Dialer, type IrohMode } from "./irohLink"
 import { CharacterScreen } from "./screens/CharacterScreen"
+import { AccessKeysScreen } from "./screens/AccessKeysScreen"
 import { AddSoundScreen } from "./screens/AddSoundScreen"
 import { CommandsScreen } from "./screens/CommandsScreen"
 import { ConnectScreen } from "./screens/ConnectScreen"
@@ -17,6 +18,7 @@ import { HostLocalScreen } from "./screens/HostLocalScreen"
 import { ImportWorldScreen } from "./screens/ImportWorldScreen"
 import { LostScreen } from "./screens/LostScreen"
 import { MainMenu } from "./screens/MainMenu"
+import { ModelScreen } from "./screens/ModelScreen"
 import { SettingsScreen } from "./screens/SettingsScreen"
 import { defaultTuiLocale, tt, type TuiLocale } from "./i18n"
 import { defaultLocalServerHome } from "./localPaths"
@@ -64,7 +66,7 @@ export interface AppProps {
   platform?: string
 }
 
-type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world" | "add_sound"
+type Screen = "connect" | "host_local" | "menu" | "settings" | "game" | "character" | "commands" | "import_world" | "add_sound" | "access_keys" | "model"
 
 // F1..F5 select a theme by its position in themeOrder.
 const themeKeyIndex: Record<string, number> = { f1: 0, f2: 1, f3: 2, f4: 3, f5: 4 }
@@ -184,7 +186,8 @@ export function App({
     if (name === "f9") changeMuted(!mutedRef.current)
     if (name === "escape" && !modalOpen.current) setScreen((prev) => (prev === "game" || prev === "commands" ? "menu" : prev))
     if (event.ctrl && name === "c") {
-      const copyable = screen === "game" && usesAppClipboardCopy(platform)
+      // The access-keys screen too: a key just minted is shown once, and Ctrl+C there must copy it, not quit.
+      const copyable = (screen === "game" || screen === "access_keys") && usesAppClipboardCopy(platform)
       const outcome = copyable ? copySelection(renderer) : { kind: "empty" as const }
       if (outcome.kind === "empty") handleQuit()
       else showCopyNotice(outcome)
@@ -444,6 +447,12 @@ function Table({ connection, audio, muted, onMutedChange, screen, setScreen, the
   if (screen === "add_sound") {
     return <AddSoundScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
+  if (screen === "access_keys") {
+    return <AccessKeysScreen connection={connection} theme={theme} themeName={themeName} locale={locale} copyNotice={copyNotice} platform={platform} onBack={() => setScreen("menu")} />
+  }
+  if (screen === "model") {
+    return <ModelScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
+  }
   if (screen === "commands") {
     return <CommandsScreen connection={connection} theme={theme} themeName={themeName} locale={locale} onBack={() => setScreen("menu")} />
   }
@@ -459,6 +468,8 @@ function Table({ connection, audio, muted, onMutedChange, screen, setScreen, the
       onSettings={() => setScreen("settings")}
       onImportWorld={() => setScreen("import_world")}
       onAddSound={() => setScreen("add_sound")}
+      onAccessKeys={() => setScreen("access_keys")}
+      onModel={() => setScreen("model")}
       onDisconnect={onDisconnect}
       onQuit={onQuit}
     />

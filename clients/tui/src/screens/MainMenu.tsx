@@ -25,6 +25,10 @@ export interface MainMenuProps {
   onImportWorld?: () => void
   /** An admin's "add a sound" screen (the room's audio library). */
   onAddSound?: () => void
+  /** An admin's "access keys" screen (invite people, revoke them). */
+  onAccessKeys?: () => void
+  /** An admin's "model" screen (which model each lane uses). */
+  onModel?: () => void
   /** Leave this server (back to the connect screen; a server this client started is stopped). */
   onDisconnect?: () => void
   // Optional so a caller that does not wire teardown gets no Quit row rather than a dead one.
@@ -49,7 +53,7 @@ export function roleLabel(snapshot: SessionSnapshot, locale: string): string {
   return tt(locale, role === "admin" ? "menu.role.admin" : role === "observer" ? "menu.role.observer" : "menu.role.player")
 }
 
-export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onAddSound, onDisconnect, onQuit }: MainMenuProps) {
+export function MainMenu({ connection, theme, themeName, locale, onEnterGame, onCharacter, onCommands, onSettings, onImportWorld, onAddSound, onAccessKeys, onModel, onDisconnect, onQuit }: MainMenuProps) {
   const snapshot = useSnapshot(connection)
   const { width: terminalWidth } = useTerminalDimensions()
   const showSidebar = !sidebarCollapsed(terminalWidth)
@@ -68,6 +72,8 @@ export function MainMenu({ connection, theme, themeName, locale, onEnterGame, on
   const adminItems: MenuItem[] = []
   if (isAdmin && onImportWorld) adminItems.push({ label: tt(locale, "menu.importWorld"), run: onImportWorld })
   if (isAdmin && onAddSound) adminItems.push({ label: tt(locale, "menu.addSound"), run: onAddSound })
+  if (isAdmin && onAccessKeys) adminItems.push({ label: tt(locale, "menu.accessKeys"), run: onAccessKeys })
+  if (isAdmin && onModel) adminItems.push({ label: tt(locale, "menu.model"), run: onModel })
   items.splice(3, 0, ...adminItems)
   // Leaving goes last and is set apart by a blank row: not for a newcomer to hit while arrowing through.
   const leaveIndex = onDisconnect || onQuit ? items.length : -1

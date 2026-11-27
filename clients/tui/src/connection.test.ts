@@ -53,6 +53,26 @@ describe("Connection", () => {
     expect(connection.getState().lines).toHaveLength(2)
   })
 
+  test("a quiet command leaves no local line: its answer (which may carry a secret), its refusal and its failure are the caller's alone", async () => {
+    const { server, connection } = setup()
+    await connection.start()
+    await pump()
+    server.onCall = (_method, params) => (params.id === "key" ? { ok: true, text: "the new key: SECRET-IN-THE-ANSWER", data: { key: "SECRET-IN-THE-ANSWER" } } : { ok: false, code: "forbidden", message: "Admins only." })
+    const answered = await connection.runCommand("key", { op: "mint", name: "Dana" }, { quiet: true })
+    expect(answered).toMatchObject({ ok: true, text: "the new key: SECRET-IN-THE-ANSWER" })
+    const refused = await connection.runCommand("reset", {}, { quiet: true })
+    expect(refused).toMatchObject({ ok: false, error: { code: "forbidden" } })
+    expect(connection.getState().lines).toEqual([])
+    expect(connection.getState().pending).toBe(0)
+    // Without it, the same answer is a line.
+    await connection.runCommand("reset", {})
+    expect(connection.getState().lines.map((line) => line.kind)).toEqual(["refusal"])
+    // A request that gets no answer at all is null, and still no line.
+    connection.stop()
+    expect(await connection.runCommand("key", { op: "list" }, { quiet: true })).toBeNull()
+    expect(connection.getState().lines.map((line) => line.kind)).toEqual(["refusal"])
+  })
+
   test("a notice is a local line; a spinner notice is replaced by the next and ends with the turn", async () => {
     const { server, connection } = setup()
     await connection.start()
