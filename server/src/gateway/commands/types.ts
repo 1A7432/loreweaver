@@ -144,6 +144,16 @@ export interface CommandSpec {
    * not a turn of its own.
    */
   readonly lifecycle?: boolean;
+  /**
+   * For these arguments the command waits on outbound network in `prepare` (`pack install`
+   * fetching an archive): the gateway runs it at once instead of queuing it behind the room's
+   * lock, so the room goes on taking input meanwhile. Everything else is as for any command —
+   * the role and arguments are checked before `prepare`, `run` is synchronous in one store
+   * transaction, the caller gets one result when it is done — and a worker reload it asks
+   * for (`modulesChanged`) still queues behind the lock. `args` are the call's arguments as
+   * given, not yet validated: decide on a plain field.
+   */
+  readonly unlocked?: (args: Args) => boolean;
   /** Whether the command can run in this room now; a reason code when not. */
   readonly available?: (context: RoomContext) => true | string;
   /** The text form's arguments as an argument object, or a refusal. */

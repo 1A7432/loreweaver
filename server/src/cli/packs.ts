@@ -10,29 +10,23 @@
 //   load       every installed pack read back from disk and validated again (start-up): one
 //              that no longer validates is skipped with a note, never a crash.
 //
-// Installing is the OPERATOR's action, from the shell only: a pack's modules run as real
-// code in the server's process, with no sandbox (decisions 1–4), so which code the server
-// runs is decided by whoever runs the server. Room admins enable what is installed.
-// Installed packs are loaded when the server starts: restart it after installing or
-// uninstalling.
+// A room's admin may install from chat as well (`pack install`, decision 45); both paths
+// share one installer (`../gateway/pack_install.ts`). A pack installed from chat joins the
+// running server at once. One installed or uninstalled HERE, from the shell, is seen by a
+// running server only when it next starts.
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "yaml";
 
-import { PROTOCOL_VERSION } from "loreweaver-protocol/v3";
-
-import { MANIFEST_FILE, MAX_MANIFEST_BYTES, parseManifest, readPack, ruleSystemId, sha256Hex, skillId, trustCard, versionAtLeast, type Pack, type PackEntry, type PackProblem, type TrustCard } from "../core/packs/index.ts";
-import { builtInPackIds } from "../core/rulepacks/index.ts";
-import { builtInSkillIds } from "../core/skills/index.ts";
+import { MANIFEST_FILE, MAX_MANIFEST_BYTES, parseManifest, readPack, sha256Hex, trustCard, type Pack, type PackEntry, type PackProblem, type TrustCard } from "../core/packs/index.ts";
 import { parsePanels } from "../core/panels/index.ts";
 import { parsePresentationKit } from "../core/presentation/kit.ts";
 import { loadYaml } from "../core/yaml.ts";
-import type { LoadedPack } from "../gateway/packs.ts";
+import { installArchive, type InstallOutcome } from "../gateway/pack_install.ts";
 import { fetchPackSource, type FetchLike } from "../infra/packs/fetch.ts";
-import { confinedPath, hasConfinedFile, type IndexEntry, PackDirectory, readConfined } from "../infra/packs/files.ts";
+import { confinedPath, hasConfinedFile, PackDirectory, readConfined } from "../infra/packs/files.ts";
 import { bundleModule } from "../infra/runtime/bundle.ts";
-import { SERVER_VERSION } from "../infra/version.ts";
-import { MAX_ENTRY_BYTES, readZip, writeZip } from "../infra/zip.ts";
+import { MAX_ENTRY_BYTES, writeZip } from "../infra/zip.ts";
 
 /** Where a built module lands inside the archive. */
 export function bundledEntry(moduleId: string): string {
@@ -156,26 +150,8 @@ export async function buildPack(sourceDir: string, options: { readonly out?: str
   return { ok: true, out, sha256: sha256Hex(bytes), bytes: bytes.length, trust: trustCard(checked.pack), ignored };
 }
 
-/** What installing would shadow: ids an earlier claimant (a built-in or a pack installed before) keeps. */
-export interface Shadowed {
-  readonly ruleSystems: readonly string[];
-  readonly skills: readonly string[];
-}
-
-export type InstallOutcome =
-  | {
-      readonly ok: true;
-      /** False: the trust card is shown and nothing was written (pass `yes` to install). */
-      readonly installed: boolean;
-      readonly id: string;
-      readonly version: string;
-      readonly sha256: string;
-      readonly trust: TrustCard;
-      readonly shadowed: Shadowed;
-      /** The version this install replaced, or null. */
-      readonly replaced: string | null;
-    }
-  | { readonly ok: false; readonly code: string; readonly path?: string; readonly detail?: string; readonly problems?: readonly PackProblem[] };
+export type { InstallOutcome, Shadowed } from "../gateway/pack_install.ts";
+export { loadInstalledPacks } from "../gateway/pack_install.ts";
 
 export interface InstallOptions {
   readonly yes: boolean;
@@ -183,55 +159,11 @@ export interface InstallOptions {
   readonly now?: () => number;
 }
 
-/** The rule-system and skill ids an installed pack claims, read from its manifest. */
-function claimsOf(directory: PackDirectory, entry: IndexEntry): { readonly ruleSystems: readonly string[]; readonly skills: readonly string[] } {
-  const file = readConfined(directory.home(entry.id, entry.version), MANIFEST_FILE, MAX_MANIFEST_BYTES);
-  if (!file.ok) return { ruleSystems: [], skills: [] };
-  const parsed = parseManifest(new TextDecoder().decode(file.bytes));
-  if (!parsed.ok) return { ruleSystems: [], skills: [] };
-  return { ruleSystems: parsed.manifest.rulepacks.map(ruleSystemId), skills: parsed.manifest.skills.map(skillId) };
-}
-
-/** Fetch, validate, disclose — and with `yes`, install. */
+/** Fetch, validate, disclose — and with `yes`, install (`installArchive`, the room command's installer too). */
 export async function installPack(dataDir: string, ref: string, options: InstallOptions): Promise<InstallOutcome> {
   const source = await fetchPackSource(ref, { fetch: options.fetch });
   if (!source.ok) return source.detail === undefined ? { ok: false, code: source.code } : { ok: false, code: source.code, detail: source.detail };
-  const zip = readZip(source.bytes);
-  if (!zip.ok) return { ok: false, code: `zip_${zip.code}`, ...(zip.path === undefined ? {} : { path: zip.path }), ...(zip.detail === undefined ? {} : { detail: zip.detail }) };
-  const read = readPack(zip.entries);
-  if (!read.ok) return { ok: false, code: "invalid_pack", problems: read.problems };
-  const pack = read.pack;
-  const { id, version, engine } = pack.manifest;
-  if (engine.protocol !== null && !versionAtLeast(PROTOCOL_VERSION, engine.protocol)) return { ok: false, code: "engine_too_old", detail: `protocol ${engine.protocol}` };
-  if (engine.server !== null && !versionAtLeast(SERVER_VERSION, engine.server)) return { ok: false, code: "engine_too_old", detail: `server ${engine.server}` };
-  const directory = new PackDirectory(dataDir);
-  const index = directory.index();
-  if (!index.ok) return { ok: false, code: index.code };
-  const previous = index.entries.find((entry) => entry.id === id) ?? null;
-  if (previous !== null && previous.version === version) return { ok: false, code: "already_installed", detail: `${id}@${version}` };
-
-  // First claim wins: the built-ins, then the packs installed before this one.
-  const earlier = index.entries.filter((entry) => entry.id !== id).map((entry) => claimsOf(directory, entry));
-  const takenSystems = new Set([...builtInPackIds(), ...earlier.flatMap((claims) => claims.ruleSystems)]);
-  const takenSkills = new Set([...builtInSkillIds(), ...earlier.flatMap((claims) => claims.skills)]);
-  const shadowed: Shadowed = {
-    ruleSystems: pack.ruleSystems.map((system) => system.id).filter((system) => takenSystems.has(system)),
-    skills: pack.skills.map((skill) => skill.id).filter((skill) => takenSkills.has(skill)),
-  };
-  const sha256 = sha256Hex(source.bytes);
-  const result = { ok: true as const, id, version, sha256, trust: trustCard(pack), shadowed, replaced: previous?.version ?? null };
-  if (!options.yes) return { ...result, installed: false };
-  const bytes = new Map(zip.entries.map((entry) => [entry.path, entry.bytes]));
-  try {
-    directory.install(
-      { id, version, sha256, installedAt: (options.now ?? Date.now)() },
-      pack.files.map((file) => ({ path: file.path, bytes: bytes.get(file.path) as Uint8Array })),
-      index.entries,
-    );
-  } catch (error) {
-    return { ok: false, code: "install_failed", detail: error instanceof Error ? error.message : String(error) };
-  }
-  return { ...result, installed: true };
+  return installArchive(dataDir, source.bytes, options.now === undefined ? { yes: options.yes } : { yes: options.yes, now: options.now });
 }
 
 export interface ListedPack {
@@ -261,46 +193,4 @@ export function uninstallPack(dataDir: string, id: string): { readonly ok: true;
   const index = directory.index();
   if (!index.ok) return { ok: false, code: index.code };
   return directory.uninstall(id, index.entries) ? { ok: true, id } : { ok: false, code: "not_installed" };
-}
-
-/**
- * Every installed pack, read back from disk and validated again — what is on disk is as
- * untrusted as the archive was. One that does not validate is left out with a note
- * (`pack_index_unreadable`, `pack_unreadable:<id>@<version>:<code>`,
- * `pack_invalid:<id>@<version>:<code>`, `pack_mismatch:<id>@<version>`).
- */
-export function loadInstalledPacks(dataDir: string): { readonly packs: readonly LoadedPack[]; readonly notes: readonly string[] } {
-  const directory = new PackDirectory(dataDir);
-  const index = directory.index();
-  if (!index.ok) return { packs: [], notes: ["pack_index_unreadable"] };
-  const packs: LoadedPack[] = [];
-  const notes: string[] = [];
-  for (const entry of index.entries) {
-    const label = `${entry.id}@${entry.version}`;
-    const files = directory.read(entry.id, entry.version);
-    if (!files.ok) {
-      notes.push(`pack_unreadable:${label}:${files.code}`);
-      continue;
-    }
-    const read = readPack(files.entries);
-    if (!read.ok) {
-      notes.push(`pack_invalid:${label}:${read.problems[0]?.code ?? "unknown"}`);
-      continue;
-    }
-    if (read.pack.manifest.id !== entry.id || read.pack.manifest.version !== entry.version) {
-      notes.push(`pack_mismatch:${label}`);
-      continue;
-    }
-    const home = directory.home(entry.id, entry.version);
-    packs.push({
-      pack: read.pack,
-      trust: trustCard(read.pack),
-      filePath: (path) => join(home, ...path.split("/")),
-      read: (path) => {
-        const file = readConfined(home, path, MAX_ENTRY_BYTES);
-        return Promise.resolve(file.ok ? file.bytes : null);
-      },
-    });
-  }
-  return { packs, notes };
 }

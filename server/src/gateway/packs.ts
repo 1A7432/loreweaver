@@ -1,4 +1,5 @@
-// Installed packs, as the rooms see them. The operator installs packs from the shell; a
+// Installed packs, as the rooms see them. The operator installs packs from the shell, a
+// room's admin from chat (`pack install`, which also enables the pack in that room); a
 // room's admin enables and disables them (`pack` command, the `room.packs_enabled` room
 // setting). Enabling a pack in a room makes, for that room only:
 //
@@ -21,6 +22,13 @@
 // packs in the order they were installed; an id already claimed is not replaced, and the
 // pack's own part is left out and named in a start-up note — a built-in is never replaced,
 // silently or otherwise.
+//
+// A pack installed from chat joins the RUNNING server (`RoomPacks.install`): it is added to
+// the installed packs (a new version in its old version's place), the two registries are
+// assembled again by the same rule and swapped in place (`adopt`), and every room that has
+// the pack enabled is told to reload its worker (`onInstalled`) — the new version takes
+// effect for a room at that reload, and a room that did not enable it is not touched.
+// Installing or uninstalling from the shell while the server runs is seen at its next start.
 import type { InstalledKit, KitAsset, RoomKit } from "../agent/lanes/presentation.ts";
 import { mergeRoomKit } from "../agent/lanes/presentation.ts";
 import type { PanelEntry, Role } from "loreweaver-protocol/v3";
@@ -30,9 +38,12 @@ import { panelAdminOnly, panelEntry, type PanelFile, panelListedTo } from "../co
 import { builtInPacks, type RulePack, RulePackRegistry } from "../core/rulepacks/index.ts";
 import { builtInSkills, type Skill, SkillRegistry } from "../core/skills/index.ts";
 import type { MediaStore } from "../infra/media/index.ts";
+import { fetchPackSource, type FetchLike, type PackSource } from "../infra/packs/fetch.ts";
+import { PackDirectory } from "../infra/packs/files.ts";
 import type { Store } from "../infra/store.ts";
 import type { Audience } from "../infra/media/index.ts";
 import { MAX_ENABLED_PACKS, ROOM_PACKS, ROOM_PANELS_OFF } from "./commands/state.ts";
+import { installArchive, type InstallOutcome, loadInstalledPack } from "./pack_install.ts";
 
 /** An installed pack the server loaded and validated at start-up. */
 export interface LoadedPack {
@@ -113,30 +124,64 @@ function panelFiles(pack: Pack): ReadonlyMap<string, PanelFile> {
   return new Map(pack.assets.map((asset) => [asset.path, { sha256: asset.sha256, size: asset.size, mime: asset.mime }]));
 }
 
+/** Installing from chat: where packs are installed and how a reference is fetched. */
+export interface RuntimeInstall {
+  /** The server's data directory (packs land under `<dataDir>/packs/`). */
+  readonly dataDir: string;
+  /** How an https URL or a `gh:` release is fetched (tests inject their own). */
+  readonly fetch: FetchLike;
+  readonly now?: () => number;
+}
+
 export interface RoomPacksOptions {
   /** The installed packs, in install order. */
   readonly packs: readonly LoadedPack[];
   /** The server's skill registry (built-ins first, then installed packs'). */
   readonly skills: SkillRegistry;
+  /**
+   * The server's rule-system registry — the one `Services` holds (built-ins first, then
+   * installed packs'). Default: assembled here from the built-ins and `packs`.
+   */
+  readonly ruleSystems?: RulePackRegistry;
   /** Where kit assets become room media; absent: kits name no stored assets. */
   readonly media?: MediaStore | null;
   readonly report?: (room: string, text: string) => void;
+  /** Installing from chat (`pack install`); absent: refused with `install_unavailable`. */
+  readonly install?: RuntimeInstall;
 }
 
+/** What `RoomPacks.install` did: the installer's outcome, and the newly loaded pack when it installed. */
+export type RuntimeInstallOutcome =
+  | (Extract<InstallOutcome, { ok: true }> & { readonly loaded: LoadedPack })
+  | Extract<InstallOutcome, { ok: false }>;
+
 export class RoomPacks {
-  readonly #packs: readonly LoadedPack[];
-  readonly #byId: ReadonlyMap<string, LoadedPack>;
+  #packs: readonly LoadedPack[];
+  #byId: ReadonlyMap<string, LoadedPack>;
   readonly #skills: SkillRegistry;
+  readonly #ruleSystems: RulePackRegistry;
+  /** What the registries hold that no installed pack brought: the built-ins, kept first on every re-assembly. */
+  readonly #base: { readonly ruleSystems: readonly RulePack[]; readonly skills: readonly Skill[] };
   readonly #media: MediaStore | null;
   readonly #report: (room: string, text: string) => void;
   readonly #reported = new Set<string>();
+  readonly #install: RuntimeInstall | null;
+  readonly #listeners: ((id: string) => void)[] = [];
 
   constructor(options: RoomPacksOptions) {
     this.#packs = options.packs;
     this.#byId = new Map(options.packs.map((loaded) => [loaded.pack.manifest.id, loaded]));
     this.#skills = options.skills;
+    this.#ruleSystems = options.ruleSystems ?? assemblePacks(options.packs).ruleSystems;
+    const ownSystems = new Set<RulePack>(options.packs.flatMap((loaded) => loaded.pack.ruleSystems.map((system) => system.compiled)));
+    const ownSkills = new Set<Skill>(options.packs.flatMap((loaded) => loaded.pack.skills.map((entry) => entry.skill)));
+    this.#base = {
+      ruleSystems: this.#ruleSystems.packs().filter((system) => !ownSystems.has(system)),
+      skills: this.#skills.skills().filter((skill) => !ownSkills.has(skill)),
+    };
     this.#media = options.media ?? null;
     this.#report = options.report ?? (() => undefined);
+    this.#install = options.install ?? null;
   }
 
   /** No packs installed, the built-in skills only. */
@@ -146,6 +191,52 @@ export class RoomPacks {
 
   get skillRegistry(): SkillRegistry {
     return this.#skills;
+  }
+
+  get ruleSystemRegistry(): RulePackRegistry {
+    return this.#ruleSystems;
+  }
+
+  /** Whether this server installs packs from chat. */
+  get canInstall(): boolean {
+    return this.#install !== null;
+  }
+
+  /** The archive a reference names: the network part of an install, run outside any room's lock. */
+  fetchSource(ref: string): Promise<PackSource> {
+    if (this.#install === null) return Promise.resolve({ ok: false, code: "fetch_failed", detail: "install_unavailable" });
+    return fetchPackSource(ref, { fetch: this.#install.fetch });
+  }
+
+  /** Told the id of every pack installed while the server runs (the hub reloads the rooms that enabled it). */
+  onInstalled(listener: (id: string) => void): void {
+    this.#listeners.push(listener);
+  }
+
+  /**
+   * Install an archive's bytes into the data directory (`installArchive`, the shell's
+   * installer) and take the pack into the running server: read back from disk and validated
+   * again as at start-up, put in its old version's place or after the others, the rule-system
+   * and skill registries assembled again by first claim and swapped in place. Synchronous,
+   * so nothing interleaves between the index read and the swap. Enables nothing in any room.
+   */
+  install(archive: Uint8Array): RuntimeInstallOutcome {
+    const install = this.#install;
+    if (install === null) return { ok: false, code: "install_unavailable" };
+    const outcome = installArchive(install.dataDir, archive, install.now === undefined ? { yes: true } : { yes: true, now: install.now });
+    if (!outcome.ok) return outcome;
+    const directory = new PackDirectory(install.dataDir);
+    const loaded = loadInstalledPack(directory, { id: outcome.id, version: outcome.version, sha256: outcome.sha256, installedAt: 0 });
+    if (!loaded.ok) return { ok: false, code: "install_failed", detail: loaded.note };
+    const replacing = this.#packs.some((each) => each.pack.manifest.id === outcome.id);
+    const packs = replacing ? this.#packs.map((each) => (each.pack.manifest.id === outcome.id ? loaded.pack : each)) : [...this.#packs, loaded.pack];
+    const assembled = assemblePacks(packs, this.#base);
+    this.#ruleSystems.adopt(assembled.ruleSystems);
+    this.#skills.adopt(assembled.skills);
+    this.#packs = packs;
+    this.#byId = new Map(packs.map((each) => [each.pack.manifest.id, each]));
+    for (const listener of this.#listeners) listener(outcome.id);
+    return { ...outcome, loaded: loaded.pack };
   }
 
   /** Every installed pack, in install order. */

@@ -20,7 +20,7 @@ import { Hub } from "../../src/gateway/hub.ts";
 import type { PlayerActionEntry } from "../../src/gateway/keeper.ts";
 import { type LaneSettings, LANES_OFF } from "../../src/gateway/lanes.ts";
 import type { RateLimitSettings } from "../../src/gateway/rate_limit.ts";
-import { assemblePacks, type RoomPacks } from "../../src/gateway/packs.ts";
+import type { RoomPacks } from "../../src/gateway/packs.ts";
 import { REVIEW_OFF } from "../../src/gateway/review.ts";
 import { Uploads } from "../../src/gateway/uploads.ts";
 import { type Responder, type ScriptedReply, ScriptedLLM } from "../../src/infra/llm/index.ts";
@@ -161,7 +161,7 @@ export class RoomBench {
     const services = servicesOn({
       store: this.store,
       // With packs installed, their rule systems join the built-ins as the server's would.
-      packs: packs === null ? new RulePackRegistry(builtInPacks()) : assemblePacks(packs.installed()).ruleSystems,
+      packs: packs === null ? new RulePackRegistry(builtInPacks()) : packs.ruleSystemRegistry,
       models: { keeper: unused, npc: unused, scribe: this.scribe, director: this.director, memory: unused },
       clock: testClock(),
       report: (_room, text) => {

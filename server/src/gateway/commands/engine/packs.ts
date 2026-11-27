@@ -1,18 +1,21 @@
-// Packs and skills in a room: `pack` (list the installed packs; the admin enables and
-// disables them here) and `skill` (the admin lists, enables and disables the Keeper's
-// skills — the built-in ones and those of the room's enabled packs).
+// Packs and skills in a room: `pack` (list the installed packs; the admin installs one from
+// chat, and enables and disables them here) and `skill` (the admin lists, enables and
+// disables the Keeper's skills — the built-in ones and those of the room's enabled packs).
 //
-// Installing a pack is the operator's action from the shell (`loreweaver install`): a pack's
-// modules run as real code in the server's process, so which code the server runs is not a
-// room admin's decision. A room admin decides what of the installed content this room uses.
-import { localText } from "../../../core/packs/index.ts";
+// `pack install <ref>` (decision 45, as in 2.6): a room's admin installs a pack on the server
+// — a path on the SERVER's disk, an https URL or `gh:owner/repo[@tag]` — with the shell's own
+// installer, and the pack is enabled in this room at once with its skills. Fetching is
+// network I/O, so the command runs outside the room's lock (`unlocked`): `prepare` fetches,
+// then `run` installs, takes the pack into the running server and enables it, synchronously.
+// The admin's one result is the trust card in words; the table hears one line.
+import { localText, type TrustCard } from "../../../core/packs/index.ts";
 import { panelAdminOnly, panelListedTo, panelText } from "../../../core/panels/index.ts";
 import { disableSkill, enableSkill, readEnabledSkills, skillDescription, skillName, writeEnabledSkills } from "../../../core/skills/index.ts";
-import type { LoadedPack, RoomPacks } from "../../packs.ts";
+import type { LoadedPack, RoomPacks, RuntimeInstallOutcome } from "../../packs.ts";
 import { firstWord } from "../parse.ts";
 import { compact, object, oneOf, text } from "../schema.ts";
 import { MAX_ENABLED_PACKS, ROOM_PACKS, ROOM_PANELS_OFF } from "../state.ts";
-import { type CommandCall, type CommandSpec, type Done, refuse, type Refused } from "../types.ts";
+import { type Args, type CommandCall, type CommandSpec, type Done, isRefused, refuse, type Refused } from "../types.ts";
 
 const LIST_WORDS: ReadonlySet<string> = new Set(["list", "ls", "列表", "列出"]);
 const ENABLE_WORDS: ReadonlySet<string> = new Set(["enable", "on", "启用", "啟用", "开启", "開啟"]);
@@ -30,6 +33,120 @@ function parseSwitch(rest: string): Readonly<Record<string, unknown>> | Refused 
 }
 
 const SWITCH_PARAMS = object({ op: oneOf(["list", "enable", "disable"]), id: text(64, 1) }, ["op"]);
+
+const INSTALL_WORDS: ReadonlySet<string> = new Set(["install", "add", "安装", "安裝"]);
+/** The longest pack reference `pack install` takes (a path, a URL or a `gh:` reference). */
+export const MAX_PACK_REF_CHARS = 2000;
+const PACK_PARAMS = object({ op: oneOf(["list", "enable", "disable", "install"]), id: text(64, 1), ref: text(MAX_PACK_REF_CHARS, 1) }, ["op"]);
+
+/** `install <ref>` (the reference as typed, case kept), or what `parseSwitch` reads. */
+function parsePack(rest: string): Readonly<Record<string, unknown>> | Refused {
+  const [word, after] = firstWord(rest);
+  if (INSTALL_WORDS.has(word)) return after === "" ? refuse("usage") : { op: "install", ref: after };
+  return parseSwitch(rest);
+}
+
+/** What `prepare` fetched for `install`. */
+interface Fetched {
+  readonly archive: Uint8Array;
+}
+
+/** A source refusal, as this command states it (codes that would read wrongly bare get a prefix). */
+function sourceRefusal(code: string, detail: string | undefined): Refused {
+  const stated = code === "not_found" ? "source_not_found" : code === "too_large" ? "archive_too_large" : code;
+  return refuse(stated, { detail: detail ?? "" });
+}
+
+/** An installer refusal, as this command states it. */
+function installRefusal(outcome: Extract<RuntimeInstallOutcome, { ok: false }>): Refused {
+  if (outcome.code.startsWith("zip_")) return refuse("bad_archive", { problem: outcome.code.slice(4), path: outcome.path ?? "" });
+  if (outcome.code === "invalid_pack") {
+    const first = outcome.problems?.[0];
+    return refuse("invalid_pack", { problem: first?.code ?? "", path: first?.path ?? "", count: outcome.problems?.length ?? 0 });
+  }
+  return refuse(outcome.code, { detail: outcome.detail ?? "" });
+}
+
+/** The trust card in words, in the caller's language: does it run code, what it adds, what was ignored or left out. */
+function trustLines(call: CommandCall, trust: TrustCard, shadowed: { readonly ruleSystems: readonly string[]; readonly skills: readonly string[] }): string[] {
+  const separator = call.say("list.separator");
+  const lines: string[] = [];
+  lines.push(trust.runsCode ? call.say("pack.trust_runs_code", { list: trust.modules.map((module) => module.id).join(separator) }) : call.say("pack.trust_no_code"));
+  const list = (key: string, items: readonly string[]): void => {
+    if (items.length > 0) lines.push(call.say(key, { list: items.join(separator) }));
+  };
+  list("pack.part_systems", trust.ruleSystems.map((system) => (system.extends === null ? system.id : call.say("pack.trust_extends", { id: system.id, base: system.extends }))));
+  list(
+    "pack.part_skills",
+    trust.skills.map((skill) => {
+      const marks = [...(skill.tools.length > 0 ? [call.say("pack.trust_tools", { list: skill.tools.join(separator) })] : []), ...(skill.mature ? [call.say("pack.trust_mature")] : [])];
+      return marks.length === 0 ? skill.id : `${skill.id} (${marks.join(separator)})`;
+    }),
+  );
+  list("pack.part_cards", trust.cards.map((card) => call.say("pack.card", { name: card.name, file: card.path, kind: call.say(`pack.kind_${card.kind}`) })));
+  list("pack.part_panels", trust.panels.map((panel) => panel.id));
+  if (trust.presentation !== null) lines.push(call.say("pack.part_kit"));
+  if (trust.assets.count > 0) lines.push(call.say("pack.part_assets", { count: trust.assets.count }));
+  list("pack.trust_ignored", trust.ignored.map((item) => call.say("pack.trust_ignored_item", { path: item.path, reason: call.say(`pack.ignored_${item.reason}`) })));
+  list("pack.trust_left_out", [...shadowed.ruleSystems, ...shadowed.skills]);
+  return lines;
+}
+
+/** `pack install`, once `prepare` fetched the archive: install, take it in, enable it here with its skills. */
+function install(packs: RoomPacks, call: CommandCall, prepared: unknown): Done | Refused {
+  if (isRefused(prepared)) return prepared;
+  if (prepared === undefined) return refuse("install_unavailable");
+  const { services, room, writer } = call.context;
+  const store = services.store;
+  // The room moved to another generation during the fetch: refuse before anything is written.
+  if (!writer.current()) return refuse("stale_generation");
+  const outcome = packs.install((prepared as Fetched).archive);
+  if (!outcome.ok) return installRefusal(outcome);
+  const loaded = outcome.loaded;
+  const id = outcome.id;
+  const name = packName(loaded, call.locale);
+  const switched = packs.enable(store, room, id);
+  const newly = switched.ok && switched.changed;
+  if (newly) writer.statePut(ROOM_PACKS, [...switched.ids]);
+  // As 2.6: installing from chat switches the pack's skills on in this room (not the ones a
+  // built-in or an earlier pack keeps the id of — those are named as left out).
+  const skillsOn: string[] = [];
+  if (switched.ok) {
+    let skills = readEnabledSkills(store, room);
+    for (const skill of packs.ownSkills(loaded)) {
+      const on = enableSkill(packs.skillRegistry, skills, skill);
+      if (on.ok && on.changed) {
+        skills = on.enabled;
+        skillsOn.push(skill);
+      }
+    }
+    if (skillsOn.length > 0) writeEnabledSkills(writer, skills);
+  }
+  const head = outcome.replaced === null ? "pack.installed" : "pack.upgraded";
+  const lines = [call.say(head, { name, id, version: outcome.version, previous: outcome.replaced ?? "" })];
+  if (switched.ok) lines.push(call.say("pack.installed_enabled"));
+  else lines.push(call.say("pack.installed_not_enabled", { reason: call.say(`error.${switched.code}`, { id, limit: MAX_ENABLED_PACKS, module: switched.detail ?? "" }) }));
+  lines.push(...trustLines(call, outcome.trust, outcome.shadowed));
+  if (skillsOn.length > 0) lines.push(call.say("pack.skills_enabled", { list: skillsOn.join(call.say("list.separator")) }));
+  if (switched.ok) for (const card of loaded.pack.cards.filter((each) => each.kind === "world")) lines.push(call.say("pack.import_world", { id, card: card.path }));
+  const tableName = localText(loaded.pack.manifest.name, call.context.locale) || id;
+  return {
+    text: lines.join("\n"),
+    data: { id, version: outcome.version, replaced: outcome.replaced, sha256: outcome.sha256, enabled: switched.ok, skillsEnabled: skillsOn, shadowed: outcome.shadowed, trust: outcome.trust },
+    events: [{ kind: "narrative", data: { speaker: "system", text: call.tell(switched.ok ? "pack.event_installed" : "pack.event_installed_only", { name: tableName }), format: "plain" } }],
+    // Newly enabled here: the worker restarts with its modules (behind any turn in flight).
+    // A room that already had it enabled reloads through `RoomPacks.onInstalled`.
+    ...(newly
+      ? {
+          modulesChanged: true,
+          after: async () => {
+            const problems = await packs.registerAssets(room, store);
+            return problems.length === 0 ? [] : [call.say("pack.assets_failed", { count: problems.length })];
+          },
+        }
+      : {}),
+  };
+}
 
 function packName(loaded: LoadedPack, locale: string): string {
   return localText(loaded.pack.manifest.name, locale) || loaded.pack.manifest.id;
@@ -75,18 +192,28 @@ function adminLine(call: CommandCall, summary: Record<string, unknown>): string 
   return parts.length === 0 ? head : `${head}\n  ${parts.join("\n  ")}`;
 }
 
-/** `pack`: anyone sees the packs enabled here, by name; the admin sees every installed pack, and switches them. */
+/** `pack`: anyone sees the packs enabled here, by name; the admin sees every installed pack, installs one, and switches them. */
 export function packCommand(packs: RoomPacks): CommandSpec {
   return {
     id: "pack",
     source: "engine",
     key: "pack",
-    params: SWITCH_PARAMS,
+    params: PACK_PARAMS,
     text: { en: ["pack", "packs"], zh: ["pack", "扩展包", "擴展包"] },
     role: "player",
     adminWhen: (args) => args.op !== "list",
-    parseText: (rest) => parseSwitch(rest),
-    run(call, args): Done | Refused {
+    unlocked: (args: Args) => args.op === "install",
+    parseText: (rest) => parsePack(rest),
+    async prepare(_call, args): Promise<Fetched | Refused | undefined> {
+      if (args.op !== "install") return undefined;
+      if (!packs.canInstall) return refuse("install_unavailable");
+      if (args.ref === undefined) return refuse("missing_arg", { path: "ref" });
+      const source = await packs.fetchSource(args.ref as string);
+      if (!source.ok) return sourceRefusal(source.code, source.detail);
+      return { archive: source.bytes };
+    },
+    run(call, args, prepared): Done | Refused {
+      if (args.op === "install") return install(packs, call, prepared);
       const { services, room, writer } = call.context;
       const store = services.store;
       const enabledIds = packs.enabledIds(store, room);

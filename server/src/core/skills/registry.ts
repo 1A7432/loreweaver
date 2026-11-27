@@ -1,5 +1,6 @@
-// A set of loaded skills. An explicit, immutable value the caller builds — built-ins first,
-// then installed ones — never process-wide state. The FIRST skill to claim an id keeps it,
+// A set of loaded skills. An explicit value the caller builds — built-ins first, then
+// installed ones — never process-wide state; nothing changes it but `adopt` (a pack
+// installed while the server runs: the new set, built the same way, swapped in at once). The FIRST skill to claim an id keeps it,
 // so an installed skill can never replace a built-in of the same id (LWF: built-ins win).
 import type { Skill } from "./parse.ts";
 
@@ -15,7 +16,7 @@ export interface SkillAdd {
 }
 
 export class SkillRegistry {
-  readonly #skills: ReadonlyMap<string, Skill>;
+  #skills: ReadonlyMap<string, Skill>;
 
   constructor(skills: Iterable<Skill> = []) {
     const byId = new Map<string, Skill>();
@@ -41,6 +42,11 @@ export class SkillRegistry {
       }
     }
     return { registry: new SkillRegistry(all), refused };
+  }
+
+  /** Take `other`'s skills in place of these, in one step, for every holder of this registry. */
+  adopt(other: SkillRegistry): void {
+    this.#skills = other.#skills;
   }
 
   get(id: string): Skill | null {

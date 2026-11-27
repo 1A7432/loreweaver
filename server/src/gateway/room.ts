@@ -18,6 +18,10 @@
 //   model call, a queued line, a Scribe pass still computing — all of them hold writers of
 //   the old generation and fail to commit by themselves (§11.5). Waiting for the lock would
 //   let an admin's undo sit behind a five-minute turn it is meant to cancel.
+// - A command that waits on the NETWORK first (`pack install` fetching an archive,
+//   `spec.unlocked`) does not wait for the lock either: the fetch would hold up every line
+//   behind it. Its handler still writes in one synchronous transaction once the fetch is
+//   done, and the worker reload it asks for queues behind the lock like everything else.
 //
 // After a Keeper turn, still under the lock (§12 3.2 step 14): usage is recorded, the module
 // views are rendered for the viewers subscribed to one, views are refreshed, `idle` is sent;
@@ -294,7 +298,7 @@ export class Room {
       if (accepted !== null) this.#queueTurn(accepted);
       return;
     }
-    this.#dispatch(member, id, (context) => registry.input(context, text, member.locale), reply);
+    this.#dispatch(member, id, parsed?.args ?? {}, (context) => registry.input(context, text, member.locale), reply);
   }
 
   /** `command.run {id, args}` from `member`. */
@@ -303,15 +307,38 @@ export class Room {
       reply({ ok: false, code: "rate_limited" });
       return;
     }
-    this.#dispatch(member, id, async (context) => ({ kind: "command", id, outcome: await this.#host.registry.run(context, id, args, member.locale) }), reply);
+    const hint = typeof args === "object" && args !== null && !Array.isArray(args) ? (args as Readonly<Record<string, unknown>>) : {};
+    this.#dispatch(member, id, hint, async (context) => ({ kind: "command", id, outcome: await this.#host.registry.run(context, id, args, member.locale) }), reply);
   }
 
-  #dispatch(member: Member, id: string, execute: (context: RoomContext) => Promise<InputOutcome>, reply: Reply): void {
+  /**
+   * A command queues behind the room's lock — except a lifecycle command, and a command
+   * that waits on the network for these arguments (`spec.unlocked`: `pack install`), which
+   * run at once so the room goes on taking input. `args` is only that hint: the registry
+   * validates the arguments as for any command.
+   */
+  #dispatch(member: Member, id: string, args: Readonly<Record<string, unknown>>, execute: (context: RoomContext) => Promise<InputOutcome>, reply: Reply): void {
     const probe = this.#context(member, this.#host.services.store.writer(this.id), "probe");
-    const lifecycle = this.#host.registry.spec(probe, id)?.lifecycle === true;
-    const job = (): Promise<void> => this.#command(member, id, execute, reply, !lifecycle);
-    if (lifecycle) void job();
+    const spec = this.#host.registry.spec(probe, id);
+    const unlocked = spec?.lifecycle === true || spec?.unlocked?.(args) === true;
+    const job = (): Promise<void> => this.#command(member, id, execute, reply, !unlocked);
+    if (unlocked) void job();
     else void this.#lock.run(job);
+  }
+
+  /**
+   * The room's modules changed under it (a pack it enabled was installed again): module views
+   * from scratch and the worker reloaded, queued behind any turn in flight, then the room's
+   * pack media registered again and the views refreshed.
+   */
+  reloadModules(): void {
+    void this.#lock.run(async () => {
+      this.#moduleViews = null;
+      this.#moduleClock = null;
+      this.#host.reloadWorker(this.id);
+      await this.#host.packs.registerAssets(this.id, this.#host.services.store);
+      await this.refreshViews();
+    });
   }
 
   // --- speech -------------------------------------------------------------------------
@@ -400,9 +427,15 @@ export class Room {
     const published = this.#publishOutcome(writer, outcome);
     if (published && outcome.modulesChanged === true) {
       // Other modules now: a fresh worker with the new list, and module views from scratch.
-      this.#moduleViews = null;
-      this.#moduleClock = null;
-      this.#host.reloadWorker(this.id);
+      // A command run outside the lock never swaps the worker under a turn in flight: the
+      // swap queues behind it.
+      const swap = (): void => {
+        this.#moduleViews = null;
+        this.#moduleClock = null;
+        this.#host.reloadWorker(this.id);
+      };
+      if (locked) swap();
+      else void this.#lock.run(() => Promise.resolve(swap()));
     }
     // What the command could only finish by waiting (indexing new lore for recall), after its
     // writes committed and its events went out; its lines join the caller's answer.

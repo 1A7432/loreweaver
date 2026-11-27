@@ -16,6 +16,7 @@ import { recordPlayerAction, runKeeperTurn } from "../agent/turn/index.ts";
 import { builtInPacks, RulePackRegistry } from "../core/rulepacks/index.ts";
 import { CommandRegistry, ROOM_LOCALE } from "../gateway/commands/index.ts";
 import { Hub } from "../gateway/hub.ts";
+import { loadInstalledPacks } from "../gateway/pack_install.ts";
 import { assemblePacks, RoomPacks } from "../gateway/packs.ts";
 import { parseReviewList, REVIEW_OFF, type ReviewFilter } from "../gateway/review.ts";
 import { Uploads } from "../gateway/uploads.ts";
@@ -32,7 +33,6 @@ import { spawnWorker, type WorkerHandle } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";
 import { IrohServer } from "../net/iroh.ts";
 import { Keystore } from "../net/keystore.ts";
-import { loadInstalledPacks } from "./packs.ts";
 
 /**
  * The window assumed for a model this server has no figure for. Deliberately small: a
@@ -254,11 +254,19 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
   if (recall === undefined) notes.push("recall_off");
 
   // Installed packs: validated again from disk; their rule systems and skills join the
-  // built-ins (first claim wins), the rest is per room.
+  // built-ins (first claim wins), the rest is per room. A room's admin may install more from
+  // chat (`pack install`): it joins these registries in place, without a restart.
   const installed = loadInstalledPacks(settings.dataDir);
   const assembled = assemblePacks(installed.packs);
   notes.push(...installed.notes, ...assembled.notes);
-  const roomPacks = new RoomPacks({ packs: installed.packs, skills: assembled.skills, media, report });
+  const roomPacks = new RoomPacks({
+    packs: installed.packs,
+    skills: assembled.skills,
+    ruleSystems: assembled.ruleSystems,
+    media,
+    report,
+    install: { dataDir: settings.dataDir, fetch: (url, init) => fetch(url, init) },
+  });
   // A reset of everything (or a load) clears the room's media, kit assets included: put the
   // enabled packs' pictures and sounds back right after, for the room plays on with them.
   storages.register({

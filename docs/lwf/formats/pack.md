@@ -8,7 +8,7 @@ and `2`.
 Reference implementation, in the Loreweaver engine: `server/src/infra/zip.ts` (the
 archive), `server/src/core/packs/` (manifest, whole-pack validation, trust card), `server/src/core/panels/`
 (panels files),
-`server/src/cli/packs.ts` (build, install, load) and `server/src/gateway/packs.ts`
+`server/src/cli/packs.ts` (build, the shell's commands), `server/src/gateway/pack_install.ts` (install, load) and `server/src/gateway/packs.ts`
 (enabling in a room).
 
 A pack is **one ZIP archive** with the suffix `.lwpack`. At its root is a manifest,
@@ -277,12 +277,34 @@ declares mature content; its cards, each with its kind and the world machinery i
 carries; its panels, each with its kind, audience, the views it reads and a page's file
 (path, size, digest); the presentation kit; how many assets and bytes; and what was **ignored** (a
 `hooks.js`, unnamed files, unknown manifest keys). Being computed, it cannot understate
-what the pack ships. In the reference, `loreweaver install <ref>` prints it and writes
-nothing; `loreweaver install <ref> --yes` installs.
+what the pack ships.
 
-**Who installs.** In the reference, installing is the operator's action, from the shell
-only: since modules run as real code in the server's process, which code a server runs is
-decided by whoever runs the server, not by a room's admin.
+**Who installs, and from where.** In the reference, two callers share one installer, with
+the same checks — who may install is the caller's question, what a pack may contain is not:
+
+- **The operator, from the shell.** `loreweaver install <ref>` prints the trust card (as
+  JSON) and writes nothing; `loreweaver install <ref> --yes` installs. Installing from the
+  shell enables nothing anywhere. It works with the server stopped; a server that is
+  running sees a pack installed (or `loreweaver uninstall`ed) from the shell only when it
+  next starts.
+- **A room's admin, from chat** (`pack install <ref>`, text form `.pack install <ref>`).
+  `<ref>` is a source as in §9 — a local path is a path on the SERVER's disk. The pack is
+  installed exactly as from the shell, joins the running server at once (below), and is
+  **enabled in that room** together with its skills (those whose id it keeps). The admin's
+  answer is the trust card in words, in their language, plus what was left out because an
+  id was taken and the import command for each world card it ships (importing one stays a
+  step of its own); the table hears one line naming the pack. Uninstalling stays the
+  operator's, from the shell. Since a 3.0 module runs as real code in the server's process,
+  a room admin who installs a pack decides what code the server runs: a self-hosted
+  table's admin is usually its operator too.
+
+**A running server takes in a pack installed from chat.** It is read back from disk and
+validated again as at start; it takes its old version's place among the installed packs,
+or the last place; the server's rule systems and skills are assembled again by the same
+first-claim rule (below) and replace the old set at once. A room that did not enable the
+pack is not touched. **Upgrading** a pack that rooms have enabled: every such room reloads
+its worker (behind a turn in flight there) and plays the new version from then on — its
+modules start from their saved state, its rule system and skills are the new version's.
 
 **Where it lands.** The reference writes the pack's files — exactly the files of the
 pack, ignored ones excluded — under `<data>/packs/<id>/<version>/` at their archive paths,
@@ -299,7 +321,8 @@ claimant**: the runtime's built-ins, then the installed packs in install order. 
 pack's rule system or skill with a taken id is not loaded — the earlier one is never
 replaced, a built-in least of all — and the runtime names it at install and at start.
 
-**Install ≠ enable.** Installing changes no room. A room's admin enables an installed
+**Install ≠ enable.** Installing from the shell changes no room; installing from chat
+enables the pack in the installing admin's room only. A room's admin enables an installed
 pack in a room (`pack enable <id>`; `pack disable <id>` undoes it), and the choice is a
 room setting that survives every reset. For that room only, an enabled pack's modules
 load in the room's worker, in the order the packs were enabled; its presentation kit

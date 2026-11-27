@@ -97,6 +97,28 @@ export class Hub {
         moduleClock: (room) => this.room(room).moduleClock,
       }),
     );
+    this.#packs.onInstalled((id) => {
+      this.#packInstalled(id);
+    });
+  }
+
+  /**
+   * A pack was installed while the server runs (`pack install`): every room that has it
+   * enabled reloads its modules — a new version takes effect for a room at that reload,
+   * queued behind any turn in flight there. Every other open room only refreshes its views
+   * (an admin's `packs` view lists every installed pack); its worker is not touched.
+   */
+  #packInstalled(id: string): void {
+    const store = this.#deps.services.store;
+    for (const room of new Set([...this.#rooms.keys(), ...this.#workers.keys()])) {
+      const open = this.#rooms.get(room);
+      if (!this.#packs.enabledIds(store, room).includes(id)) {
+        if (open !== undefined) void open.refreshViews();
+        continue;
+      }
+      if (open === undefined) this.#reload(room);
+      else open.reloadModules();
+    }
   }
 
   room(id: string): Room {

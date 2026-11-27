@@ -1,8 +1,9 @@
 /**
  * A set of loaded rule packs, and resolving a system name to one of them.
  *
- * An explicit, immutable value a caller builds (built-ins first, then installed packs) —
- * never process-wide state. A system resolves by its id, any declared `names:` entry or
+ * An explicit value a caller builds (built-ins first, then installed packs) — never
+ * process-wide state. Nothing changes it but `adopt`: a running server that installs a pack
+ * builds the new set the same way and swaps it in, in one step, for every holder at once. A system resolves by its id, any declared `names:` entry or
  * any `set_keys:` entry, compared as stat names are (trimmed, case-folded, `_` read as a
  * space, full-width `：（）` as ASCII, whitespace collapsed). The FIRST pack to claim a
  * name keeps it, so with built-ins added first a later pack cannot take a built-in's name.
@@ -13,8 +14,8 @@ import { RulePackError } from "./errors.ts";
 import type { RulePack } from "./types.ts";
 
 export class RulePackRegistry {
-  readonly #packs: ReadonlyMap<string, RulePack>;
-  readonly #names: ReadonlyMap<string, string>;
+  #packs: ReadonlyMap<string, RulePack>;
+  #names: ReadonlyMap<string, string>;
 
   /** Throws `RulePackError` (`DUPLICATE_ID`) when two packs share an id. */
   constructor(packs: Iterable<RulePack> = []) {
@@ -36,6 +37,16 @@ export class RulePackRegistry {
   /** A new registry with `packs` added after these (an existing id is a `DUPLICATE_ID`). */
   with(...packs: RulePack[]): RulePackRegistry {
     return new RulePackRegistry([...this.#packs.values(), ...packs]);
+  }
+
+  /**
+   * Take `other`'s packs in place of these, in one step: how a running server takes in a
+   * pack installed while it runs — the services, the rooms and every view holding this
+   * registry see the new set at once.
+   */
+  adopt(other: RulePackRegistry): void {
+    this.#packs = other.#packs;
+    this.#names = other.#names;
   }
 
   /** The pack with exactly this id, or null. */
