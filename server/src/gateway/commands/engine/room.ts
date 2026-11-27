@@ -131,7 +131,8 @@ export function resetCommand(gate: ResetGate): CommandSpec {
         gate.arm(room, member.id, scope, now);
         return {
           text: call.say("reset.armed", { what: call.say(`reset.scope.${scope}`), seconds: Math.round(gate.windowMs / 1000) }),
-          data: { armed: scope },
+          // How long the confirmation has, so a client need not know the server's setting.
+          data: { armed: scope, expiresInMs: gate.windowMs },
         };
       }
       const armed = gate.take(room, member.id, now);

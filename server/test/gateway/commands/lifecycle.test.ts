@@ -43,7 +43,7 @@ describe("reset", () => {
     seedLore(b);
     await b.input(ADA, ".coc Alice");
     const armed = ok(await b.run(ADMIN, "reset", {}));
-    expect(armed.data).toEqual({ armed: "story" });
+    expect(armed.data).toEqual({ armed: "story", expiresInMs: 60_000 });
     expect(armed.events).toEqual([]);
     expect(b.store.docList(ROOM, CHRONICLE_RECORD_TYPE)).toHaveLength(2);
     const done = ok(await b.run(ADMIN, "reset", { confirm: true }));

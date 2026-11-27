@@ -486,9 +486,9 @@ argument. Text forms are given as English table / Chinese table; with any of the
 | `bot` | player; `on`: admin | `bot` / `bot` | `on?` (boolean) | Shows or sets whether the Keeper answers. |
 | `language` | admin | `language` / `language`, `语言`, `語言` | `locale` (`en`\|`zh`) | Sets the room's language; announced by a `narrative` event in the new language. |
 | `undo` | admin, danger | `undo` / `undo`, `撤销`, `撤銷` | `turns?` (1–64) | Lifecycle ([6.7](#67-room-lifecycle-commands-as-a-client-sees-them)). |
-| `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?` (`story`\|`chars`\|`all`), `confirm?` | Lifecycle; arm, then confirm. |
+| `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?` (`story`\|`chars`\|`all`), `confirm?` | Lifecycle; arm, then confirm: without `confirm` the reset is armed for the caller (`data {armed, expiresInMs}` — how long the confirmation has), and the same member's `confirm: true` within that time carries it out. |
 | `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op` (`export`\|`import`), `bundle?` (object) | Lifecycle. |
-| `uploads` | player, observer; `on`: admin | `uploads` / `uploads`, `上传` | `on?` (boolean) | Shows or sets the room's upload switch. Available when the server keeps files (`no_media`). |
+| `uploads` | player, observer; `on`: admin | `uploads` / `uploads`, `上传` | `on?` (boolean) | Shows or sets the room's upload switch (`data {on}`, and `text` saying which). The switch governs every upload to the room — a member's share, a card brought for import, an admin's sound for the audio library alike. Available when the server keeps files (`no_media`). |
 | `import` | player; `as: "world"`: admin | `import` / `import`, `导入` | `file?` (a 64-hex content hash), `pack?` (1–64), `card?` (1–512), `as` (`world`\|`character`), `name?` (1–64) | Imports a card file the caller uploaded with `purpose: "import"` ([11.6](#116-importing-a-card)), or a card an enabled pack ships (`pack` and `card`, its path in the pack; `pack_not_enabled`, `card_not_in_pack`). `no_media` without a media store and with no pack installed. As a character: a sheet rolled for the room's rule system and biased toward what the server's model reads from the card's persona, as `genchar` does (sharing its hourly cap); without a model, over the cap, or with an answer it cannot use, the sheet is rolled plainly and `text` says why — `data.concept` is `applied`, `no_model`, `rate_limited`, `model_failed`, `unusable`, `aborted` or `none`. A character import runs without queuing behind the room's turns. |
 | `pack` | player; `enable`, `disable`, `install`: admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op` (`list`\|`enable`\|`disable`\|`install`), `id?` (1–64), `ref?` (1–2000) | `list`: an admin sees every installed pack, a player the room's by name. `enable`/`disable` switch an installed pack in this room (`unknown_pack`, `too_many_packs`, `module_id_taken`); disabling one stops what plays one of its audio cues (an `audio` `stop` signal per layer). `install` (text form `install <ref>`): `ref` a path on the server, an `https://` URL or `gh:owner/repo[@tag]`; installs the pack on the server and enables it here with its skills; `data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`, `text` the trust card in words; one `narrative` system event. It runs without queuing behind the room's turns, and its one result comes when the fetch and install are done. Refusals: `not_https`, `bad_gh_ref`, `source_not_found`, `archive_too_large`, `fetch_failed`, `too_many_redirects`, `no_pack_asset`, `bad_release`, `bad_archive`, `invalid_pack`, `engine_too_old`, `already_installed`, `index_unreadable`, `install_failed`, `install_unavailable`. |
 | `skill` | admin | `skill`, `skills` / `skill`, `技能` | `op` (`list`\|`enable`\|`disable`), `id?` (1–64) | The Keeper's skills this room may enable: the built-in ones and those of its enabled packs (`skill_not_available`, `too_many_skills`). |
@@ -534,7 +534,7 @@ The server keeps a secret to the caller either way. These commands publish no ev
 reaches neither the table, nor the log (`log.page`), nor the record of commands the Keeper
 reads; a refusal carries a code and never the arguments; an answer and `admin/model` show a key
 only masked: its first and last four characters (`sk-a...wxyz`), or only stars for one of 16
-characters or fewer. The access key `key mint` makes is in that one answer and nowhere else.
+characters or fewer. The access key `key mint` makes is in that one answer and nowhere else — in its `data.key` AND in its `text`, so that a client which can only show text can still hand the key over. A client that keeps or logs result text must treat this answer as a secret: show it once, keep it nowhere.
 A key set from chat is stored in the server's database, which only the server's owner can read.
 
 ## 7. The event log
@@ -848,7 +848,8 @@ A playback **transition**; the bytes are fetched by `hash` over the byte channel
    layer's sound at its `volume`, looping as `loop` says, paused when `paused`;
 2. afterwards follows the signals: `play` replaces what the layer plays (`sfx`: sounds once),
    `stop` ends it, `pause` / `resume` hold and continue it, `volume` changes it — over `fadeMs`
-   when given;
+   when given. On `sfx`, which is never state, these four act on the effects still sounding
+   at that moment (`stop` ends them all) and nothing is remembered;
 3. takes the view as the truth whenever they could disagree: after a reconnect (signals are not
    replayed), and after a `reset` of `all` (which stops every layer, [8.6](#86-reset)).
 
@@ -978,7 +979,7 @@ ones players do not see marked `hidden: true`.
 | `system` | `{id, label}` or `null` | The active rule system. |
 | `variant` | string or `null` | The house-rule ladder within it; `null` for the default. |
 | `keeperMuted` | boolean | The Keeper does not answer while `true`. |
-| `uploads` | boolean | Whether members may upload files. `false` on a server that keeps no files. |
+| `uploads` | boolean | Whether files may be uploaded to the room — by anyone, for any purpose (share, import, audio). `false` on a server that keeps no files. |
 
 **`usage`**: the token figures of the room's last Keeper turn, and the Keeper model's context
 window. How full the Keeper's context is: `last.inputTokens / contextWindow`.

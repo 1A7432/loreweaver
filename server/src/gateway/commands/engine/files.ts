@@ -61,7 +61,7 @@ export function uploadsCommand(uploads: Uploads | null): CommandSpec {
       }
       const on = args.on as boolean;
       uploads.setEnabled(room, on);
-      return { data: { on }, events: [{ kind: "narrative", data: { speaker: "system", text: call.tell(on ? "uploads.event_on" : "uploads.event_off"), format: "plain" } }] };
+      return { text: call.say(on ? "uploads.status_on" : "uploads.status_off"), data: { on }, events: [{ kind: "narrative", data: { speaker: "system", text: call.tell(on ? "uploads.event_on" : "uploads.event_off"), format: "plain" } }] };
     },
   };
 }

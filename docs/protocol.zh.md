@@ -363,9 +363,9 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 | `bot` | player；`on`：admin | `bot` / `bot` | `on?`（布尔） | 查看或设置守秘人是否回应。 |
 | `language` | admin | `language` / `language`, `语言`, `語言` | `locale`（`en`\|`zh`） | 设置房间的语言；以新语言的一个 `narrative` 事件宣布。 |
 | `undo` | admin, danger | `undo` / `undo`, `撤销`, `撤銷` | `turns?`（1–64） | 生命周期（[6.7](#67-房间生命周期命令客户端视角)）。 |
-| `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?`（`story`\|`chars`\|`all`）、`confirm?` | 生命周期；先预备，再确认。 |
+| `reset` | admin, danger | `reset` / `reset`, `重置`, `重开`, `重開` | `scope?`（`story`\|`chars`\|`all`）、`confirm?` | 生命周期；先预备，再确认：不带 `confirm` 时为调用者预备这次重置（`data {armed, expiresInMs}`，后者是确认的期限），同一成员在期限内发 `confirm: true` 才执行。 |
 | `save` | admin, danger | `save` / `save`, `存档`, `存檔` | `op`（`export`\|`import`）、`bundle?`（对象） | 生命周期。 |
-| `uploads` | player, observer；`on`：admin | `uploads` / `uploads`, `上传` | `on?`（布尔） | 查看或设置房间的上传开关。服务器保存文件时可用（`no_media`）。 |
+| `uploads` | player, observer；`on`：admin | `uploads` / `uploads`, `上传` | `on?`（布尔） | 查看或设置房间的上传开关（`data {on}`，`text` 说明现在是开是关）。这个开关管房间的所有上传：成员分享的文件、带来导入的卡、管理员给音频库加的声音都一样。服务器保存文件时可用（`no_media`）。 |
 | `import` | player；`as: "world"`：admin | `import` / `import`, `导入` | `file?`（64 位十六进制内容哈希）、`pack?`（1–64）、`card?`（1–512）、`as`（`world`\|`character`）、`name?`（1–64） | 导入调用者以 `purpose: "import"` 上传的卡片文件（[11.6](#116-导入卡片)），或某个已启用扩展包自带的卡片（`pack` 和 `card`，即卡片在包里的路径；`pack_not_enabled`、`card_not_in_pack`）。没有媒体存储且没装任何扩展包时为 `no_media`。作为角色导入：按房间规则系统掷出一张角色卡，并像 `genchar` 那样偏向服务器的模型从卡片人设里读出的东西（与它共用每小时上限）；没有模型、超出上限或回答不能用时，角色卡就照常掷出，`text` 说明原因——`data.concept` 为 `applied`、`no_model`、`rate_limited`、`model_failed`、`unusable`、`aborted` 或 `none`。角色导入不排在房间的回合后面。 |
 | `pack` | player；`enable`、`disable`、`install`：admin | `pack`, `packs` / `pack`, `扩展包`, `擴展包` | `op`（`list`\|`enable`\|`disable`\|`install`）、`id?`（1–64）、`ref?`（1–2000） | `list`：管理员看到所有已安装的扩展包，玩家按名字看到本房间的。`enable`/`disable` 在本房间开关一个已安装的扩展包（`unknown_pack`、`too_many_packs`、`module_id_taken`）；禁用时，正在播放它某个音频提示的层会停止（每层一个 `audio` `stop` 信号）。`install`（文本形式 `install <ref>`）：`ref` 是服务器上的路径、一个 `https://` URL 或 `gh:owner/repo[@tag]`；在服务器上安装扩展包并在这里启用它和它的技能；`data {id, version, replaced, sha256, enabled, skillsEnabled, shadowed, trust}`，`text` 是用文字写出的信任卡；一个 `narrative` 系统事件。它不排在房间的回合后面，下载和安装都完成时才给出它唯一的结果。拒绝：`not_https`、`bad_gh_ref`、`source_not_found`、`archive_too_large`、`fetch_failed`、`too_many_redirects`、`no_pack_asset`、`bad_release`、`bad_archive`、`invalid_pack`、`engine_too_old`、`already_installed`、`index_unreadable`、`install_failed`、`install_unavailable`。 |
 | `skill` | admin | `skill`, `skills` / `skill`, `技能` | `op`（`list`\|`enable`\|`disable`）、`id?`（1–64） | 本房间可以启用的守秘人技能：内置的，以及已启用扩展包的（`skill_not_available`、`too_many_skills`）。 |
@@ -394,7 +394,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 
 `model` 和 `imagegen` 接受 API 密钥，`key mint` 的回答里有一把访问钥匙。客户端应当用 **`command.run`** 发送机密，从它自己的一个输入框里发（输入时遮罩），绝不要作为写发言的地方里打出的一行：命令词打错，这一行就成了发言，而发言会原样在桌上说出（[6.3](#63-文本形式)）。
 
-不管哪种方式，服务器都只把机密留给调用者。这些命令不发布事件，所以密钥不会到达桌面，不会进入日志（`log.page`），也不会进入守秘人读到的命令记录；拒绝只带错误码，从不带参数；回答和 `admin/model` 只显示遮罩过的密钥：前四个和后四个字符（`sk-a...wxyz`），16 个字符及以下的密钥只显示星号。`key mint` 生成的访问钥匙只出现在那一个回答里，别处都没有。从聊天里设置的密钥存在服务器的数据库里，只有服务器的所有者能读。
+不管哪种方式，服务器都只把机密留给调用者。这些命令不发布事件，所以密钥不会到达桌面，不会进入日志（`log.page`），也不会进入守秘人读到的命令记录；拒绝只带错误码，从不带参数；回答和 `admin/model` 只显示遮罩过的密钥：前四个和后四个字符（`sk-a...wxyz`），16 个字符及以下的密钥只显示星号。`key mint` 生成的访问钥匙只出现在那一个回答里，别处都没有——既在 `data.key` 里，也在 `text` 里，这样只能显示文本的客户端也能把钥匙交给人。会保存或记录结果文本的客户端必须把这个回答当作机密：只显示一次，哪里都不留。从聊天里设置的密钥存在服务器的数据库里，只有服务器的所有者能读。
 
 ## 7. 事件日志
 
@@ -639,7 +639,7 @@ schema 没列出的名字被拒绝（`unknown_arg`）；整数必须是没有小
 **视图是状态，信号是转换。** 客户端：
 
 1. 每次连接（和重连）时，订阅 `audio`，按 `playing` 开始播放：每一层的声音用它的 `volume`，按 `loop` 决定是否循环，`paused` 时暂停；
-2. 之后跟着信号走：`play` 替换该层正在放的（`sfx`：响一次），`stop` 结束它，`pause` / `resume` 暂停和继续它，`volume` 改变它——给了 `fadeMs` 就在这段时间内渐变；
+2. 之后跟着信号走：`play` 替换该层正在放的（`sfx`：响一次），`stop` 结束它，`pause` / `resume` 暂停和继续它，`volume` 改变它——给了 `fadeMs` 就在这段时间内渐变。`sfx` 从不算状态，这四个动作作用于当时还在响的音效（`stop` 把它们全部结束），服务器什么都不记；
 3. 两者可能不一致时，以视图为准：重连之后（信号不回放），以及 `all` 的 `reset` 之后（它停止每一层，[8.6](#86-reset)）。
 
 信号来自两个地方，走同一条路径，每个信号都同步推进房间的状态：管理员的 `bgm`、`ambience` 和 `sfx` 命令（以及 `audio remove` 或 `pack disable` 停掉正在放的声音），还有回合结束后导演的那趟处理（扩展包的音频提示，[7.2](#72-日志里有什么按什么顺序)）。撤销不改变正在播放的东西，也不发 `audio` 信号。
@@ -740,7 +740,7 @@ JSON Schema 在协议包里（`BUILT_IN_VIEW_SCHEMAS`），也在 `view.list` �
 | `system` | `{id, label}` 或 `null` | 当前的规则系统。 |
 | `variant` | string 或 `null` | 它里面的房规阶梯；默认为 `null`。 |
 | `keeperMuted` | boolean | 为 `true` 时守秘人不回应。 |
-| `uploads` | boolean | 成员能否上传文件。服务器不保存文件时为 `false`。 |
+| `uploads` | boolean | 能否向房间上传文件——对所有人、所有用途（分享、导入、音频）都一样。服务器不保存文件时为 `false`。 |
 
 **`usage`**：房间上一个守秘人回合的 token 数字，以及守秘人所用模型的上下文窗口。守秘人的上下文有多满：`last.inputTokens / contextWindow`。
 
