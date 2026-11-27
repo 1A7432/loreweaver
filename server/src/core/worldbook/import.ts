@@ -88,7 +88,8 @@ export type ImportErrorCode = "TOO_MANY_ENTRIES";
  * which; `secret` is strictly boolean); `secret_untrusted` / `declaration_untrusted` (a
  * player import may not mint keeper-only lore or seed variables); `declaration_too_long`
  * (over `MAX_DECLARATION_CHARS`); `condition_too_long`, `title_too_long`, `key_too_long`,
- * `too_many_keys`, `group_too_long` (over their bounds, nothing cut); `empty` (nothing left
+ * `too_many_keys`, `group_too_long`, `category_too_long` (over their bounds, nothing cut);
+ * `empty` (nothing left
  * once decorators were taken off).
  */
 export const LEFT_OUT_REASONS = [
@@ -102,6 +103,7 @@ export const LEFT_OUT_REASONS = [
   "key_too_long",
   "too_many_keys",
   "group_too_long",
+  "category_too_long",
   "empty",
 ] as const;
 export type LeftOutReason = (typeof LEFT_OUT_REASONS)[number];
@@ -378,6 +380,10 @@ function normaliseEntry(raw: Raw, index: number, keeper: boolean, source: string
   const groupWeight = toInt(field(raw, extensions, "group_weight", "groupWeight", "group_weight"), 100);
   const group = text(field(raw, extensions, "group", "group"));
   if (codePoints(group) > MAX_TITLE_CHARS) return { title, reason: "group_too_long", field: "group" };
+  // The stored entry bounds its category like a title; left unchecked here, one long category
+  // made the store refuse the WHOLE import instead of this entry.
+  const category = text(field(raw, extensions, "category", "category")) || "lore";
+  if (codePoints(category) > MAX_TITLE_CHARS) return { title, reason: "category_too_long", field: "category" };
 
   return {
     title,
@@ -404,7 +410,7 @@ function normaliseEntry(raw: Raw, index: number, keeper: boolean, source: string
     // such a member can only win when every member weighs 0.
     groupWeight: clamp(groupWeight, 0, MAX_GROUP_WEIGHT),
     groupOverride: flags.groupOverride === true,
-    category: text(field(raw, extensions, "category", "category")) || "lore",
+    category,
     source,
   };
 }

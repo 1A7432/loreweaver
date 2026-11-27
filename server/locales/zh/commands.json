@@ -252,6 +252,7 @@
   "import.indexed": "已为回忆检索索引 {count} 条设定。",
   "import.left_behind": "未导入：{parts}。",
   "import.left_out": "{count} 条设定未导入：{reasons}。",
+  "import.left_out_reason.category_too_long": "分类名过长",
   "import.left_out_reason.condition_too_long": "条件过长",
   "import.left_out_reason.declaration_too_long": "变量声明过长",
   "import.left_out_reason.declaration_untrusted": "来自不受信文件的变量声明",

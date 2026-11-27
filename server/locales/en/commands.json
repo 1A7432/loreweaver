@@ -252,6 +252,7 @@
   "import.indexed": "{count} lore entries indexed for recall.",
   "import.left_behind": "Not imported: {parts}.",
   "import.left_out": "{count} lore entries were left out: {reasons}.",
+  "import.left_out_reason.category_too_long": "category too long",
   "import.left_out_reason.condition_too_long": "condition too long",
   "import.left_out_reason.declaration_too_long": "a variable declaration too long to read",
   "import.left_out_reason.declaration_untrusted": "a variable declaration, from an untrusted file",

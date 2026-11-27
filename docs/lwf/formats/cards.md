@@ -365,7 +365,7 @@ order, the first present and not null winning.
 | `group` | `group` | `group` | Text. Over 200: `group_too_long`. |
 | `groupWeight` | `group_weight` | `groupWeight`, `group_weight` | Integer clamped to 0–10,000. |
 | `groupOverride` | `group_override` | `groupOverride`, `group_override` | Flag. |
-| `category` | `category` | `category` | Text; default `lore`. |
+| `category` | `category` | `category` | Text; default `lore`. Over 200: `category_too_long`. |
 
 *Flag*: exactly one of these spellings — `true`, `1`, `"true"`, `"1"` read true; `false`,
 `0`, `"false"`, `"0"` and null read false (null as SillyTavern's own `!entry.enabled` and
@@ -389,7 +389,7 @@ left out and reported with its title, its reason and, where one field is at faul
 field; the rest of the book imports. The reasons: `not_an_object`, `flag_not_boolean`,
 `secret_untrusted` and `declaration_untrusted` (§5.4), `declaration_too_long` (a declaration
 body over 200,000, `MAX_DECLARATION_CHARS`), `condition_too_long`, `title_too_long`,
-`key_too_long`, `too_many_keys`, `group_too_long`, and `empty` (no content once the
+`key_too_long`, `too_many_keys`, `group_too_long`, `category_too_long`, and `empty` (no content once the
 decorator lines are off).
 
 > **Differs from SillyTavern.** SillyTavern turns a character-book entry that lacks

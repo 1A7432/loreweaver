@@ -256,12 +256,24 @@ describe("importWorld", () => {
     const greetings = plainRaw("Chatty", { alternate_greetings: Array.from({ length: MAX_ALTERNATE_GREETINGS + 1 }, () => "hi") });
     expect(importWorld(r.context(), cardOf(greetings))).toMatchObject({ ok: false, code: "too_many_openings" });
     expect(importWorld(r.context(), cardOf(plainRaw("名".repeat(201))))).toMatchObject({ ok: false, code: "name_too_long" });
-    expect(importWorld(r.context(), cardOf(plainRaw("Category", { character_book: { entries: [{ keys: ["a"], content: "b", comment: "c", extensions: { category: "x".repeat(201) } }] } })))).toMatchObject({
-      ok: false,
-      code: "entry_invalid",
-      path: "entries.0.category",
-    });
     expect(r.rows()).toBe(before);
+  });
+
+  test("one entry over a bound is left out and counted; the rest of the card is imported", () => {
+    // A long category once made the store refuse the whole import.
+    const r = room();
+    const card = plainRaw("Category", {
+      character_book: {
+        entries: [
+          { keys: ["a"], content: "b", comment: "long", extensions: { category: "x".repeat(201) } },
+          { keys: ["c"], content: "d", comment: "fine" },
+        ],
+      },
+    });
+    const imported = importWorld(r.context(), cardOf(card));
+    if (!imported.ok) throw new Error(imported.code);
+    expect(imported.lore.leftOut).toEqual([{ title: "long", reason: "category_too_long", field: "category" }]);
+    expect(r.services.documents.list(ROOM, LORE_ENTRY_TYPE).map((document) => document.data.title)).toEqual(["fine"]);
   });
 
   test("a room that would hold too many lore entries refuses", () => {

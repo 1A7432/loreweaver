@@ -178,6 +178,7 @@ describe("nothing is cut to fit", () => {
       { comment: "keys", content: "x", keys: Array.from({ length: MAX_KEYS + 1 }, (_, index) => `k${index}`) },
       { comment: "second", content: "x", keys: ["k"], secondary_keys: Array.from({ length: MAX_KEYS + 1 }, (_, index) => `s${index}`) },
       { comment: "group", content: "x", group: "g".repeat(MAX_TITLE_CHARS + 1) },
+      { comment: "category", content: "x", category: "c".repeat(MAX_TITLE_CHARS + 1) },
       { comment: "fits", content: "x", keys: Array.from({ length: MAX_KEYS }, (_, index) => `k${index}`), group: "g".repeat(MAX_TITLE_CHARS) },
     ]);
     expect(entries.map((entry) => [entry.title, entry.keys.length, entry.group.length])).toEqual([["fits", MAX_KEYS, MAX_TITLE_CHARS]]);
@@ -187,6 +188,7 @@ describe("nothing is cut to fit", () => {
       ["too_many_keys", "keys"],
       ["too_many_keys", "secondary_keys"],
       ["group_too_long", "group"],
+      ["category_too_long", "category"],
     ]);
   });
 
