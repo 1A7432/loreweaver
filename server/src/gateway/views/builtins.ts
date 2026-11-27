@@ -5,6 +5,9 @@
 // out of a projection, so a field a projection adds later stays out of every view until
 // one names it; and a view cannot show what the projection withheld (iron rule 3).
 import {
+  type AdminContentView,
+  type AdminKeysView,
+  type AdminModelView,
   type AudioView,
   BUILT_IN_VIEW_SCHEMAS,
   type BuiltInViewName,
@@ -51,6 +54,9 @@ import { translate } from "../../infra/i18n.ts";
 import type { CommandRegistry } from "../commands/index.ts";
 import { localText } from "../../core/packs/index.ts";
 import { readPlaying } from "../../core/audio/index.ts";
+import { readEnabledSkills, skillName } from "../../core/skills/index.ts";
+import type { KeyBook } from "../commands/index.ts";
+import type { ModelSettings } from "../model_settings.ts";
 import type { MediaStore } from "../../infra/media/index.ts";
 import { audioView, roomLibrary } from "../audio.ts";
 import type { RoomPacks } from "../packs.ts";
@@ -89,6 +95,8 @@ export interface ViewSource {
   readonly packs?: RoomPacks;
   /** The media store; absent or null (a server that keeps no files): the audio library is empty. */
   readonly media?: MediaStore | null;
+  /** What the admin views read: the model settings and the access keys; absent or null: those views are empty. */
+  readonly admin?: { readonly models: ModelSettings | null; readonly keys: KeyBook | null };
 }
 
 export interface BuiltInView<N extends BuiltInViewName = BuiltInViewName> {
@@ -375,8 +383,101 @@ function audio(source: ViewSource, viewer: ViewerContext): AudioView {
   return audioView(roomLibrary(store, source.room, source.packs ?? null, source.media ?? null), readPlaying(store, source.room), viewer.member.role);
 }
 
+const NO_MODEL_SETTINGS: AdminModelView = {
+  lanes: [],
+  providers: [],
+  imagegen: { source: "default", enabled: false, provider: null, model: null, size: null, baseUrl: null, key: { set: false, masked: null } },
+  imageProviders: [],
+};
+
+/**
+ * `admin/model`: what the model lanes and image generation use, keys masked. Picked field by
+ * field from the settings' description, so nothing added there later reaches the wire unseen.
+ */
+function adminModel(source: ViewSource, _viewer: ViewerContext): AdminModelView {
+  const models = source.admin?.models ?? null;
+  if (models === null) return NO_MODEL_SETTINGS;
+  const view = models.describe();
+  return {
+    lanes: view.lanes.map((lane) => ({
+      lane: lane.lane,
+      source: lane.source,
+      sameAsKeeper: lane.sameAsKeeper,
+      provider: lane.provider,
+      model: lane.model,
+      baseUrl: lane.baseUrl,
+      wire: lane.wire,
+      effort: lane.effort,
+      contextWindow: lane.contextWindow,
+      key: { set: lane.key.set, masked: lane.key.masked },
+    })),
+    providers: view.providers.map((provider) => ({ id: provider.id, preset: provider.preset, wire: provider.wire, baseUrl: provider.baseUrl, credential: provider.credential })),
+    imagegen: {
+      source: view.imagegen.source,
+      enabled: view.imagegen.enabled,
+      provider: view.imagegen.provider,
+      model: view.imagegen.model,
+      size: view.imagegen.size,
+      baseUrl: view.imagegen.baseUrl,
+      key: { set: view.imagegen.key.set, masked: view.imagegen.key.masked },
+    },
+    imageProviders: view.imageProviders.map((provider) => ({ id: provider.id, credential: provider.credential })),
+  };
+}
+
+/** `admin/keys`: this room's keys, masked, and whether someone is connected with each. Never another room's. */
+function adminKeys(source: ViewSource, _viewer: ViewerContext): AdminKeysView {
+  const book = source.admin?.keys ?? null;
+  if (book === null) return { keys: [] };
+  const online = new Set(source.online.map((member) => member.id));
+  return {
+    keys: book.listForAdmin(source.room).map((key) => {
+      const entry: AdminKeysView["keys"][number] = { id: key.id, name: key.name, role: key.role, masked: key.masked, online: online.has(key.member) };
+      if (key.created !== undefined) entry.created = key.created;
+      return entry;
+    }),
+  };
+}
+
+/** `admin/content`: the skills this room may enable, the server's rule systems and its packs, each with what this room has on. */
+function adminContent(source: ViewSource, viewer: ViewerContext): AdminContentView {
+  const store = source.services.store;
+  const installed = source.packs;
+  const enabledSkills = new Set(readEnabledSkills(store, source.room));
+  const skills = (installed?.skillsFor(store, source.room) ?? []).map(({ skill, pack }) => ({
+    id: skill.id,
+    title: skillName(skill, viewer.locale),
+    enabled: enabledSkills.has(skill.id),
+    source: { kind: pack === null ? ("builtin" as const) : ("pack" as const), id: pack },
+  }));
+  // A rule system is a pack's when the registry holds that pack's compiled system under the id.
+  const systemPack = new Map<string, string>();
+  for (const loaded of installed?.installed() ?? []) {
+    for (const system of loaded.pack.ruleSystems) {
+      if (!systemPack.has(system.id) && source.services.packs.get(system.id) === system.compiled) systemPack.set(system.id, loaded.pack.manifest.id);
+    }
+  }
+  const ruleSystems = source.services.packs.packs().map((pack) => {
+    const from = systemPack.get(pack.id);
+    return { id: pack.id, title: systemLabel(pack), enabled: pack.id === source.pack?.id, source: from === undefined ? { kind: "builtin" as const, id: null } : { kind: "pack" as const, id: from } };
+  });
+  const enabledPacks = new Set(installed?.enabledIds(store, source.room) ?? []);
+  const packs = (installed?.installed() ?? []).map(({ pack }) => ({
+    id: pack.manifest.id,
+    title: localText(pack.manifest.name, viewer.locale) || pack.manifest.id,
+    version: pack.manifest.version,
+    enabled: enabledPacks.has(pack.manifest.id),
+  }));
+  return { skills, ruleSystems, packs };
+}
+
 function builtIn<N extends BuiltInViewName>(name: N, compute: BuiltInView<N>["compute"]): BuiltInView<N> {
   return { name, schema: BUILT_IN_VIEW_SCHEMAS[name], admin: false, compute };
+}
+
+/** A view computed and listed for admins alone; anyone else is never sent it, not even empty. */
+function adminView<N extends BuiltInViewName>(name: N, compute: BuiltInView<N>["compute"]): BuiltInView<N> {
+  return { name, schema: BUILT_IN_VIEW_SCHEMAS[name], admin: true, compute };
 }
 
 /** Every built-in view of the first release, in listing order. */
@@ -392,6 +493,9 @@ export const BUILT_IN_VIEWS: readonly BuiltInView[] = [
   builtIn("packs", packs),
   builtIn("panels", panels),
   builtIn("audio", audio),
+  adminView("admin/model", adminModel),
+  adminView("admin/keys", adminKeys),
+  adminView("admin/content", adminContent),
 ] as readonly BuiltInView[];
 
 /** Who may see a view listed and subscribe to it. */

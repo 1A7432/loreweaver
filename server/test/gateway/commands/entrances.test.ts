@@ -16,6 +16,8 @@ interface Case {
   readonly setup?: (bench: Bench) => Promise<void> | void;
   /** The bench keeps files (`uploads`, `import`). */
   readonly media?: boolean;
+  /** The bench has model settings and keys (`model`, `imagegen`, `key`). */
+  readonly admin?: boolean;
 }
 
 const CARD = jsonFile(plainCard("Mira"));
@@ -60,6 +62,9 @@ const CASES: readonly Case[] = [
   { line: ".bgm play tavern --volume 70% --fade 1500", id: "bgm", args: { op: "play", query: "tavern", volume: 0.7, fadeMs: 1500 }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
   { line: ".环境音 播放 Rain Night --once", id: "ambience", args: { op: "play", query: "Rain Night", loop: false }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
   { line: ".sfx tavern", id: "sfx", args: { op: "play", query: "tavern" }, member: ADMIN, media: true, setup: async (b) => void (await seedSounds(b)) },
+  { line: ".model set deepseek deepseek-v4-pro key=sk-test-0123456789abcdef lane=scribe", id: "model", args: { op: "set", provider: "deepseek", model: "deepseek-v4-pro", key: "sk-test-0123456789abcdef", lane: "scribe" }, member: ADMIN, admin: true },
+  { line: ".图片生成 set openai gpt-image-2 1536x1024", id: "imagegen", args: { op: "set", provider: "openai", model: "gpt-image-2", size: "1536x1024" }, member: ADMIN, admin: true },
+  { line: ".key list", id: "key", args: { op: "list" }, member: ADMIN, admin: true },
   { line: ".jrrp", id: "jrrp", args: {} },
   { line: ".draw", id: "draw", args: {} },
   { line: ".help r", id: "help", args: { id: "r" } },
@@ -72,8 +77,8 @@ describe("text form and structured form", () => {
   for (const item of CASES) {
     test(`${item.id}: ${item.line}`, async () => {
       const member = item.member ?? ADA;
-      const text = bench({ seed: item.id, media: item.media === true });
-      const call = bench({ seed: item.id, media: item.media === true });
+      const text = bench({ seed: item.id, media: item.media === true, admin: item.admin === true });
+      const call = bench({ seed: item.id, media: item.media === true, admin: item.admin === true });
       await item.setup?.(text);
       await item.setup?.(call);
       expect(text.registry.textCommand(text.context(member, { newTurn: false }), item.line, "en")).toEqual({ id: item.id, args: item.args });

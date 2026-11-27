@@ -23,12 +23,14 @@ import { checkCommand, initCommand, newCharacterCommand, opposedCommand, packCom
 import { audioCommand, layerCommand } from "./engine/audio.ts";
 import { importCommand, uploadsCommand } from "./engine/files.ts";
 import { packCommand, panelsCommand, skillCommand } from "./engine/packs.ts";
+import { imagegenCommand, type KeyAdmin, keyCommand, modelCommand } from "./engine/admin.ts";
 import { drawCommand, hiddenRollCommand, jrrpCommand, rollCommand, rollInline } from "./engine/dice.ts";
 import { botCommand, helpCommand, languageCommand, ResetGate, resetCommand, ruleCommand, saveCommand, undoCommand } from "./engine/room.ts";
 import { pcCommand, renameCommand, sheetCommand } from "./engine/sheet.ts";
 import { chronicleCommand, habitsCommand, loreCommand, npcCommand, recapCommand, varCommand } from "./engine/world.ts";
 import { argumentTooLong, inlineRolls, MAX_COMMAND_ARG_CHARS, MAX_INLINE_ROLLS, splitCommand } from "./parse.ts";
 import { compact, validateArgs } from "./schema.ts";
+import type { ModelSettings } from "../model_settings.ts";
 import { RoomPacks } from "../packs.ts";
 import type { Uploads } from "../uploads.ts";
 import {
@@ -61,6 +63,10 @@ export interface RegistryOptions {
   readonly recall?: RecallDeps | null;
   /** The installed packs and the server's skills (`pack`, `skill`, `import` from a pack); default: none installed, built-in skills. */
   readonly packs?: RoomPacks | null;
+  /** The model lanes and image generation at run time (`model`, `imagegen`); absent: those commands are unavailable. */
+  readonly models?: ModelSettings | null;
+  /** The access keys (`key`); absent: that command is unavailable. */
+  readonly keys?: KeyAdmin | null;
 }
 
 /** What a line a player typed turned out to be. */
@@ -135,6 +141,9 @@ export class CommandRegistry {
       layerCommand("sfx", options.uploads ?? null, packs),
       jrrpCommand,
       drawCommand,
+      modelCommand(options.models ?? null),
+      imagegenCommand(options.models ?? null),
+      keyCommand(options.keys ?? null),
       helpCommand((call) => this.#entries(call.context, call.locale)),
     ]);
     const ids = new Set<string>();
@@ -331,6 +340,7 @@ export class CommandRegistry {
       lifecycle?: LifecycleNotice;
       modulesChanged?: boolean;
       after?: () => Promise<readonly string[]>;
+      disconnect?: readonly string[];
     } = {
       ok: true,
       events: done.events ?? [],
@@ -341,6 +351,7 @@ export class CommandRegistry {
     if (done.lifecycle !== undefined) outcome.lifecycle = done.lifecycle;
     if (done.modulesChanged === true) outcome.modulesChanged = true;
     if (done.after !== undefined) outcome.after = done.after;
+    if (done.disconnect !== undefined && done.disconnect.length > 0) outcome.disconnect = done.disconnect;
     return outcome;
   }
 

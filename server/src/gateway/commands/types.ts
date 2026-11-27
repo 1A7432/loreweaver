@@ -47,6 +47,8 @@ export interface CommandSuccess {
   readonly modulesChanged?: boolean;
   /** See `Done.after`. */
   readonly after?: () => Promise<readonly string[]>;
+  /** See `Done.disconnect`. */
+  readonly disconnect?: readonly string[];
 }
 
 export interface CommandRefusal {
@@ -92,6 +94,12 @@ export interface Done {
    * fails the command: it reports its own problems.
    */
   readonly after?: () => Promise<readonly string[]>;
+  /**
+   * Member ids whose live connections in this room end once the caller has been answered
+   * (a revoked key, a key whose role changed): they come back as after a dropped link — or,
+   * with a revoked key, cannot.
+   */
+  readonly disconnect?: readonly string[];
 }
 
 /** One command invocation, as a handler sees it. */

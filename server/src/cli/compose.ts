@@ -5,7 +5,7 @@
 // `Settings` and a data directory and puts the transport in front. The self-test composes
 // with scripted parts through the same `composeHub`, so what it proves about a compiled
 // binary is true of the server that binary serves.
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { LaneModels, Services } from "../agent/context.ts";
@@ -14,33 +14,29 @@ import { servicesOn } from "../agent/services.ts";
 import type { GenerateImage } from "../agent/tools/index.ts";
 import { recordPlayerAction, runKeeperTurn } from "../agent/turn/index.ts";
 import { builtInPacks, RulePackRegistry } from "../core/rulepacks/index.ts";
-import { CommandRegistry, ROOM_LOCALE } from "../gateway/commands/index.ts";
+import { CommandRegistry, type KeyBook, ROOM_LOCALE } from "../gateway/commands/index.ts";
 import { Hub } from "../gateway/hub.ts";
+import { ModelSettings } from "../gateway/model_settings.ts";
 import { loadInstalledPacks } from "../gateway/pack_install.ts";
 import { assemblePacks, RoomPacks } from "../gateway/packs.ts";
 import { parseReviewList, REVIEW_OFF, type ReviewFilter } from "../gateway/review.ts";
 import { Uploads } from "../gateway/uploads.ts";
 import type { Settings } from "../infra/config.ts";
 import { type Clock, systemClock } from "../infra/ids.ts";
-import { ImageGenError, OpenAICompatibleImageGen } from "../infra/imagegen/index.ts";
+import { ImageGenError } from "../infra/imagegen/index.ts";
 import { RoomStorages } from "../infra/lifecycle/storages.ts";
-import { createLLM, type LLMClient, LLMError } from "../infra/llm/index.ts";
 import { DEFAULT_MEDIA_LIMITS, MediaStore } from "../infra/media/index.ts";
 import { ensurePrivateDir, writePrivateFile } from "../infra/private_files.ts";
 import { OpenAIEmbeddings, VectorIndex } from "../infra/recall/index.ts";
 import { openDatabase } from "../infra/runtime/sqlite.ts";
 import { spawnWorker, type WorkerHandle } from "../infra/runtime/worker.ts";
+import { ServerSettings } from "../infra/server_settings.ts";
 import { Store } from "../infra/store.ts";
 import { IrohServer } from "../net/iroh.ts";
 import { Keystore } from "../net/keystore.ts";
 
-/**
- * The window assumed for a model this server has no figure for. Deliberately small: a
- * window guessed too large never folds and ends in the provider refusing the prompt; one
- * guessed too small only folds early. The operator states the real one with
- * `TRPG_LLM__CONTEXT_WINDOW`, and `openServer` says so when it falls back to this.
- */
-export const FALLBACK_CONTEXT_WINDOW = 32_000;
+/** The window assumed for a Keeper model this server has no figure for (`openServer` says so when it falls back to it). */
+export { FALLBACK_CONTEXT_WINDOW } from "../gateway/model_settings.ts";
 
 /** How often idle room workers are looked for, and how long idle is. */
 const EVICT_EVERY_MS = 60_000;
@@ -50,13 +46,6 @@ const KEEPER_IMAGES_PER_HOUR = 10;
 const HOUR_MS = 3_600_000;
 /** The room the first admin key of a fresh data directory belongs to. */
 export const FIRST_ROOM = "main";
-
-/** A lane with no model configured: every call fails as a provider that refuses the key. */
-class UnconfiguredLLM implements LLMClient {
-  chat(): Promise<never> {
-    return Promise.reject(new LLMError({ code: "auth", retryable: false }));
-  }
-}
 
 export interface HubParts {
   readonly settings: Settings;
@@ -81,6 +70,13 @@ export interface HubParts {
   readonly defaultRulePack?: string | null;
   /** The media store: members' uploads and fetches over the byte channel, `uploads` and `import`. Absent: none. */
   readonly media?: MediaStore;
+  /**
+   * The model lanes at run time (`model`, `imagegen`, `admin/model`); `models` should then be
+   * its `liveModels()`. Absent: `models` for the server's life, and those commands unavailable.
+   */
+  readonly modelSettings?: ModelSettings;
+  /** The access keys (`key`, `admin/keys`). Absent: neither. */
+  readonly keys?: KeyBook;
 }
 
 export function composeHub(parts: HubParts): { readonly hub: Hub; readonly services: Services } {
@@ -117,7 +113,7 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
         },
       },
     },
-    commands: (modules) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null, packs: roomPacks }),
+    commands: (modules, keys) => new CommandRegistry({ modules, uploads, recall: parts.recall ?? null, packs: roomPacks, models: parts.modelSettings ?? null, keys }),
     runTurn: runKeeperTurn,
     recordPlayerAction,
     defaultLocale: settings.locale,
@@ -139,6 +135,8 @@ export function composeHub(parts: HubParts): { readonly hub: Hub; readonly servi
     packs: roomPacks,
     workerTimeoutMs: settings.modules.callTimeoutMs,
     ...(uploads === null ? {} : { uploads }),
+    ...(parts.modelSettings === undefined ? {} : { models: parts.modelSettings }),
+    ...(parts.keys === undefined ? {} : { keys: parts.keys }),
   });
   return { hub, services };
 }
@@ -161,6 +159,8 @@ export interface RunningServer {
   readonly notes: readonly string[];
   readonly hub: Hub;
   readonly keystore: Keystore;
+  /** The model lanes and image generation, with the admins' run-time overrides. */
+  readonly models: ModelSettings;
   close(): Promise<void>;
 }
 
@@ -207,6 +207,8 @@ function transportSecret(dataDir: string): Uint8Array {
 
 export interface OpenData {
   readonly store: Store;
+  /** Server-wide settings an admin changes at run time (the model overrides); no room's lifecycle touches them. */
+  readonly serverSettings: ServerSettings;
   readonly media: MediaStore;
   /** The storages a lifecycle operation tells (more may be registered once the server is composed). */
   readonly storages: RoomStorages;
@@ -221,7 +223,11 @@ export interface OpenData {
  */
 export function openData(settings: Settings, clock: Clock = systemClock): OpenData {
   ensurePrivateDir(settings.dataDir);
-  const db = openDatabase(join(settings.dataDir, "loreweaver.db"));
+  const path = join(settings.dataDir, "loreweaver.db");
+  const db = openDatabase(path);
+  // The database holds API keys an admin set at run time (`infra/server_settings.ts`): the
+  // owner's alone, like the key file. SQLite gives its journal files the database's mode.
+  chmodSync(path, 0o600);
   const limits = { ...DEFAULT_MEDIA_LIMITS, audio: { maxFileBytes: settings.media.audioMaxFileBytes, roomQuotaBytes: settings.media.audioRoomQuotaBytes } };
   const media = new MediaStore(settings.dataDir, db, { clock, limits });
   const storages = new RoomStorages().register({
@@ -237,7 +243,7 @@ export function openData(settings: Settings, clock: Clock = systemClock): OpenDa
     for (const storage of recallStorages(index)) storages.register(storage);
     recall = { embeddings: new OpenAIEmbeddings(settings.embeddings), index };
   }
-  return { store: new Store(db, { undoDepth: settings.store.undoDepth, storages }), media, storages, recall };
+  return { store: new Store(db, { undoDepth: settings.store.undoDepth, storages }), serverSettings: new ServerSettings(db), media, storages, recall };
 }
 
 /** The key file of a data directory. */
@@ -251,7 +257,7 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
   const review = reviewFrom(settings);
   const clock = systemClock;
   const report = options.report ?? ((room: string, text: string): void => console.error(`[${room}] ${text}`));
-  const { store, media, storages, recall } = openData(settings, clock);
+  const { store, serverSettings, media, storages, recall } = openData(settings, clock);
   if (recall === undefined) notes.push("recall_off");
 
   // Installed packs: validated again from disk; their rule systems and skills join the
@@ -279,54 +285,44 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     },
   });
 
-  // Model clients: one per lane that names its own endpoint, the Keeper's otherwise.
-  let keeper: LLMClient;
-  let contextWindow = FALLBACK_CONTEXT_WINDOW;
-  if (settings.llm === undefined) {
-    keeper = new UnconfiguredLLM();
-    notes.push("model_not_configured");
-  } else {
-    const configured = createLLM(settings.llm);
-    keeper = configured;
-    if (configured.contextWindow === undefined) notes.push("context_window_unknown");
-    else contextWindow = configured.contextWindow;
-  }
-  const lane = (own: Settings["lanes"]["npc"]): LLMClient => (own === undefined ? keeper : createLLM(own));
-  const models: LaneModels = {
-    keeper,
-    npc: lane(settings.lanes.npc),
-    scribe: lane(settings.lanes.scribe),
-    director: lane(settings.lanes.director),
-    memory: lane(settings.lanes.memory),
-  };
+  // Model clients: the operator's settings with the admins' run-time overrides on top; one
+  // per lane that names its own endpoint, the Keeper's otherwise. Rebuilt on every change.
+  const modelSettings = new ModelSettings(settings, serverSettings);
+  const initial = modelSettings.snapshot();
+  if (!initial.configured) notes.push("model_not_configured");
+  else if (!initial.contextWindowKnown) notes.push("context_window_unknown");
+  if (modelSettings.unusableOverrides.length > 0) notes.push("model_override_unusable");
 
   // The Keeper's `generate_image`: make, store as the room's media, count against the hour.
-  let generateImage: GenerateImage | undefined;
-  if (settings.imagegen !== undefined) {
-    const client = new OpenAICompatibleImageGen(settings.imagegen);
-    const made = new Map<string, number[]>();
-    generateImage = async (request) => {
-      const now = clock.now();
-      const recent = (made.get(request.room) ?? []).filter((at) => now - at < HOUR_MS);
-      if (recent.length >= KEEPER_IMAGES_PER_HOUR) return { ok: false, code: "rate_limited" };
-      made.set(request.room, [...recent, now]);
-      try {
-        const image = await client.generate({ prompt: request.prompt });
-        const stored = await media.registerServerBlob({ room: request.room, bytes: image.bytes, mime: image.mime, name: request.caption, audience: "room" });
-        if (!stored.ok) return { ok: false, code: stored.code };
-        const { hash, mime, size, name } = stored.record;
-        return { ok: true, media: { hash, mime, size, name, from: "server" } };
-      } catch (error) {
-        return { ok: false, code: error instanceof ImageGenError ? error.code : "unknown" };
-      }
-    };
-  }
+  // The image client is looked up at each picture: an admin may switch it at run time.
+  const made = new Map<string, number[]>();
+  const generateImage: GenerateImage = async (request) => {
+    const client = modelSettings.image();
+    if (client === null) return { ok: false, code: "not_configured" };
+    const now = clock.now();
+    const recent = (made.get(request.room) ?? []).filter((at) => now - at < HOUR_MS);
+    if (recent.length >= KEEPER_IMAGES_PER_HOUR) return { ok: false, code: "rate_limited" };
+    made.set(request.room, [...recent, now]);
+    try {
+      const image = await client.generate({ prompt: request.prompt });
+      const stored = await media.registerServerBlob({ room: request.room, bytes: image.bytes, mime: image.mime, name: request.caption, audience: "room" });
+      if (!stored.ok) return { ok: false, code: stored.code };
+      const { hash, mime, size, name } = stored.record;
+      return { ok: true, media: { hash, mime, size, name, from: "server" } };
+    } catch (error) {
+      return { ok: false, code: error instanceof ImageGenError ? error.code : "unknown" };
+    }
+  };
+
+  const fresh = !existsSync(join(settings.dataDir, "keys.json"));
+  const keystore = keystoreIn(settings.dataDir);
+  const firstKey = fresh ? { room: FIRST_ROOM, key: keystore.mint({ room: FIRST_ROOM, name: "Admin", role: "admin" }, clock.now()).key } : null;
 
   const { hub } = composeHub({
     settings,
     store,
-    models,
-    contextWindow,
+    models: modelSettings.liveModels(),
+    contextWindow: initial.contextWindow,
     clock,
     report,
     spawnWorker: () => spawnWorker(options.workerEntry),
@@ -335,12 +331,10 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     review,
     media,
     ...(recall === undefined ? {} : { recall }),
-    ...(generateImage === undefined ? {} : { generateImage }),
+    generateImage,
+    modelSettings,
+    keys: keystore,
   });
-
-  const fresh = !existsSync(join(settings.dataDir, "keys.json"));
-  const keystore = keystoreIn(settings.dataDir);
-  const firstKey = fresh ? { room: FIRST_ROOM, key: keystore.mint({ room: FIRST_ROOM, name: "Admin", role: "admin" }).key } : null;
 
   const server = new IrohServer({ keystore, room: (id) => hub.room(id) }, { mode: options.mode, secretKey: transportSecret(settings.dataDir) });
   const ticket = await server.start();
@@ -354,6 +348,7 @@ export async function openServer(settings: Settings, options: ServerOptions): Pr
     notes,
     hub,
     keystore,
+    models: modelSettings,
     close: async () => {
       clearInterval(evictor);
       await server.close();

@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { Role } from "loreweaver-protocol/v3";
 
 import { writePrivateFile } from "../infra/private_files.ts";
+import { maskSecret } from "../infra/server_settings.ts";
 
 export interface KeyRecord {
   readonly room: string;
@@ -21,6 +22,19 @@ export interface KeyRecord {
 /** A key as it may be shown: no value. */
 export interface KeyInfo extends KeyRecord {
   readonly id: string;
+}
+
+/** A key as a room's admin sees it (`admin/keys`, `key list`): masked, never whole. */
+export interface AdminKeyInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly role: Role;
+  /** The first and last few characters of the value (`maskSecret`). */
+  readonly masked: string;
+  /** The member id the key's holder connects as: to tell whether they are online. */
+  readonly member: string;
+  /** When the key was minted (ms); absent for a key from before this was recorded. */
+  readonly created?: number;
 }
 
 export type KeystoreProblem = "unknown_key" | "last_admin" | "bad_room" | "bad_name";
@@ -67,6 +81,8 @@ function checkName(name: string): string {
 export class Keystore {
   readonly #path: string | undefined;
   readonly #keys = new Map<string, KeyRecord>();
+  /** When each key was minted, where known (kept beside the record so `lookup` stays as it was). */
+  readonly #created = new Map<string, number>();
 
   /** With a `path`, loads the file if it exists and rewrites it on every change. */
   constructor(path?: string) {
@@ -85,10 +101,11 @@ export class Keystore {
   }
 
   /** Create a key with a fresh random value. The value is returned once, here. */
-  mint(record: KeyRecord): { key: string; info: KeyInfo } {
+  mint(record: KeyRecord, created?: number): { key: string; info: KeyInfo } {
     const key = randomBytes(24).toString("base64url");
     const checked = this.#checked(record);
     this.#keys.set(key, checked);
+    if (created !== undefined && Number.isSafeInteger(created) && created >= 0) this.#created.set(key, created);
     this.#save();
     return { key, info: { id: keyId(key), ...checked } };
   }
@@ -96,6 +113,23 @@ export class Keystore {
   /** A room's keys, without their values, in the order they were created. */
   list(room: string): KeyInfo[] {
     return [...this.#keys].filter(([, record]) => record.room === room).map(([key, record]) => ({ id: keyId(key), ...record }));
+  }
+
+  /** A room's keys as its admin may see them, in the order they were created. */
+  listForAdmin(room: string): AdminKeyInfo[] {
+    return [...this.#keys]
+      .filter(([, record]) => record.room === room)
+      .map(([key, record]) => {
+        const created = this.#created.get(key);
+        const info = { id: keyId(key), name: record.name, role: record.role, masked: maskSecret(key), member: memberId(key) };
+        return created === undefined ? info : { ...info, created };
+      });
+  }
+
+  /** The member id a key of `room` connects as, or undefined when no such key. */
+  memberOf(room: string, id: string): string | undefined {
+    for (const [key, record] of this.#keys) if (record.room === room && keyId(key) === id) return memberId(key);
+    return undefined;
   }
 
   /** Change a key's name or role. Refuses to leave a room without an admin key. */
@@ -113,13 +147,17 @@ export class Keystore {
     const [key, record] = this.#find(room, id);
     if (record.role === "admin" && this.#admins(room) === 1) throw new KeystoreError("last_admin");
     this.#keys.delete(key);
+    this.#created.delete(key);
     this.#save();
   }
 
   /** Delete every key of a room (the room itself is being deleted). */
   deleteRoom(room: string): number {
     const doomed = [...this.#keys].filter(([, record]) => record.room === room).map(([key]) => key);
-    for (const key of doomed) this.#keys.delete(key);
+    for (const key of doomed) {
+      this.#keys.delete(key);
+      this.#created.delete(key);
+    }
     if (doomed.length > 0) this.#save();
     return doomed.length;
   }
@@ -145,7 +183,10 @@ export class Keystore {
 
   #save(): void {
     if (this.#path === undefined) return;
-    const keys = [...this.#keys].map(([key, record]) => ({ key, ...record }));
+    const keys = [...this.#keys].map(([key, record]) => {
+      const created = this.#created.get(key);
+      return created === undefined ? { key, ...record } : { key, ...record, created };
+    });
     writePrivateFile(this.#path, `${JSON.stringify({ version: 1, keys }, null, 2)}\n`);
   }
 
@@ -162,6 +203,7 @@ export class Keystore {
       }
       const role = ROLES.find((option) => option === entry.role) ?? "player";
       this.#keys.set(entry.key, this.#checked({ room: entry.room, name: entry.name, role }));
+      if (typeof entry.created === "number" && Number.isSafeInteger(entry.created) && entry.created >= 0) this.#created.set(entry.key, entry.created);
     }
   }
 }

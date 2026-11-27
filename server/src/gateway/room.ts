@@ -52,6 +52,7 @@ import type { OrderedChains } from "./chain.ts";
 import {
   COMMANDS_CATALOG,
   type CommandEvent,
+  type KeyBook,
   type CommandOutcome,
   type CommandRegistry,
   type InputOutcome,
@@ -69,6 +70,7 @@ import { actorName } from "./commands/support.ts";
 import type { CommandCall } from "./commands/types.ts";
 import { type RecordPlayerAction, type RunKeeperTurn, runAsWork } from "./keeper.ts";
 import { type LaneSettings, runLanePass } from "./lanes.ts";
+import type { ModelSettings } from "./model_settings.ts";
 import { eventIdOf, moduleRoom } from "./module_commands.ts";
 import type { RateLimiter } from "./rate_limit.ts";
 import { type ReviewFilter, reviewFact, reviewNarrative } from "./review.ts";
@@ -141,6 +143,10 @@ export interface RoomHost {
   readonly uploads: Uploads | null;
   /** The installed packs (the `packs` view). */
   readonly packs: RoomPacks;
+  /** The model lanes at run time; null: `services.models` for ever. */
+  readonly models: ModelSettings | null;
+  /** The access keys (`admin/keys`); null on a server without them. */
+  readonly keys: KeyBook | null;
   kitFor(room: string): RoomKit | null;
   /** The room's worker when it has modules; null otherwise. */
   moduleWorker(room: string): RoomWorker | null;
@@ -201,6 +207,10 @@ export class Room {
   #waiting = 0;
   /** Whose line the Keeper is answering right now; null between turns. */
   #answering: string | null = null;
+  /** The services and turn environment on the model snapshot of a version (see `#servicesNow`). */
+  #pinned: { readonly version: number; readonly services: Services } | null = null;
+  /** The turn environment that goes with each pinned services object (the Keeper model's context window). */
+  readonly #envs = new WeakMap<Services, TurnEnvironment>();
 
   constructor(id: string, host: RoomHost) {
     this.id = id;
@@ -275,6 +285,21 @@ export class Room {
     if (!this.#members.delete(member.connection)) return;
     this.views.close(member.connection);
     void this.refreshViews();
+  }
+
+  /** The member ids connected now. */
+  onlineIds(): ReadonlySet<string> {
+    return new Set([...this.#members.values()].map((member) => member.id));
+  }
+
+  /** End the live connections of these members (a revoked key, a changed role) and take them out of the room. */
+  #disconnect(ids: readonly string[]): void {
+    const doomed = new Set(ids);
+    for (const member of [...this.#members.values()]) {
+      if (!doomed.has(member.id)) continue;
+      member.disconnect?.();
+      this.leave(member);
+    }
   }
 
   // --- the two entrances --------------------------------------------------------------
@@ -442,6 +467,8 @@ export class Room {
     // writes committed and its events went out; its lines join the caller's answer.
     const more = published && outcome.after !== undefined ? await this.#after(id, outcome.after) : [];
     reply(this.#answer(outcome, more));
+    // After the answer, so the admin hears that it worked before a link goes (their own, too).
+    if (published && outcome.disconnect !== undefined) this.#disconnect(outcome.disconnect);
     if (published && outcome.events.length > 0) {
       try {
         const recorded = this.#host.recordPlayerAction(context, { actor: actorName(context), action: input.id ?? id, text: tableText(outcome.events) });
@@ -521,7 +548,8 @@ export class Room {
     this.#answering = input.speaker;
     let result: TurnResult;
     try {
-      result = await runAsWork(context.writer, () => this.#host.runTurn(context, { ...input, signal: controller.signal }, this.#ports(context), this.#host.env));
+      const env = this.#envs.get(context.services) ?? this.#host.env;
+      result = await runAsWork(context.writer, () => this.#host.runTurn(context, { ...input, signal: controller.signal }, this.#ports(context), env));
     } catch (error) {
       if (error instanceof StaleGeneration) result = staleResult();
       else {
@@ -799,6 +827,7 @@ export class Room {
       uploads: host.uploads?.enabled(this.id) ?? false,
       packs: host.packs,
       media: host.uploads?.media ?? null,
+      admin: { models: host.models, keys: host.keys },
     };
     return { source, modules: await this.#modules(), at: this.meta.head };
   }
@@ -859,12 +888,13 @@ export class Room {
    */
   #contextFor(who: Who, writer: RoomWriter, input: string): RoomContext {
     const { store } = this.#host.services;
+    const services = this.#servicesNow();
     const pack = this.pack;
     const stored = store.stateGet(this.id, ROOM_RULE_VARIANT);
     // A ladder the system does not declare grades by the default, as `rule` says.
     const variant = stored !== null && pack?.resolution?.variants.has(stored) === true ? stored : null;
     return {
-      services: this.#host.services,
+      services,
       room: this.id,
       turn: writer.turn,
       writer,
@@ -874,6 +904,26 @@ export class Room {
       who,
       random: new SeededRandom(`${this.id}:${writer.epoch}:${writer.turn}:${input}`),
     };
+  }
+
+  /**
+   * The services a new piece of work gets: the server's, with the model clients of the
+   * snapshot current NOW. The work keeps them to its end — a turn in flight when an admin
+   * switches the model finishes on the clients it started with, its NPC calls, fold and
+   * Scribe pass included (they all reach the model through this context) — and the next
+   * context is made on the new snapshot. One object per snapshot version, so contexts made
+   * on the same version share it.
+   */
+  #servicesNow(): Services {
+    const models = this.#host.models;
+    if (models === null) return this.#host.services;
+    const snapshot = models.snapshot();
+    if (this.#pinned?.version === snapshot.version) return this.#pinned.services;
+    const services: Services = { ...this.#host.services, models: snapshot.models };
+    const env = this.#host.env;
+    this.#envs.set(services, { ...env, settings: { ...env.settings, contextWindow: snapshot.contextWindow } });
+    this.#pinned = { version: snapshot.version, services };
+    return services;
   }
 
   #call(context: RoomContext, locale: string): CommandCall {

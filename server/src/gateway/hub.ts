@@ -15,9 +15,10 @@ import type { TurnEnvironment } from "../agent/turn/types.ts";
 import { RoomWorker } from "../infra/room_worker.ts";
 import type { WorkerHandle } from "../infra/runtime/worker.ts";
 import { OrderedChains } from "./chain.ts";
-import type { CommandRegistry, ModuleCommands } from "./commands/index.ts";
+import type { CommandRegistry, KeyAdmin, KeyBook, ModuleCommands } from "./commands/index.ts";
 import { currentWork, type RecordPlayerAction, type RunKeeperTurn, Work } from "./keeper.ts";
 import type { LaneSettings } from "./lanes.ts";
+import type { ModelSettings } from "./model_settings.ts";
 import { RoomModuleCommands } from "./module_commands.ts";
 import { RoomPacks } from "./packs.ts";
 import { DEFAULT_RATE_LIMIT, RateLimiter, type RateLimitSettings } from "./rate_limit.ts";
@@ -33,8 +34,10 @@ export interface HubDeps {
    * Build the server's command table around the module-command seam the hub provides
    * (`(modules) => new CommandRegistry({ modules })`): the seam needs the hub's rooms and
    * workers, the table is needed by the hub, so the hub makes the one call that joins them.
+   * `keys` is the access keys with the rooms' presence (the `key` command); null without
+   * `deps.keys`.
    */
-  readonly commands: (modules: ModuleCommands) => CommandRegistry;
+  readonly commands: (modules: ModuleCommands, keys: KeyAdmin | null) => CommandRegistry;
   /** One Keeper turn (`agent/turn` `runKeeperTurn`). */
   readonly runTurn: RunKeeperTurn;
   /** The record of commands players ran (`agent/turn` `recordPlayerAction`). */
@@ -58,6 +61,14 @@ export interface HubDeps {
   readonly uploads?: Uploads;
   /** The installed packs (the `packs` view); default: none. Give the command table the same object. */
   readonly packs?: RoomPacks;
+  /**
+   * The model lanes and image generation at run time. Present: each piece of work in a room
+   * runs on the snapshot current when its context was made, and every open room's views are
+   * refreshed after a change. Absent: `services.models` as given, for the server's life.
+   */
+  readonly models?: ModelSettings;
+  /** The access keys (the `key` command, `admin/keys`); absent: neither. */
+  readonly keys?: KeyBook;
   /** Per-member input rate (default: a burst of 5, one every 2 s). */
   readonly rateLimit?: RateLimitSettings;
   /** Start a room worker thread. */
@@ -96,10 +107,20 @@ export class Hub {
         reviewFact: (context) => this.room(context.room).reviewFactFor(context),
         moduleClock: (room) => this.room(room).moduleClock,
       }),
+      deps.keys === undefined ? null : { book: deps.keys, online: (room) => this.online(room) },
     );
     this.#packs.onInstalled((id) => {
       this.#packInstalled(id);
     });
+    // A switch of model or image settings is the server's: every open room's admin views follow.
+    deps.models?.onChange(() => {
+      for (const room of this.#rooms.values()) void room.refreshViews();
+    });
+  }
+
+  /** The member ids connected to `room` now (none for a room not open). */
+  online(room: string): ReadonlySet<string> {
+    return this.#rooms.get(room)?.onlineIds() ?? new Set();
   }
 
   /**
@@ -140,6 +161,8 @@ export class Hub {
       chains: this.#chains,
       uploads: deps.uploads ?? null,
       packs: this.#packs,
+      models: deps.models ?? null,
+      keys: deps.keys ?? null,
       kitFor: (room) => deps.kitFor(room),
       moduleWorker: (room) => this.moduleWorker(room),
       loreWorker: (room) => this.workerForLore(room),

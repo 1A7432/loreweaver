@@ -18,6 +18,10 @@ import {
 
 import { createHash } from "node:crypto";
 
+import { ModelSettings } from "../../src/gateway/model_settings.ts";
+import { ScriptedLLM } from "../../src/infra/llm/index.ts";
+import { openDatabase } from "../../src/infra/runtime/sqlite.ts";
+import { ServerSettings } from "../../src/infra/server_settings.ts";
 import { ByteChannel } from "../../src/net/bytes.ts";
 import { Session as ServerSession } from "../../src/net/session.ts";
 import { KEYS, reply, ROOM, RoomBench, type BenchOptions } from "../gateway/room_bench.ts";
@@ -578,4 +582,58 @@ test("audio: an admin uploads a sound for the library and plays it; a member who
   expect(seen?.library).toEqual([{ hash: sha256, mime: "audio/ogg", size: bytes.length }]);
   expect(bao.session.droppedFrames).toBe(0);
   expect(ada.session.droppedFrames).toBe(0);
+});
+
+test("keys and the model from a client: an admin mints a key and a second client joins with it; revoked, its link ends and it cannot rejoin; a player gets no admin view and is refused the commands", async () => {
+  const clients = new Map<string, ScriptedLLM>();
+  const models = new ModelSettings({ llm: { preset: "openai", apiKey: "sk-env-roundtrip-0123456789", model: "gpt-5.5" }, lanes: {} }, new ServerSettings(openDatabase(":memory:")), {
+    llm: (settings) => {
+      const client = new ScriptedLLM(() => `from ${settings.preset ?? "?"}`);
+      clients.set(settings.preset ?? "?", client);
+      return { client };
+    },
+  });
+  const b = setup({ models });
+  const root = await join(b, KEYS.root);
+  await done(b, root.session.viewSubscribe(["admin/keys", "admin/model"]));
+  expect(root.session.view("admin/model")?.data.lanes[0]).toMatchObject({ lane: "keeper", provider: "openai", source: "environment" });
+
+  const minted = await done(b, root.session.runCommand("key", { op: "mint", name: "Cleo" }));
+  if (!minted.ok) throw new Error(minted.error.code);
+  const { key, id } = minted.data as { key: string; id: string };
+  const cleo = await join(b, key);
+  expect(cleo.session.getSnapshot().welcome?.you).toMatchObject({ name: "Cleo", role: "player" });
+  await settle(b);
+  expect(root.session.view("admin/keys")?.data.keys.find((entry) => entry.id === id)).toMatchObject({ name: "Cleo", role: "player", online: true });
+
+  // The model, switched over the wire with the key in a structured call: the answer masks it.
+  const switched = await done(b, root.session.runCommand("model", { op: "set", provider: "deepseek", model: "deepseek-v4-pro", key: "sk-roundtrip-secret-0123456789" }));
+  expect(switched).toMatchObject({ ok: true, data: { lane: { provider: "deepseek", key: { masked: "sk-r...6789" } } } });
+  expect(root.session.view("admin/model")?.data.lanes[0]).toMatchObject({ provider: "deepseek", source: "override" });
+
+  const revoked = await done(b, root.session.runCommand("key", { op: "revoke", id }));
+  expect(revoked).toMatchObject({ ok: true, data: { id, revoked: true } });
+  expect(cleo.session.status).toBe("offline");
+  cleo.connect();
+  await settle(b);
+  expect(cleo.session.status).toBe("ended");
+  expect(cleo.session.getSnapshot().lastError).toMatchObject({ code: "bad_key", fatal: true });
+  expect(root.session.view("admin/keys")?.data.keys.map((entry) => entry.id)).not.toContain(id);
+
+  const ada = await join(b, KEYS.ada);
+  const subscribed = await done(b, ada.session.viewSubscribe(["admin/keys", "admin/model"]));
+  expect(subscribed).toEqual({ ok: true, data: { problems: [{ name: "admin/keys", code: "unknown_view" }, { name: "admin/model", code: "unknown_view" }] } });
+  expect(ada.session.view("admin/keys")).toBeNull();
+  expect(ada.session.view("admin/model")).toBeNull();
+  expect(await done(b, ada.session.runCommand("key", { op: "list" }))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+  expect(await done(b, ada.session.runCommand("model", { op: "set", provider: "openai", model: "gpt-5.5" }))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+  expect(await done(b, ada.session.input(".key mint admin Mallory"))).toMatchObject({ ok: false, error: { code: "forbidden" } });
+  // None of it went to the table, and nothing secret reached the player.
+  expect(ada.session.getSnapshot().events).toEqual([]);
+  const seenByAda = JSON.stringify(ada.received);
+  for (const secret of [key, "sk-roundtrip-secret-0123456789", "sk-env-roundtrip-0123456789"]) expect(seenByAda).not.toContain(secret);
+  expect(JSON.stringify(root.received)).not.toContain("sk-roundtrip-secret-0123456789");
+  expect(ada.seqs()).toEqual(serverSeqs(b));
+  expect(ada.session.droppedFrames).toBe(0);
+  expect(root.session.droppedFrames).toBe(0);
 });

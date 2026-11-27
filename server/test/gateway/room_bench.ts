@@ -12,13 +12,14 @@ import type { DirectorImageDeps } from "../../src/agent/lanes/director.ts";
 import type { RecallDeps } from "../../src/agent/recall.ts";
 import { type InstalledKit, mergeRoomKit, parsePresentationKit, type RoomKit } from "../../src/agent/lanes/presentation.ts";
 import { servicesOn } from "../../src/agent/services.ts";
-import type { TurnInput, TurnPorts, TurnResult } from "../../src/agent/turn/types.ts";
+import type { TurnEnvironment, TurnInput, TurnPorts, TurnResult } from "../../src/agent/turn/types.ts";
 import { selftestEnvironment } from "../../src/cli/selftest.ts";
 import { builtInPacks, RulePackRegistry } from "../../src/core/rulepacks/index.ts";
 import { CommandRegistry } from "../../src/gateway/commands/index.ts";
 import { Hub } from "../../src/gateway/hub.ts";
 import type { PlayerActionEntry } from "../../src/gateway/keeper.ts";
 import { type LaneSettings, LANES_OFF } from "../../src/gateway/lanes.ts";
+import type { ModelSettings } from "../../src/gateway/model_settings.ts";
 import type { RateLimitSettings } from "../../src/gateway/rate_limit.ts";
 import type { RoomPacks } from "../../src/gateway/packs.ts";
 import { REVIEW_OFF } from "../../src/gateway/review.ts";
@@ -54,6 +55,8 @@ export interface TurnCall {
   readonly context: RoomContext;
   readonly input: TurnInput;
   readonly ports: TurnPorts;
+  /** The turn environment the room handed this turn. */
+  readonly env: TurnEnvironment;
 }
 
 export type TurnScript = (call: TurnCall) => Promise<TurnResult> | TurnResult;
@@ -89,8 +92,8 @@ export class Keeper {
     this.#scripts.push(...scripts);
   }
 
-  readonly run = async (context: RoomContext, input: TurnInput, ports: TurnPorts): Promise<TurnResult> => {
-    const call = { context, input, ports };
+  readonly run = async (context: RoomContext, input: TurnInput, ports: TurnPorts, env: TurnEnvironment): Promise<TurnResult> => {
+    const call = { context, input, ports, env };
     this.calls.push(call);
     // As the engine's first step does: one `busy` per turn, the engine's (the room sends none).
     ports.signal("turn", { status: "busy", actor: input.speaker });
@@ -124,6 +127,8 @@ export interface BenchOptions {
   readonly recall?: RecallDeps;
   /** Installed packs (given the bench's media store, when it has one): modules, kit, skills and cards come from the room's enabled packs. */
   readonly packs?: (media: MediaStore | null) => RoomPacks;
+  /** The model lanes at run time (`model`, `imagegen`, `admin/model`); each piece of work pins a snapshot. */
+  readonly models?: ModelSettings;
 }
 
 export const LANES_ON: LaneSettings = { scribe: true, director: true, directorSettings: { imagesEnabled: false, maxImages: 0, pregenPerBeat: 0 } };
@@ -186,7 +191,7 @@ export class RoomBench {
     this.hub = new Hub({
       services,
       env: packs === null ? selftestEnvironment() : { ...selftestEnvironment(), skills: packs.skillRegistry },
-      commands: (seam) => new CommandRegistry({ modules: seam, uploads, recall: options.recall ?? null, packs }),
+      commands: (seam, keys) => new CommandRegistry({ modules: seam, uploads, recall: options.recall ?? null, packs, keys, models: options.models ?? null }),
       runTurn: this.keeper.run,
       recordPlayerAction: (_context, entry) => {
         this.actions.push(entry);
@@ -204,6 +209,8 @@ export class RoomBench {
       ...(packs === null ? {} : { packs }),
       workerTimeoutMs: 5000,
       ...(uploads === null ? {} : { uploads }),
+      keys: this.keystore,
+      ...(options.models === undefined ? {} : { models: options.models }),
     });
     this.keystore.add(KEYS.ada, { room: ROOM, name: "Ada", role: "player" });
     this.keystore.add(KEYS.bao, { room: ROOM, name: "Bao", role: "player" });

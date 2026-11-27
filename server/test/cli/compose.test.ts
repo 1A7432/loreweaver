@@ -226,3 +226,33 @@ test("bad settings and an unreadable word list refuse to start, by code", async 
   // Refused before anything was opened.
   expect(existsSync(join(dir, "loreweaver.db"))).toBe(false);
 });
+
+test("serve: an admin's model switch survives a restart on the same data directory, the database is the owner's, and a reset brings back the variables'", async () => {
+  const dir = dataDir();
+  const env = { TRPG_DATA_DIR: dir, TRPG_LLM__PROVIDER: "openai", TRPG_LLM__API_KEY: "sk-env-compose-0123456789", TRPG_LLM__CHAT_MODEL: "gpt-5.5" };
+  const first = await run(["serve", "--local"], env);
+  expect(first.code).toBe(0);
+  expect(JSON.parse(first.out).notes).toEqual(["recall_off", "context_window_unknown"]);
+  expect(statSync(join(dir, "loreweaver.db")).mode & 0o077).toBe(0);
+  const server = first.server;
+  if (server === undefined) throw new Error("no server");
+  const frames: ServerFrame[] = [];
+  const admin = member("m-admin", "Admin", "admin", frames);
+  const room = server.hub.room(FIRST_ROOM);
+  room.join(admin);
+  const answer = await new Promise<unknown>((resolve) => {
+    room.run(admin, "model", { op: "set", provider: "deepseek", model: "deepseek-v4-pro", key: "sk-compose-secret-0123456789" }, resolve);
+  });
+  expect(answer).toMatchObject({ ok: true, data: { lane: { provider: "deepseek", source: "override" } } });
+  expect(server.models.snapshot().contextWindow).toBe(1_000_000);
+  await server.close();
+
+  const again = await run(["serve", "--local"], env);
+  const restarted = again.server;
+  if (restarted === undefined) throw new Error("no server");
+  expect(JSON.parse(again.out).notes).toEqual(["recall_off"]);
+  expect(restarted.models.describeLane("keeper")).toMatchObject({ source: "override", provider: "deepseek", model: "deepseek-v4-pro", key: { set: true, masked: "sk-c...6789" } });
+  expect(restarted.models.reset()).toEqual({ ok: true, lanes: ["keeper"] });
+  expect(restarted.models.describeLane("keeper")).toMatchObject({ source: "environment", provider: "openai", model: "gpt-5.5" });
+  await restarted.close();
+});

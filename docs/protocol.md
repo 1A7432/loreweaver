@@ -197,9 +197,11 @@ the welcome, and again after every reconnect ([10.2](#102-subscribing)).
 |---|---|
 | `player` | Speak, run player commands, subscribe to views, upload (when uploads are on), fetch room media. |
 | `admin` | Everything a player may, plus admin commands and admin-only arguments, and fetch admin-only files. |
-| `observer` | Watch: receive events, signals and views, run the few commands marked for observers (`help`, `recap`, `uploads` without arguments), fetch room media. An observer's speech is refused (`observer_speech`) and so are its uploads (`observer_upload`). |
+| `observer` | Watch: receive events, signals and views, run the few commands marked for observers (`help`, `recap`, `uploads` without arguments, `model list` without arguments), fetch room media. An observer's speech is refused (`observer_speech`) and so are its uploads (`observer_upload`). |
 
-The role belongs to the key; it cannot be changed from a connection. "Keeper" is never a
+The role belongs to the key; it cannot be changed from a connection. A room admin changes a
+key's role with the `key` command ([6.8](#68-the-engines-commands)): the holder's live
+connections then end, and the client comes back with the new role in its `welcome`. "Keeper" is never a
 role: the Keeper is the AI. The person with the admin key is the room admin.
 
 ### 4.5 Connection-level errors
@@ -314,6 +316,9 @@ opens no Keeper turn. Three commands are **room-lifecycle** commands and do not 
 lock: `undo`, `reset` and `save` (export and import). They run at once, even in the middle of a
 Keeper turn; work of the old generation still running (a turn waiting on the model, a queued
 line) fails to commit by itself, and the in-flight turn ends with its `turn idle` signal as usual.
+`pack install`, `model`, `imagegen` and `key` do not wait for the lock either: they act on the
+server (a fetch, a model switch, a revoked key) and must not sit behind a turn. A turn in flight
+when the model is switched finishes on the model it started with.
 
 ### 6.3 Text forms
 
@@ -362,7 +367,7 @@ codes a client meets most:
 | `command_failed` | The server failed; nothing was changed. |
 
 Commands add their own (`bad_dice`, `no_character`, `name_taken`, `reset_not_armed`,
-`undo_out_of_range`, `undo_beyond_depth`, `not_uploaded`, `not_a_card`, …). A code without a
+`undo_out_of_range`, `undo_beyond_depth`, `not_uploaded`, `not_a_card`, `last_admin`, …). A code without a
 sentence of its own is stated with a generic message that includes the code. Treat any code you
 do not know as a plain refusal and show `message`.
 
@@ -390,7 +395,7 @@ this viewer may use them now:
 - An admin command is not listed to a non-admin at all.
 - Some player commands need the admin for certain arguments (`bot` with `on`, `rule` with
   `variant` or `system`, `uploads` with `on`, `init` with `name`, `lore` with anything but
-  `list`, `import` with `as: "world"`). The entry says `role: "player"`; the admin-only
+  `list`, `import` with `as: "world"`, `model` with anything but a bare `list`). The entry says `role: "player"`; the admin-only
   arguments are refused with `forbidden`. See the table in [6.8](#68-the-engines-commands).
 - `text.forms` lists the viewer's language table (or the other one when it is empty). The
   server accepts the forms of both tables.
@@ -477,6 +482,9 @@ argument. Text forms are given as English table / Chinese table; with any of the
 | `help` | player, observer | `help`, `h` / `help`, `帮助` | `id?` (1–128) | The `commands` view as text; with `id` (an id or a form), one command. |
 | `audio` | admin | `audio` / `audio`, `音频`, `音訊` | `op` (`list`\|`set`\|`remove`), `query?` (1–400), `title?` (1–400), `layer?` (`bgm`\|`ambience`\|`sfx` or `null`), `tags?` (≤16 of 1–32) | The room's audio library ([10.4](#104-built-in-views) `audio`): the sounds its admin uploaded with `purpose: "audio"` ([11.2](#112-offering-a-file)) and the cues of its enabled packs, named `<pack>/<cue>`. `list`: `data {sounds: [{id, title, layer, tags, source}]}`. `set` changes an upload's title, layer and tags; `remove` takes an upload out of the library (what plays it stops; its bytes go unless the table's log or an enabled pack still uses them). A pack's cue is read-only (`audio_read_only`). Text forms: `audio [list]`, `audio set <sound> title=<t> layer=<l> tags=a,b` (a value with spaces in quotes), `audio remove <sound>`. Available when the server keeps files (`no_media`). |
 | `bgm`, `ambience`, `sfx` | admin | `bgm` / `bgm`, `背景音乐`, `背景音樂`; `ambience`, `amb` / `ambience`, `amb`, `环境音`, `環境音`; `sfx` / `sfx`, `音效` | `op` (`play`\|`stop`\|`pause`\|`resume`\|`volume`), `query?` (1–400), `loop?`, `volume?` (a number 0–1), `fadeMs?` (0–60000) | One command per layer. `play` names a library sound by `query` — its id, else its exact title (or an upload's file name, or a cue's id without the pack), else a unique prefix of an id or title, else a unique substring — and plays it (`bgm` and `ambience` loop unless `loop: false`; volume 1 unless given); `stop`, `pause`, `resume`, `volume` act on what the layer plays (`audio_not_playing` when nothing). One `audio` signal ([9.4](#94-audio)) to the table; `data {layer, action, …}`. Refusals: `audio_not_found`, `audio_ambiguous` (the message names up to five candidates), `audio_bad_volume`, `audio_bad_fade`. Text forms: `bgm [play] <sound> [--loop\|--once] [--volume 0.7\|70%] [--fade 2000]`, `bgm stop\|pause\|resume [--fade N]`, `bgm volume <0–1\|N%>`; the Chinese words `播放`, `停止`, `暂停`, `继续`, `音量` too. |
+| `model` | player, observer for `list` without `provider`/`lane`; everything else: admin | `model`, `models` / `model`, `模型` | `op` (`show`\|`list`\|`set`\|`key`\|`reset`), `lane?` (`keeper`\|`npc`\|`scribe`\|`director`\|`memory`; default `keeper`), `provider?` (1–64), `model?` (1–200), `key?` (1–1000), `baseUrl?` (1–2000), `wire?` (`openai-compatible`\|`anthropic`\|`openai-responses`), `effort?` (`low`\|`medium`\|`high`\|`xhigh`\|`max`), `contextWindow?`, `maxOutputTokens?`, `timeoutMs?` (positive integers), `promptCacheKey?` (boolean) | The model each lane uses, **server-wide** (every room follows). `show`: `data` is the [`admin/model`](#104-built-in-views) value. `list` without `provider` or `lane`: the providers this server knows, for anyone (`data {providers}`); with them, or from an admin: asks that provider for its models — `data {providers, provider, models, total, truncated, skipped}`, at most 500 ids of at most 200 code points, ids that are not are skipped and counted (`model_list_timeout`, `model_list_too_large`, `model_list_failed` with the provider's class of failure in the message, `model_not_configured`, `unknown_provider`). `set`: the lane now talks to `provider` (a preset, or any name with `baseUrl`); a key not given is the one saved for that provider, or the server's own (`unknown_provider`, `model_required`, `model_wire_mismatch`, `bad_provider`, `bad_model_id`, `bad_base_url`, `bad_key`, `too_many_credentials`); `data {lane, keySaved}`. `key`: the key of the provider the lane uses now, saved for that provider. `reset`: the lane (or every lane) goes back to the server's settings; saved keys stay; `data {reset, keeper}`. Keys come back masked (`sk-a...wxyz`). The next turn uses the new model; a turn in flight finishes on the one it started with. Runs without queuing behind the room's turns. No event. Text forms: `model [show]`, `model list [provider] [lane=…]`, `model set <provider> [model] [key=…] [base_url=…] [wire=…] [effort=…] [context=N] [max_output=N] [timeout=N] [cache=on\|off] [lane=…]`, `model key <key> [lane=…]`, `model reset [lane]`; the words `show`/`查看`, `list`/`列表`, `set`/`use`/`切换`, `key`/`密钥`, `reset`/`重置`. |
+| `imagegen` | admin | `imagegen` / `imagegen`, `图片生成`, `圖片生成` | `op` (`show`\|`set`\|`off`), `provider?` (1–64: `openai`, `xai`, or a name with `baseUrl`), `model?` (1–200), `size?` (`WIDTHxHEIGHT` or `auto`), `key?`, `baseUrl?` | Image generation, server-wide. `set` without `baseUrl` needs a provider whose address is known (`openai`) or saved (`image_base_url_required`, `bad_image_size`); `off` stops pictures until an admin sets a provider again. `data {imagegen}` as in `admin/model`. No event. Text forms: `imagegen [show]`, `imagegen set <provider> [model] [size] [key=…] [base_url=…]`, `imagegen off`. |
+| `key` | admin | `key`, `keys` / `key`, `钥匙`, `鑰匙` | `op` (`list`\|`mint`\|`rename`\|`role`\|`revoke`), `id?` (a key id, `k:` and 12 hex digits), `name?` (1–64), `role?` (`player`\|`admin`\|`observer`) | This room's access keys only. `list`: `data {keys}` as in [`admin/keys`](#104-built-in-views). `mint {name, role?}` (default `player`): `data {id, name, role, key}` — the new key, in this answer and nowhere else, ever. `rename {id, name}`. `role {id, role}`: the holder's live connections end, to come back with the new role. `revoke {id}`: the key stops working and the holder's live connections end; a client redialling with it gets `bad_key`. The room's last admin key cannot be revoked or demoted (`last_admin`); an admin may revoke the key they are connected with while another admin key exists, and is disconnected after the answer. `unknown_key_id` for an id that is not this room's. No event. Text forms: `key [list]`, `key mint [player\|admin\|observer] <name>`, `key rename <id> <name>`, `key role <id> <role>`, `key revoke <id>`; `新建`, `改名`, `角色`, `吊销` too. |
 | `panels` | player, observer; `enable`, `disable`: admin | `panels`, `panel` / `panels`, `面板`, `模组面板` | `op` (`list`\|`enable`\|`disable`), `id?` (`<pack>/<panel>`, 1–129) | The panels of the room's enabled packs ([10.6](#106-panels)). Every one is on by default; the admin's switch is a room setting that survives resets. `panel_not_available` for an id no enabled pack has. |
 
 **Rule-pack commands** depend on the room's rule system. With the built-in systems only `coc7`
@@ -487,6 +495,20 @@ has any:
 | `rules.sanity_check` | `sc`, `sanity` | `success?`, `failure?` (loss notations, 1–100), `tag?` (≤64) |
 | `rules.skill_growth` | `en`, `growth` | `skill` |
 | `rules.random_madness` | `ti`, `li` | `table?` (1–64) |
+
+### 6.9 Sending a secret
+
+`model` and `imagegen` take API keys, and `key mint` answers with an access key. A client
+should send a secret with **`command.run`**, from a field of its own (masked as the person
+types), never as a typed line in the place where speech is written: a mistyped command word
+makes the line speech, and speech is said at the table as written ([6.3](#63-text-forms)).
+
+The server keeps a secret to the caller either way. These commands publish no event, so a key
+reaches neither the table, nor the log (`log.page`), nor the record of commands the Keeper
+reads; a refusal carries a code and never the arguments; an answer and `admin/model` show a key
+only masked: its first and last four characters (`sk-a...wxyz`), or only stars for one of 16
+characters or fewer. The access key `key mint` makes is in that one answer and nowhere else.
+A key set from chat is stored in the server's database, which only the server's owner can read.
 
 ## 7. The event log
 
@@ -848,6 +870,10 @@ sees what a player may see, an admin also sees what is hidden from players (mark
 connections of one member with the same role, language and character share one computation.
 When a member's character or role changes, the next refresh computes for the new viewer.
 
+Views named `admin/…` are for admins alone. Anyone else is never sent one, not even empty:
+`view.list` does not list them, `view.subscribe` answers `unknown_view` for them, and
+`view.get` refuses them.
+
 ### 10.4 Built-in views
 
 The JSON Schemas are in the protocol package (`BUILT_IN_VIEW_SCHEMAS`) and in `view.list`.
@@ -959,6 +985,36 @@ ones players do not see marked `hidden: true`.
 A player sees only what fetching needs because a sound's name is content: a pack's cue titles and
 an admin's uploads may tell the story before the table hears it. What plays is named for
 everyone.
+
+**`admin/model`** (admins only): what each model lane and image generation use now. Server-wide:
+it changes for every room's admins when one of them runs `model` or `imagegen`.
+
+| field | type | meaning |
+|---|---|---|
+| `lanes` | `[lane]` | `keeper`, `npc`, `scribe`, `director`, `memory` (the chronicle fold), in that order. |
+| `lane.source` | string | `override` (an admin set it), `environment` (the server's own settings), `default` (nothing set: for the Keeper, no model; for another lane, it uses the Keeper's). |
+| `lane.sameAsKeeper` | boolean | The lane uses the Keeper's client. |
+| `lane.provider`, `.model`, `.baseUrl`, `.wire`, `.effort` | string or `null` | `provider` is a preset id or an admin's name for an endpoint; `null` for an endpoint the server's settings name by address only. `wire` is `openai-compatible`, `anthropic` or `openai-responses`. |
+| `lane.contextWindow` | integer or `null` | In tokens; `null` when unknown. |
+| `lane.key` | `{set, masked}` | Whether a key is set, and its masked form (`null` when none). Never the key. |
+| `providers` | `[{id, preset, wire, baseUrl, credential}]` | The presets this server knows, then the endpoints admins saved under a name of their own; `credential`: a key is saved for it (or the server's settings have one). |
+| `imagegen` | `{source, enabled, provider, model, size, baseUrl, key}` | Image generation; `source` as for a lane (an `override` with `enabled: false` is `imagegen off`). |
+| `imageProviders` | `[{id, credential}]` | `openai`, `xai`, then saved names. |
+
+**`admin/keys`** (admins only): this room's access keys. Never another room's.
+
+| field | type | meaning |
+|---|---|---|
+| `keys` | `[{id, name, role, masked, created?, online}]` | `id` is what the `key` command takes, never the key. `masked` is the key's first and last characters. `created` (ms) is absent for a key minted before this was recorded. `online`: someone is connected with it now. Refreshed when keys change and when members connect or leave. |
+
+**`admin/content`** (admins only): what this room can use and has on.
+
+| field | type | meaning |
+|---|---|---|
+| `skills` | `[{id, title, enabled, source}]` | The Keeper's skills this room may enable (the built-in ones and those of its enabled packs). |
+| `ruleSystems` | `[{id, title, enabled, source}]` | The server's rule systems; `enabled` marks the room's. |
+| `packs` | `[{id, title, version, enabled}]` | The installed packs; `enabled`: this room enabled it. |
+| `source` | `{kind, id}` | `kind` `builtin` (`id` `null`) or `pack` (`id` the pack). |
 
 ### 10.5 Module views
 
@@ -1178,6 +1234,8 @@ terminal control characters before writing to a terminal: `loreweaver-protocol/v
 | offered file name | 255 code points | `MAX_OFFER_NAME_CHARS` |
 | offers | 10 per member per room per minute | server default |
 | reset confirmation window | 60 s | server |
+| model ids in a `model list` answer | 500, each ≤ 200 code points | server |
+| `model list` wait for the provider | 15 s | server |
 
 ### 12.5 Result error codes
 
@@ -1338,7 +1396,4 @@ These are defined in the design, or reserved in the code, but not built in 3.0:
   no reference client runs one yet (the terminal client shows the fallback). The page bridge
   is the desktop client's to define. Panels a room publishes at runtime (`source.kind:
   "room"`) are reserved: no server produces them.
-- **Admin views** (`admin/model`, `admin/keys`, `admin/content`): the names under `admin/` are
-  reserved for admins; no such view exists yet. Keys are minted by the operator
-  (`loreweaver key`), not over the protocol.
 - **`turn.activity`, `turn.round` and `notice.spinner`** are defined in the frames but not sent.

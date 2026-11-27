@@ -19,7 +19,10 @@ import { SeededRandom } from "../../../src/core/random.ts";
 import { relationshipsDocumentType } from "../../../src/core/relationships/index.ts";
 import { builtInPacks, RulePackRegistry } from "../../../src/core/rulepacks/index.ts";
 import { moduleVariablesDocument, variableTreeDocument } from "../../../src/core/variables/index.ts";
-import { CommandRegistry, type CommandOutcome, type CommandSuccess, type ModuleCommands, ROOM_RULE_VARIANT, whoIn } from "../../../src/gateway/commands/index.ts";
+import { CommandRegistry, type CommandOutcome, type CommandSuccess, type KeyAdmin, type ModuleCommands, ROOM_RULE_VARIANT, whoIn } from "../../../src/gateway/commands/index.ts";
+import { ModelSettings } from "../../../src/gateway/model_settings.ts";
+import { ServerSettings } from "../../../src/infra/server_settings.ts";
+import { Keystore } from "../../../src/net/keystore.ts";
 import { Uploads } from "../../../src/gateway/uploads.ts";
 import type { Clock } from "../../../src/infra/ids.ts";
 import { type MediaLimits, MediaStore } from "../../../src/infra/media/index.ts";
@@ -61,6 +64,9 @@ export interface Bench {
   input(member: Member, line: string, locale?: string): ReturnType<CommandRegistry["input"]>;
   /** Run `command.run` as `member`. */
   run(member: Member, id: string, args: unknown, locale?: string): Promise<CommandOutcome>;
+  /** The model settings and keystore, when the bench was made with `admin`. */
+  readonly models: ModelSettings | null;
+  readonly keystore: Keystore | null;
 }
 
 /** Blob directories of benches made with `media`, removed when the test process ends. */
@@ -77,7 +83,12 @@ export interface BenchOptions {
   /** A media store (in a temporary directory) behind `uploads` and `import`; with these limits when given. */
   readonly media?: boolean | MediaLimits;
   readonly recall?: RecallDeps;
+  /** Model settings (an OpenAI Keeper, scripted clients) and an in-memory keystore with one admin key, behind `model`, `imagegen` and `key`. */
+  readonly admin?: boolean;
 }
+
+/** The Keeper's key in an `admin` bench's settings. */
+export const ENV_KEY = "sk-env-keeper-0123456789";
 
 export function bench(options: BenchOptions = {}): Bench {
   const db = openDatabase(":memory:");
@@ -124,7 +135,19 @@ export function bench(options: BenchOptions = {}): Bench {
     mediaDirs.push(dir);
     uploads = new Uploads(new MediaStore(dir, db, { clock: fixedClock(), ...(options.media === true ? {} : { limits: options.media }) }));
   }
+  let models: ModelSettings | null = null;
+  let keystore: Keystore | null = null;
+  let keys: KeyAdmin | null = null;
+  if (options.admin === true) {
+    models = new ModelSettings({ llm: { preset: "openai", apiKey: ENV_KEY, model: "gpt-5.5" }, lanes: {} }, new ServerSettings(db), { llm: () => ({ client: new ScriptedLLM([]) }), image: () => ({ generate: () => Promise.reject(new Error("no pictures in tests")) }) });
+    keystore = new Keystore();
+    keystore.add("root-key-0123456789abcdef", { room: ROOM, name: "Root", role: "admin" });
+    keystore.add("ada-key-0123456789abcdef", { room: ROOM, name: "Ada", role: "player" });
+    keys = { book: keystore, online: () => new Set() };
+  }
   const registry = new CommandRegistry({
+    models,
+    keys,
     modules: options.modules ?? null,
     uploads,
     recall: options.recall ?? null,
@@ -138,6 +161,8 @@ export function bench(options: BenchOptions = {}): Bench {
     reports,
     uploads,
     system: options.system === undefined ? "coc7" : options.system,
+    models,
+    keystore,
     context(member, contextOptions = {}) {
       const writer = contextOptions.newTurn === false ? store.writer(ROOM) : store.beginTurn(ROOM);
       const pack = self.system === null ? null : packs.get(self.system);

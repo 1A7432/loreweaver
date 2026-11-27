@@ -2,6 +2,7 @@
 // commands, a rule pack's command words and the module commands share one table; a text
 // line and `command.run` reach the same handler.
 export { COMMANDS_CATALOG } from "./catalog.ts";
+export { type AdminKey, type KeyAdmin, type KeyBook } from "./engine/admin.ts";
 export { parseAssignments, MAX_SHEET_WRITES } from "./engine/sheet.ts";
 export { parseCheckText, subsystemCommandId } from "./engine/checks.ts";
 export { RESET_CONFIRM_MS, ResetGate } from "./engine/room.ts";

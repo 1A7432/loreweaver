@@ -225,6 +225,84 @@ export interface AudioView {
   playing: { bgm?: ViewAudioLayer; ambience?: ViewAudioLayer };
 }
 
+/** Where a model or image setting comes from: an admin's override, the operator's `TRPG_*` variables, or nothing set. */
+export type SettingSource = "override" | "environment" | "default";
+
+/** A secret as an admin view shows it: whether one is set, and its first and last few characters. Never the secret. */
+export interface MaskedSecret {
+  set: boolean;
+  /** `sk-a...wxyz`, or stars for a short one; `null` when none is set. */
+  masked: string | null;
+}
+
+/** One model lane of `admin/model`. */
+export interface AdminModelLane {
+  /** `keeper`, `npc`, `scribe`, `director`, or `memory` (the chronicle fold). */
+  lane: "keeper" | "npc" | "scribe" | "director" | "memory";
+  /** `default` on a lane other than the Keeper's: it uses the Keeper's client (`sameAsKeeper`). */
+  source: SettingSource;
+  sameAsKeeper: boolean;
+  /** A preset id, an admin's label for an endpoint, or `null` (nothing configured, or an operator endpoint named by URL only). */
+  provider: string | null;
+  model: string | null;
+  baseUrl: string | null;
+  wire: "openai-compatible" | "anthropic" | "openai-responses" | null;
+  effort: string | null;
+  /** In tokens; `null` when neither the settings nor the server's table know it. */
+  contextWindow: number | null;
+  key: MaskedSecret;
+}
+
+/**
+ * `admin/model` (admins only): what each model lane and image generation use now, and the
+ * providers this server knows. Keys are masked; the view never carries one whole.
+ */
+export interface AdminModelView {
+  lanes: AdminModelLane[];
+  /** The presets, then any endpoint an admin saved under a name of their own. */
+  providers: { id: string; preset: boolean; wire: "openai-compatible" | "anthropic" | "openai-responses" | null; baseUrl: string | null; credential: boolean }[];
+  imagegen: {
+    source: SettingSource;
+    enabled: boolean;
+    provider: string | null;
+    model: string | null;
+    size: string | null;
+    baseUrl: string | null;
+    key: MaskedSecret;
+  };
+  imageProviders: { id: string; credential: boolean }[];
+}
+
+/** `admin/keys` (admins only): this room's access keys. `id` is what the `key` command takes; the key itself is never here. */
+export interface AdminKeysView {
+  keys: {
+    id: string;
+    name: string;
+    role: Role;
+    masked: string;
+    /** When it was minted (ms since the epoch); absent for a key from before this was recorded. */
+    created?: number;
+    /** Someone is connected with it now. */
+    online: boolean;
+  }[];
+}
+
+/** `admin/content` (admins only): the skills, rule systems and packs this room can use, and which are on. */
+export interface AdminContentView {
+  /** The Keeper's skills this room may enable: the built-in ones and those of its enabled packs. */
+  skills: { id: string; title: string; enabled: boolean; source: AdminContentSource }[];
+  /** The rule systems on this server; `enabled` marks the room's. */
+  ruleSystems: { id: string; title: string; enabled: boolean; source: AdminContentSource }[];
+  /** The packs installed on this server; `enabled` marks those this room enabled. */
+  packs: { id: string; title: string; version: string; enabled: boolean }[];
+}
+
+/** Where a skill or rule system comes from: built into the server, or a pack (`id`). */
+export interface AdminContentSource {
+  kind: "builtin" | "pack";
+  id: string | null;
+}
+
 /** Every built-in view by name. */
 export interface BuiltInViews {
   me: MeView;
@@ -238,6 +316,9 @@ export interface BuiltInViews {
   packs: PacksView;
   panels: PanelsView;
   audio: AudioView;
+  "admin/model": AdminModelView;
+  "admin/keys": AdminKeysView;
+  "admin/content": AdminContentView;
 }
 
 export type BuiltInViewName = keyof BuiltInViews;
@@ -432,6 +513,42 @@ export const AUDIO_VIEW_SCHEMA: ViewSchema = record({
   playing: record({ bgm: AUDIO_PLAYING_LAYER, ambience: AUDIO_PLAYING_LAYER }, ["bgm", "ambience"]),
 });
 
+const SOURCE = { type: "string", enum: ["override", "environment", "default"] } as const;
+const WIRE = { anyOf: [{ type: "string", enum: ["openai-compatible", "anthropic", "openai-responses"] }, { type: "null" }] } as const;
+const MASKED = record({ set: BOOLEAN, masked: NULLABLE_STRING });
+
+export const ADMIN_MODEL_VIEW_SCHEMA: ViewSchema = record({
+  lanes: list(
+    record({
+      lane: { type: "string", enum: ["keeper", "npc", "scribe", "director", "memory"] },
+      source: SOURCE,
+      sameAsKeeper: BOOLEAN,
+      provider: NULLABLE_STRING,
+      model: NULLABLE_STRING,
+      baseUrl: NULLABLE_STRING,
+      wire: WIRE,
+      effort: NULLABLE_STRING,
+      contextWindow: NULLABLE_INTEGER,
+      key: MASKED,
+    }),
+  ),
+  providers: list(record({ id: STRING, preset: BOOLEAN, wire: WIRE, baseUrl: NULLABLE_STRING, credential: BOOLEAN })),
+  imagegen: record({ source: SOURCE, enabled: BOOLEAN, provider: NULLABLE_STRING, model: NULLABLE_STRING, size: NULLABLE_STRING, baseUrl: NULLABLE_STRING, key: MASKED }),
+  imageProviders: list(record({ id: STRING, credential: BOOLEAN })),
+});
+
+export const ADMIN_KEYS_VIEW_SCHEMA: ViewSchema = record({
+  keys: list(record({ id: STRING, name: STRING, role: ROLE, masked: STRING, created: INTEGER, online: BOOLEAN }, ["created"])),
+});
+
+const CONTENT_SOURCE = record({ kind: { type: "string", enum: ["builtin", "pack"] }, id: NULLABLE_STRING });
+
+export const ADMIN_CONTENT_VIEW_SCHEMA: ViewSchema = record({
+  skills: list(record({ id: STRING, title: STRING, enabled: BOOLEAN, source: CONTENT_SOURCE })),
+  ruleSystems: list(record({ id: STRING, title: STRING, enabled: BOOLEAN, source: CONTENT_SOURCE })),
+  packs: list(record({ id: STRING, title: STRING, version: STRING, enabled: BOOLEAN })),
+});
+
 /** The schema of every built-in view, by name. */
 export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchema } = {
   me: ME_VIEW_SCHEMA,
@@ -445,6 +562,9 @@ export const BUILT_IN_VIEW_SCHEMAS: { readonly [K in BuiltInViewName]: ViewSchem
   packs: PACKS_VIEW_SCHEMA,
   panels: PANELS_VIEW_SCHEMA,
   audio: AUDIO_VIEW_SCHEMA,
+  "admin/model": ADMIN_MODEL_VIEW_SCHEMA,
+  "admin/keys": ADMIN_KEYS_VIEW_SCHEMA,
+  "admin/content": ADMIN_CONTENT_VIEW_SCHEMA,
 };
 
 /** One entry of `view.list`. */
