@@ -323,9 +323,15 @@ text: ["attack {target}", "attack {target} {times}", "attack at {target}", "say 
 When several forms of one word fit a line, the one with the most literal words wins, then
 the first declared. **The room's own words win**: a form whose command word is one of the
 engine's command words or of the room's rule system is dropped, and so is a word that two
-enabled modules both claim — dropped for both. Each drop is told to the operator, and named
-in the admin's answer when a pack is enabled. The `commands` view lists, for each module
-command, the words that run it now and its forms as typed.
+enabled modules both claim — dropped for both. For example, a form `check {target}` is dropped
+when the pack is enabled, because `check` is an engine command word: the engine's and the
+rule system's words always win. Each drop is told to the operator, and named in the admin's
+answer when a pack is enabled. The `commands` view lists, for each module command, the
+words that run it now and its forms as typed.
+
+`host.text` of the test host reads and matches forms with the engine's own code, so your tests
+can cover them ([Testing a module](#testing-a-module)); the host cannot know about words the
+engine or other modules own, so these drops happen only in a room.
 
 #### Arguments
 
@@ -337,7 +343,8 @@ points), `minItems`/`maxItems` and `items`. Every other keyword is ignored. A mi
 refused with the engine's own codes and the argument's path — `unknown_arg` (a name an
 `additionalProperties: false` object does not list), `missing_arg`, `invalid_arg` — to a
 member as for an engine command, to the Keeper as its tool result. A command without
-`params` takes any JSON object.
+`params` takes any JSON object. The test host runs the same check before it calls `run`
+(`host.command`, `host.keeperCommand`, `host.text`).
 
 A command that only the Keeper should run — a clock it advances, a reveal it triggers —
 declares `role: "keeper"`. A command both may run can say more to the Keeper than to a
@@ -603,13 +610,15 @@ The host:
 | `turnStart({ text, who?, turn?, seed?, variables?, clock? })` | Fires the event. `turn` defaults to one past the last. |
 | `toolUse(calls, who?, room?)` | `calls` are `{ id?, name, args? }`; returns `verdicts` in call order: `true` or the first denial's reason. |
 | `replyPhase({ reply, who?, turn?, seed?, variables?, clock?, rolls?, clockAdvances?, variableWrites? })` | Fires the event. |
-| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role and `available` checks, and its further steps while it answers `more: true`, as the engine does; `outcome` is `{ status: "ok", result }` (`result` as its caller is answered: for a stepped command the last step's `text` and `data: { steps, data, stopped? }`), `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`; `steps` is how many steps completed and `stopped` why the loop was cut (`"steps"`, `"time"`, `"failed"`) or null. The arguments are passed as given: the host does not check them against `params` or match text forms (that is the engine's half). |
+| `command(name, args?, who?, room?)` | Runs a command as the member `who` (`call.by` is `"member"`) with the engine's role, argument and `available` checks, and its further steps while it answers `more: true`, as the engine does; `outcome` is `{ status: "ok", result }` (`result` as its caller is answered: for a stepped command the last step's `text` and `data: { steps, data, stopped? }`), `{ status: "refused", reason: "unknown" \| "role" }`, `{ status: "refused", reason: "args", code, path }` (the arguments do not fit `params`: `code` is `unknown_arg`, `missing_arg` or `invalid_arg`, as a member is refused, and `path` is the argument's, dotted, empty for the arguments as a whole; the module was not called), `{ status: "refused", reason: "unavailable", text }` or `{ status: "failed", error }`; `steps` is how many steps completed and `stopped` why the loop was cut (`"steps"`, `"time"`, `"failed"`) or null. The checks come in the engine's order: the command exists, the role allows it, the arguments fit [`params`](#arguments), then `available`. |
+| `text(line, who?, room?)` | What a member types after the `.` prefix (`"attack Bo"`, `"j 攻 刀客"`). It is matched against the forms of the module's own commands — the command word case-folded, the form with the most literal words winning, then declaration order — and the captured words are converted by their property's `type`; then the command runs as `command` runs it (same role, argument and `available` checks, same steps). It answers what `command` answers, plus `matched`: `{ command, form, args }` — the form as declared and the arguments it built, set even when the arguments then fail the check — or null when no form fit. A line that fits none is refused: `{ status: "refused", reason: "text", code: "usage", forms }` when its first word is one of the module's command words (`forms` are that word's forms as declared), `{ status: "refused", reason: "text", code: "no_form" }` when it is not (the engine would treat such a line as another command or as unknown; the host knows only this module). A `<module>/<command> {…}` line is not a form: use `command`. |
 | `view(name, who?, room?)` | The view's data for `who`; throws if it failed. |
-| `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones and those declaring `keeper: false` are refused with `reason: "role"`. |
+| `keeperCommand(name, args?, who?, room?)` | Runs a command as the Keeper does (`call.by` is `"keeper"`; `who` is the member whose turn it is), with the same checks: `player` and `keeper` commands run, `admin` ones and those declaring `keeper: false` are refused with `reason: "role"`, and arguments that do not fit `params` are refused as for `command`. |
 | `available(name, who?, room?)` | For the member `who`: `"role"` when the role forbids it (a `keeper` command: for everyone but an admin), else what `available` answers — the question the engine asks at the moment of use. |
 | `characters(room?)`, `clock(room?)` | The read-only answers. |
 | `checkpoint` | The current checkpoint: what a restart would load. |
 | `description` | The static description the engine reads at load. |
+| `forms` | The module's text forms as the engine reads them at load: `kept` (`{ command, form }`, in declaration order) and `dropped` (`{ command, form, problem }`: the forms the engine leaves out for their grammar; `problem` is `spacing`, `bad_word`, `bad_token`, `rest_not_last`, `unknown_param` or `repeated_param`). A dropped form is not matched by `text`; its command stays and runs by name. |
 | `restart()` | A new instance, `load`-ed from the checkpoint. |
 
 Every call returns what it did: `effects` (in order; empty when the call failed; a stepped
@@ -623,5 +632,34 @@ for one of its own characters.
 `room` is `{ turn?, variables?, clock?, members? }`: what you leave out comes from the
 options, and `turn` from the last turn started (1 before any).
 
+The text forms and the arguments are tested with the engine's own code:
+
+```ts
+test("a typed line runs the attack, and a misfit never reaches the module", async () => {
+  const host = createTestHost(duel);   // attack: params { target: string, times?: integer },
+                                       // text ["attack {target}", "attack {target} {times}"]
+  const ada = who("Ada");
+
+  const hit = await host.text("attack Bo 3", ada);
+  expect(hit.matched).toEqual({ command: "attack", form: "attack {target} {times}", args: { target: "Bo", times: 3 } });
+  expect(hit.outcome.status).toBe("ok");
+
+  const many = await host.text("ATTACK Bo many", ada);        // `times` stays text, which is no integer
+  expect(many.outcome).toEqual({ status: "refused", reason: "args", code: "invalid_arg", path: "times" });
+  expect(many.effects).toEqual([]);
+
+  expect((await host.text("attack", ada)).outcome).toMatchObject({ status: "refused", code: "usage" });
+  expect((await host.text("dance", ada)).outcome).toMatchObject({ status: "refused", code: "no_form" });
+  expect(host.forms.dropped).toEqual([]);                     // every form of the module reads
+});
+```
+
 The test host does not apply effects and does not enforce the engine's limits above;
-check them in your own tests if you come near them.
+check them in your own tests if you come near them. It knows only this module: a form
+that a room drops because its word is an engine command word, a rule system's or another
+module's (see [Text forms](#text-forms)) is still matched by `host.text`, and a line for
+a command of the engine is `no_form` to it.
+
+A script that drives a real server, rather than the test host, must respect the request
+rate limit: a burst of 5, then one request per 2 seconds per member
+([`docs/protocol.md`](../docs/protocol.md) §5.4).

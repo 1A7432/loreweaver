@@ -10,7 +10,10 @@
 // The schema is content: names are read as own properties only, and the work is bounded
 // (`MAX_ARGS_DEPTH` levels, `MAX_ARGS_NODES` checks); past either bound the arguments are
 // refused as `invalid_arg` at the path reached, never accepted unchecked.
-import { charCount } from "loreweaver-protocol/v3";
+//
+// The engine checks arguments with this file, and the test host (`testing.ts`) runs the same
+// code, so what an author's test sees is what a room does.
+import { charCount } from "./text.ts";
 
 /** How deep the check follows a schema into the arguments. */
 export const MAX_ARGS_DEPTH = 32;

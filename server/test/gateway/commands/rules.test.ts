@@ -1,11 +1,11 @@
 // Who may run what, where an outcome goes, the `commands` view, the module seam, and the
 // flows of the commands that change the room.
 import { describe, expect, test } from "bun:test";
+import { parseForm, type TextForm } from "loreweaver/runner";
 
 import { CHARACTER_TYPE, type CharacterFullView, SEATING_ID, SEATING_TYPE, type SeatingView } from "../../../src/core/characters/index.ts";
 import { INITIATIVE_ID, INITIATIVE_TYPE, type InitiativeView } from "../../../src/core/clock/index.ts";
 import { VARIABLE_TREE_ID, VARIABLE_TREE_TYPE, type VariableTreeView } from "../../../src/core/variables/index.ts";
-import { parseForm, type TextForm } from "../../../src/agent/module_forms.ts";
 import { KEEPER_MUTED, type ModuleCommandEntry, ROOM_LOCALE, ROOM_RULE_VARIANT, type ModuleCommands } from "../../../src/gateway/commands/index.ts";
 import { ADA, ADMIN, BAO, bench, code, EVE, ok, ROOM } from "./bench.ts";
 import { seedRoster, seedVariables } from "./seed.ts";

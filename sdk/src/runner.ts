@@ -14,6 +14,11 @@
 // - one module's failure never touches another module's call.
 // It does not guard against a module that never returns: the host ends the whole thread.
 //
+// This file is also the engine-facing entry of the SDK: the rest of what the engine does for
+// a command that a module author's test must see too — reading its text forms and checking
+// its arguments against `params` — is exported from here (`forms.ts`, `args.ts`), so the
+// server and the test host run the same code.
+//
 // Every handler gets its own structured clone of the event and of the room snapshot:
 // one module writing to `event.variables` cannot change what the next module sees, and
 // nothing a module does to its copy reaches the engine. Cloning rather than freezing,
@@ -41,6 +46,10 @@ import type {
   ViewSpec,
   Who,
 } from "./module.ts";
+
+export { type ArgsProblem, checkModuleArgs, MAX_ARGS_DEPTH, MAX_ARGS_NODES } from "./args.ts";
+export { coerceWord, type FormProblem, type FormToken, formArgs, MAX_FORM_WORD_CHARS, matchForm, parseForm, pickForm, type TextForm } from "./forms.ts";
+export { charCount, foldCase } from "./text.ts";
 
 export type EffectKind = "fact" | "inject" | "setVar" | "blocks" | "roll" | "deny" | "seat" | "log";
 

@@ -6,9 +6,9 @@
 // the reason, a query's answer, anything secret — is the RESULT, returned to the caller
 // alone. A refusal carries no events at all, by type: a failure is never an event.
 import type { EventKind, EventPayloads, SignalKind, SignalPayloads } from "loreweaver-protocol/v3";
+import type { TextForm } from "loreweaver/runner";
 
 import type { RoomContext } from "../../agent/context.ts";
-import type { TextForm } from "../../agent/module_forms.ts";
 import type { ResetScope } from "../../infra/lifecycle/declarations.ts";
 import type { ObjectSchema } from "./schema.ts";
 

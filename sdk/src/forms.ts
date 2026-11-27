@@ -13,8 +13,10 @@
 // A typed argument is coerced by its property's declared `type`: an integer or a number is
 // parsed strictly, a boolean is `true` or `false`, anything else stays the text typed. The
 // result is checked against `params` like any other arguments.
-import { foldCase } from "../core/sheets/text.ts";
-import { charCount } from "loreweaver-protocol/v3";
+//
+// The engine reads and matches forms with this file, and the test host (`testing.ts`) runs
+// the same code, so what an author's test sees is what a room does.
+import { charCount, foldCase } from "./text.ts";
 
 /** The longest command word, in code points. */
 export const MAX_FORM_WORD_CHARS = 32;
@@ -115,6 +117,23 @@ export function matchForm(form: TextForm, rest: string): ReadonlyMap<string, str
     at += 1;
   }
   return at === words.length ? captured : null;
+}
+
+/**
+ * Of the forms one command word has, in declaration order, the one that fits `rest` with the
+ * most literal words; of equal ones, the first declared. Null when none fits. The engine and
+ * the test host both choose this way.
+ */
+export function pickForm<T extends { readonly form: TextForm }>(
+  candidates: readonly T[],
+  rest: string,
+): { readonly candidate: T; readonly captured: ReadonlyMap<string, string> } | null {
+  let best: { readonly candidate: T; readonly captured: ReadonlyMap<string, string> } | null = null;
+  for (const candidate of candidates) {
+    const captured = matchForm(candidate.form, rest);
+    if (captured !== null && (best === null || candidate.form.literals > best.candidate.form.literals)) best = { candidate, captured };
+  }
+  return best;
 }
 
 /** The types a property schema declares, as a list. */

@@ -15,12 +15,13 @@
 // arguments are parsed into the very object a structured call passes — and the handler
 // runs in one store transaction: a refusal rolls back whatever it wrote, so a failure
 // leaves the room as it was and is never an event.
+import { formArgs, pickForm, type TextForm } from "loreweaver/runner";
+
 import { DiceError } from "../../core/dice/index.ts";
 import { ResolutionError } from "../../core/resolution/index.ts";
 import { commandWord, type RulePack } from "../../core/rulepacks/index.ts";
 import { foldCase } from "../../core/sheets/text.ts";
 import type { RoomContext } from "../../agent/context.ts";
-import { formArgs, matchForm, type TextForm } from "../../agent/module_forms.ts";
 import type { RecallDeps } from "../../agent/recall.ts";
 import { translate } from "../../infra/i18n.ts";
 import { LifecycleError, StaleGeneration } from "../../infra/lifecycle/errors.ts";
@@ -470,16 +471,13 @@ export class CommandRegistry {
     if (candidates === undefined) return null;
     const first = candidates[0] as { readonly entry: ModuleCommandEntry; readonly form: TextForm };
     if (argumentTooLong(rest)) return { kind: "command", id: first.entry.id, outcome: this.#refusal(locale, "too_long", { limit: MAX_COMMAND_ARG_CHARS }) };
-    let best: { entry: ModuleCommandEntry; captured: ReadonlyMap<string, string>; literals: number } | null = null;
-    for (const { entry, form } of candidates) {
-      const captured = matchForm(form, rest);
-      if (captured !== null && (best === null || form.literals > best.literals)) best = { entry, captured, literals: form.literals };
-    }
+    const best = pickForm(candidates, rest);
     if (best === null) {
       const usage = candidates.map(({ form }) => `.${form.source}`).join(" | ");
       return { kind: "command", id: first.entry.id, outcome: { ok: false, code: "usage", message: translate(COMMANDS_CATALOG, locale, "error.usage", { usage }) } };
     }
-    return { kind: "command", id: best.entry.id, outcome: await this.#runModule(context, best.entry.id, formArgs(best.captured, best.entry.params), locale) };
+    const { entry } = best.candidate;
+    return { kind: "command", id: entry.id, outcome: await this.#runModule(context, entry.id, formArgs(best.captured, entry.params), locale) };
   }
 
   /** The words the room itself answers to: the engine's forms and its rule system's, both tables, case-folded. */

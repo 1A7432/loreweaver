@@ -10,12 +10,10 @@
 // every drop is reported in `problems` for the operator's log (never shown at the table).
 import { charCount } from "loreweaver-protocol/v3";
 import type { CommandOrigin, CommandRole, Json, JsonObject, ReplyPhaseEvent, RoomSnapshot, ToolUseEvent, TurnStartEvent, Who } from "loreweaver/module";
-import { commandAnswer, isValidName, mayRun, runSteps, type StepStop, type ViewerRequest } from "loreweaver/runner";
+import { type ArgsProblem, checkModuleArgs, commandAnswer, isValidName, mayRun, parseForm, runSteps, type StepStop, type TextForm, type ViewerRequest } from "loreweaver/runner";
 
 import { MAX_MODULE_CHARACTER_ID_CHARS, type ModuleCharacter, type ModuleResource } from "../core/characters/index.ts";
 import type { RoomWorker } from "../infra/room_worker.ts";
-import { type ArgsProblem, checkModuleArgs } from "./module_args.ts";
-import { parseForm, type TextForm } from "./module_forms.ts";
 
 /** The most room members a module call carries; past it, the first ones and a problem for the operator. */
 export const MAX_ROOM_MEMBERS = 256;
@@ -112,7 +110,7 @@ export interface CommandInfo {
   readonly description: string;
   /** JSON Schema object for the arguments; the arguments are checked against it before the module is called. */
   readonly params: JsonObject;
-  /** The text forms that read (`module_forms.ts`), in declaration order; a form that did not is left out and reported. */
+  /** The text forms that read (the SDK's `forms.ts`), in declaration order; a form that did not is left out and reported. */
   readonly forms: readonly TextForm[];
   /** `keeper`: the Keeper's alone, never shown to a member; `admin`: never the Keeper's. */
   readonly role: CommandRole;

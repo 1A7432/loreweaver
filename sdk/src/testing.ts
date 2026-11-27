@@ -3,9 +3,17 @@
 // anyone, read views, inspect effects and the checkpoint, and restart the module from
 // its checkpoint. Dice are scripted.
 //
-// What the test host does NOT do is the engine's half: it applies nothing, and it does
-// not enforce the engine's size limits (see the README for them). Effects come back
-// exactly as the module requested them.
+// Before a command runs the host does what the engine does first: it reads the command's
+// text forms against its `params` (`host.text` matches a typed line against them), and it
+// checks the arguments against `params`. Both are the engine's own code (`forms.ts`,
+// `args.ts`).
+//
+// What the test host does NOT do is the rest of the engine's half: it applies nothing, it
+// does not enforce the engine's size limits (see the README for them), and it knows only
+// this module — a form the engine would drop for a word it or another module owns is kept
+// here. Effects come back exactly as the module requested them.
+import { type ArgsProblem, checkModuleArgs } from "./args.ts";
+import { type FormProblem, formArgs, parseForm, pickForm, type TextForm } from "./forms.ts";
 import type { ClockAdvance, ClockReading, CommandOrigin, Json, JsonObject, ModuleDefinition, Role, RollResult, RoomMember, RoomSnapshot, VariableWrite, Who } from "./module.ts";
 import {
   type CallValue,
@@ -16,13 +24,15 @@ import {
   type Effect,
   type ModuleDescription,
   ModuleRunner,
+  mayRun,
   mayUse,
   type Refusal,
   runSteps,
   type StepStop,
 } from "./runner.ts";
+import { foldCase } from "./text.ts";
 
-export type { CommandOutcome, DiceRoller, Effect, ModuleDescription, Refusal, StepStop };
+export type { ArgsProblem, CommandOutcome, DiceRoller, Effect, FormProblem, ModuleDescription, Refusal, StepStop };
 
 export interface TestHostOptions {
   /**
@@ -87,9 +97,51 @@ export interface TestCall {
  * commands); `steps` how many steps completed; `stopped` why the loop was cut, or null.
  */
 export interface TestCommand extends TestCall {
-  readonly outcome: CommandOutcome;
+  readonly outcome: CommandOutcome | ArgsRefusal;
   readonly steps: number;
   readonly stopped: StepStop | null;
+}
+
+/**
+ * The arguments do not fit the command's `params`: nothing ran. `code` is the engine's own
+ * refusal code and `path` the argument's, dotted (`target`, `a.skill`, `writes.0.value`;
+ * empty for the arguments as a whole) — what a member is refused with, as for an engine command.
+ */
+export interface ArgsRefusal {
+  readonly status: "refused";
+  readonly reason: "args";
+  readonly code: ArgsProblem["code"];
+  readonly path: string;
+}
+
+/**
+ * A typed line that ran nothing. `usage`: its first word is one of the module's command
+ * words, but no form of that word fits the rest (`forms` are that word's forms as declared).
+ * `no_form`: its first word is none of the module's words. The engine would hand such a line
+ * to another command, or call it unknown; the host knows only this module.
+ */
+export type TextRefusal =
+  | { readonly status: "refused"; readonly reason: "text"; readonly code: "usage"; readonly forms: readonly string[] }
+  | { readonly status: "refused"; readonly reason: "text"; readonly code: "no_form" };
+
+/** What `host.text` did: what `host.command` answers for the command the line matched, and which that was. */
+export interface TestText extends Omit<TestCommand, "outcome"> {
+  readonly outcome: TestCommand["outcome"] | TextRefusal;
+  /**
+   * The command, the form (as declared) and the arguments the line was read as; null when no
+   * form fit (`outcome` is then a `TextRefusal`). Set too when the arguments then failed the
+   * check against `params`: `outcome` says so.
+   */
+  readonly matched: { readonly command: string; readonly form: string; readonly args: JsonObject } | null;
+}
+
+/**
+ * The module's text forms as the engine reads them at load: the forms that read, and the ones
+ * it drops for their grammar (`problem` says why), both in declaration order.
+ */
+export interface TestForms {
+  readonly kept: readonly { readonly command: string; readonly form: string }[];
+  readonly dropped: readonly { readonly command: string; readonly form: string; readonly problem: FormProblem }[];
 }
 
 export interface TurnStartInput {
@@ -137,6 +189,8 @@ export interface TestHost {
   readonly id: string;
   /** The static description the engine would read at load. */
   readonly description: ModuleDescription;
+  /** The module's text forms as the engine reads them at load: the ones that read, and the ones it drops. */
+  readonly forms: TestForms;
   /** The current checkpoint: what a restart would load. */
   readonly checkpoint: Json | null;
   turnStart(input: TurnStartInput): Promise<TestCall & { readonly clock: Json | null }>;
@@ -144,14 +198,25 @@ export interface TestHost {
   toolUse(calls: readonly ToolCallInput[], who?: Who, room?: RoomInput): Promise<TestCall & { readonly verdicts: readonly (true | string)[] }>;
   replyPhase(input: ReplyPhaseInput): Promise<TestCall>;
   /**
-   * Runs a command as the member `who` (`call.by` is `member`), with the role and `available`
-   * checks the engine makes, and its further steps while it answers `more: true`, as the
-   * engine does.
+   * Runs a command as the member `who` (`call.by` is `member`), with the role, argument and
+   * `available` checks the engine makes, in that order — arguments that do not fit `params`
+   * are refused as an `ArgsRefusal` before the module is called — and its further steps while
+   * it answers `more: true`, as the engine does.
    */
   command(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCommand>;
   /**
+   * What a member types after the `.` prefix (`"attack Bo"`): matched against the forms of the
+   * module's commands — the form with the most literal words wins, then declaration order —
+   * and, when one fits, run as `command` runs it (the same role, argument and `available`
+   * checks, the same steps). A line that fits no form is refused as `usage` (its first word is
+   * one of the module's command words) or `no_form` (it is not); see `TextRefusal`. The host
+   * knows only this module: a word the engine or another module owns is not refused here.
+   */
+  text(line: string, who?: Who, room?: RoomInput): Promise<TestText>;
+  /**
    * Runs a command as the Keeper does with its `run_command` tool (`call.by` is `keeper`),
-   * with the same checks: `player` and `keeper` commands run, `admin` ones are refused.
+   * with the same checks: `player` and `keeper` commands run, `admin` ones are refused, and
+   * arguments that do not fit `params` are refused as for `command`.
    * `who` is the member whose turn it is (default: the host's `who`).
    */
   keeperCommand(name: string, args?: JsonObject, who?: Who, room?: RoomInput): Promise<TestCommand>;
@@ -190,6 +255,43 @@ function scriptedDice(dice: TestHostOptions["dice"]): DiceRoller {
 
 const PATH = "test-host";
 
+/** A form that read, with the command it belongs to and the `params` it was read against. */
+interface Candidate {
+  readonly command: string;
+  readonly params: Json;
+  readonly form: TextForm;
+}
+
+/** The forms of every command, read against its `params` as the engine reads them at load. */
+function readForms(description: ModuleDescription): { readonly forms: TestForms; readonly candidates: ReadonlyMap<string, readonly Candidate[]> } {
+  const kept: { command: string; form: string }[] = [];
+  const dropped: { command: string; form: string; problem: FormProblem }[] = [];
+  const byWord = new Map<string, Candidate[]>();
+  for (const command of description.commands) {
+    for (const source of Array.isArray(command.text) ? command.text : []) {
+      if (typeof source !== "string") continue;
+      const read = parseForm(source, command.params);
+      if (!read.ok) {
+        dropped.push({ command: command.name, form: source, problem: read.problem });
+        continue;
+      }
+      kept.push({ command: command.name, form: source });
+      const forWord = byWord.get(read.form.word) ?? [];
+      forWord.push({ command: command.name, params: command.params, form: read.form });
+      byWord.set(read.form.word, forWord);
+    }
+  }
+  return { forms: { kept, dropped }, candidates: byWord };
+}
+
+const TOKEN = /^(\S+)(?:\s+([\s\S]*))?$/u;
+
+/** The command word, case-folded, and the rest, trimmed, of what a member typed after the prefix; the engine splits a line the same way. */
+function splitLine(line: string): { readonly word: string; readonly rest: string } | null {
+  const match = TOKEN.exec(line.trim());
+  return match === null ? null : { word: foldCase(match[1] as string), rest: (match[2] ?? "").trim() };
+}
+
 export function createTestHost(definition: ModuleDefinition, options: TestHostOptions = {}): TestHost {
   const dice = scriptedDice(options.dice);
   const defaultWho = options.who ?? who("Player");
@@ -197,6 +299,9 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
   const now = options.now ?? Date.now;
   let runner = new ModuleRunner({ dice });
   let description: ModuleDescription;
+  let forms: TestForms;
+  /** The forms that read, by command word (case-folded), in declaration order: what a typed line is matched against. */
+  let candidates: ReadonlyMap<string, readonly Candidate[]>;
   let lastTurn = 0;
 
   function start(module: ModuleDefinition, snapshot: Json | undefined): void {
@@ -205,6 +310,7 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     const first = loaded.modules[0];
     if (!first) throw new Error("test host: the module did not load");
     description = first;
+    ({ forms, candidates } = readForms(first));
   }
   start(definition, options.snapshot);
 
@@ -242,8 +348,20 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     return rendered;
   }
 
+  /** What a call that never reached the module answers: no effects, no steps. */
+  function notRun<O extends TestCommand["outcome"] | TextRefusal>(outcome: O): Omit<TestCommand, "outcome"> & { readonly outcome: O } {
+    return { ...report({ effects: [], refused: [], failures: [] }), outcome, steps: 0, stopped: null };
+  }
+
   /** A command and its further steps, as the engine runs them (`runSteps`); every step's effects together. */
   async function runCommand(by: CommandOrigin["by"], name: string, args: JsonObject, caller: Who | undefined, room: RoomInput | undefined): Promise<TestCommand> {
+    const spec = description.commands.find((entry) => entry.name === name);
+    // In the engine's order: an unknown command and a role that forbids it are the runner's to
+    // refuse; the arguments are checked after them, before `available` or `run` is asked.
+    if (spec !== undefined && mayRun(spec.role, by, caller ?? defaultWho, spec.keeper)) {
+      const problem = checkModuleArgs(spec.params, args);
+      if (problem !== null) return notRun<ArgsRefusal>({ status: "refused", reason: "args", code: problem.code, path: problem.path });
+    }
     const seen = snapshot(room);
     const effects: Effect[] = [];
     const refused: Refusal[] = [];
@@ -279,6 +397,9 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     },
     get description() {
       return description;
+    },
+    get forms() {
+      return forms;
     },
     get checkpoint() {
       return runner.checkpointOf(description.id);
@@ -322,6 +443,18 @@ export function createTestHost(definition: ModuleDefinition, options: TestHostOp
     },
     command(name, args = {}, caller, room) {
       return runCommand("member", name, args, caller, room);
+    },
+    async text(line, caller, room) {
+      const split = splitLine(line);
+      const forWord = split === null ? undefined : candidates.get(split.word);
+      if (split === null || forWord === undefined) return { ...notRun<TextRefusal>({ status: "refused", reason: "text", code: "no_form" }), matched: null };
+      const best = pickForm(forWord, split.rest);
+      if (best === null) {
+        return { ...notRun<TextRefusal>({ status: "refused", reason: "text", code: "usage", forms: forWord.map((candidate) => candidate.form.source) }), matched: null };
+      }
+      const { command, params, form } = best.candidate;
+      const args = formArgs(best.captured, params) as JsonObject;
+      return { ...(await runCommand("member", command, args, caller, room)), matched: { command, form: form.source, args } };
     },
     keeperCommand(name, args = {}, caller, room) {
       return runCommand("keeper", name, args, caller, room);
