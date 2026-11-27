@@ -9,6 +9,7 @@ test("one turn end to end: iroh in, database on disk, a module in a room worker,
     ok: true,
     steps: {
       rule_packs_embedded: true,
+      database_read_unopened: true,
       transport_bound: true,
       welcomed: true,
       turn_answered: true,

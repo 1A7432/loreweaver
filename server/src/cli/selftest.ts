@@ -27,7 +27,7 @@ import { loadSettings } from "../infra/config.ts";
 import { type Clock, systemClock } from "../infra/ids.ts";
 import { type LLMClient, ScriptedLLM } from "../infra/llm/index.ts";
 import { MediaStore } from "../infra/media/index.ts";
-import { openDatabase } from "../infra/runtime/sqlite.ts";
+import { openDatabase, tableNames } from "../infra/runtime/sqlite.ts";
 import { spawnWorker } from "../infra/runtime/worker.ts";
 import { Store } from "../infra/store.ts";
 import { dial, IrohServer } from "../net/iroh.ts";
@@ -153,6 +153,20 @@ export async function selftest(workerEntry: string): Promise<SelftestReport> {
   steps.pack_installed = installed.ok && installed.installed;
   const loaded = loadInstalledPacks(dataDir);
   const assembled = assemblePacks(loaded.packs);
+  // Before the server opens a data directory it reads whose database lies there, without
+  // touching the file — named to SQLite as a file URL, which each platform spells its own way.
+  // A build that could not read one back would refuse its own data on the second start.
+  try {
+    const probe = join(dir, "probe.db");
+    const made = openDatabase(probe);
+    made.exec("CREATE TABLE marker (x)");
+    made.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    made.close();
+    for (const suffix of ["-wal", "-shm"]) rmSync(`${probe}${suffix}`, { force: true });
+    steps.database_read_unopened = tableNames(probe)?.includes("marker") === true;
+  } catch {
+    steps.database_read_unopened = false;
+  }
   const db = openDatabase(join(dir, "selftest.db"));
   const store = new Store(db);
   const media = new MediaStore(dir, db, { clock: systemClock });
