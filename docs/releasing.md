@@ -53,10 +53,12 @@ Loreweaver 2 followed GitHub's "latest" release, so the first 3.x release that b
   beforehand). Loreweaver 2 is kept either way — its command as `loreweaver.old` (on Windows
   `loreweaver.cmd`), its files and data untouched — and can be reinstalled from its own last
   release (`LAST_V2_TAG` in both installers: the last 2.x release that holds an installer).
-- **Both generations keep a hosted server's data in `~/.loreweaver/data`**, in a database
-  file of the same name. The 3.x server reads whose database it is before it writes
-  anything and refuses a 2.x one (`other_database`), leaving it as it was; the clients then
-  ask for another folder.
+- **Loreweaver 2 hosted a server from `~/.loreweaver`** (its database is
+  `~/.loreweaver/data/loreweaver.db`). The 3.x terminal client hosts from
+  `~/.loreweaver/v3` by default, and Studio from its own application folder, so the two do
+  not meet. Pointed at a 2.x folder all the same, the 3.x server reads whose database it is
+  before it writes anything and refuses it (`other_database`), leaving it as it was; the
+  clients then ask for another folder.
 - **A 2.x client that hosts a server downloads `loreweaver-server-<platform>` from the release
   its installer pinned** — unaffected. One that follows "latest" instead (Loreweaver Studio
   0.1.0, or a 2.x client installed from a checkout's installer) asks the latest release for

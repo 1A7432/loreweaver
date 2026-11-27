@@ -49,7 +49,7 @@ cd clients/tui && bun run dev
 ```
 
 On the connect screen, choose **⌂ Host locally & play**. There is no step two: it starts the server
-from this checkout (its data goes to the *Local server folder*, `~/.loreweaver` by default), mints
+from this checkout (its data goes to the *Local server folder*, `~/.loreweaver/v3` by default), mints
 your admin key, and drops you into the main menu as the room admin.
 
 **Without a model the server still starts**, and dice, sheets and commands all work; the Keeper

@@ -40,8 +40,16 @@ export function defaultLoreweaverHome(env: EnvLike = process.env): string {
   return expandHome(clean(env.TRPG_HOME) ?? join(defaultUserHome(env), ".loreweaver"), env)
 }
 
+/**
+ * The local server's folder inside the client's home. Its own folder, not the home itself:
+ * Loreweaver 2 hosted its server straight from `~/.loreweaver` (its database is
+ * `~/.loreweaver/data/loreweaver.db`), and a 3.x server neither reads that database nor
+ * writes beside it. A machine that hosted with 2 keeps that table where it was.
+ */
+export const LOCAL_SERVER_FOLDER = "v3"
+
 export function defaultLocalServerHome(env: EnvLike = process.env): string {
-  return expandHome(clean(env.TRPG_LOCAL_SERVER_HOME) ?? defaultLoreweaverHome(env), env)
+  return expandHome(clean(env.TRPG_LOCAL_SERVER_HOME) ?? join(defaultLoreweaverHome(env), LOCAL_SERVER_FOLDER), env)
 }
 
 export function resolveConnectMemoryPath(env: EnvLike = process.env): string {

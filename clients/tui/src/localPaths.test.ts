@@ -12,16 +12,17 @@ import {
 const ENV: EnvLike = { HOME: "/home/ada", USERPROFILE: "/users/ignored" }
 
 describe("local path resolution", () => {
-  test("defaults client and local server state under the user's .loreweaver directory", () => {
+  test("defaults client state to the user's .loreweaver directory, and the local server to its own folder inside (not where Loreweaver 2 hosted)", () => {
     expect(defaultLoreweaverHome(ENV)).toBe(join("/home/ada", ".loreweaver"))
-    expect(defaultLocalServerHome(ENV)).toBe(join("/home/ada", ".loreweaver"))
+    expect(defaultLocalServerHome(ENV)).toBe(join("/home/ada", ".loreweaver", "v3"))
+    expect(resolveLocalServerPaths(undefined, ENV).dataDir).toBe(join("/home/ada", ".loreweaver", "v3", "data"))
     expect(resolveConnectMemoryPath(ENV)).toBe(join("/home/ada", ".loreweaver", "tui-connect.json"))
   })
 
   test("TRPG_HOME moves the client home and also the local server home by default", () => {
     const env = { ...ENV, TRPG_HOME: "/mnt/loreweaver" }
     expect(defaultLoreweaverHome(env)).toBe("/mnt/loreweaver")
-    expect(defaultLocalServerHome(env)).toBe("/mnt/loreweaver")
+    expect(defaultLocalServerHome(env)).toBe(join("/mnt/loreweaver", "v3"))
   })
 
   test("TRPG_LOCAL_SERVER_HOME overrides only the one-click server install/state root", () => {
