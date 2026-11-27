@@ -293,7 +293,9 @@ grammar: words separated by single spaces.
   any script (`攻击` is a word); never `/`. It is matched case-folded.
 - Each later token is a **literal word** (matched case-folded), `{name}` — one
   whitespace-delimited word of the input — or, as the **last** token only, `{name...}` —
-  the rest of the line, trimmed (left out of the arguments when empty).
+  the rest of the line, trimmed (left out of the arguments when empty). So a form such as
+  `j {text...}` also matches the bare word `.j`, with no `text`: require the property in
+  `params` if a bare word should be refused, or answer it in `run`.
 - Every `name` must be a property of the command's `params`, used once.
 
 A form that breaks a rule is left out at load and reported to the operator; the command
