@@ -21,8 +21,9 @@ import { sidebarCollapsed, sidebarWidth } from "./layout"
 import { lastChoicesIndex, logItems, logPictures, type Cleared, type Picture } from "./log"
 import type { Palette, ThemeName } from "./themes"
 import { usesAppClipboardCopy } from "./copy"
+import { reportOffer, saveReport } from "./report"
 import { writeTranscript } from "./transcript"
-import type { PanelEntry, SessionSnapshot } from "loreweaver-protocol/v3"
+import type { PanelEntry, Result, SessionSnapshot } from "loreweaver-protocol/v3"
 
 const NO_PANELS: readonly PanelEntry[] = []
 
@@ -40,6 +41,8 @@ export interface GameViewProps {
   platform?: string
   // Injected by tests so an export can be asserted without touching `~/.loreweaver/transcripts`.
   transcriptDir?: string
+  // Likewise for a report page (`~/.loreweaver/reports`).
+  reportDir?: string
   /** Open the command list (F7). */
   onCommands?: () => void
   /** A picture or the share form opened (true) or closed: while one is open, Esc is theirs, not the shell's. */
@@ -75,7 +78,7 @@ function memberNames(party: { members: { id: string; name: string }[] } | null):
   return new Map((party?.members ?? []).map((member) => [member.id, member.name]))
 }
 
-export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true, audio }: GameViewProps) {
+export function GameView({ connection, locale, theme, themeName, copyNotice, platform = process.platform, transcriptDir, reportDir, onCommands, onModalChange, pictureEnv, pictureGraphics = true, audio }: GameViewProps) {
   const snapshot = useSnapshot(connection)
   const local = useConnectionState(connection)
   const sound = useAudioState(audio)
@@ -227,7 +230,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
     if (!text) return
     // No local echo: the server logs the player's own line as a `narrative` event for everyone,
     // this player included. A command's answer comes back to this player alone, as a local line.
-    void connection.input(text)
+    void connection.input(text).then(keepReport)
     setHistory((current) => [...current, text].slice(-50))
     resetInput()
   }
@@ -235,7 +238,7 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
   const pickChoice = (option: UiChoice) => {
     setChoicesFocused(false)
     setPanelFocus(null)
-    void connection.runCommand(option.command, option.args ?? {})
+    void connection.runCommand(option.command, option.args ?? {}).then(keepReport)
   }
 
   const claim = (id: string) => {
@@ -253,6 +256,20 @@ export function GameView({ connection, locale, theme, themeName, copyNotice, pla
     }
     const current = connection.session.getSnapshot()
     if (current.gap !== null || !current.complete) void connection.session.loadOlder().catch(() => 0)
+  }
+
+  // A `report html` answer names a page, it does not carry it: fetch it now (the next page of
+  // its edition replaces it on the server) and keep it as a file.
+  const keepReport = async (result: Result | null) => {
+    const offer = reportOffer(result)
+    if (offer === null) return
+    try {
+      const file = await connection.fetchMedia(offer.hash, { mime: "text/html", name: offer.name }, { hold: false })
+      const path = await saveReport(offer, file.bytes, reportDir)
+      connection.note({ kind: "result", level: "info", text: tt(locale, "report.saved", { path }) })
+    } catch (error) {
+      connection.note({ kind: "result", level: "warn", text: tt(locale, "report.failed", { error: error instanceof Error ? error.message : String(error) }) })
+    }
   }
 
   // Ctrl+S: the whole log to a text file — the lines that scrolled out of view included, and

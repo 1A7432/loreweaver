@@ -213,6 +213,30 @@ describe("GameView", () => {
     await screen("the log again", (text) => text.includes("The lamp gutters."))
   })
 
+  test("a report page offered by a result is fetched and kept as a file; one that cannot be fetched says so", async () => {
+    const server = new FakeServer()
+    const html = new TextEncoder().encode("<!DOCTYPE html><title>arkham</title>")
+    const hash = createHash("sha256").update(html).digest("hex")
+    server.files.set(hash, { bytes: html, mime: "text/html", name: "session-report-arkham.html", purpose: "share" })
+    const gone = "b".repeat(64)
+    server.onInput = (text) =>
+      text === ".report html"
+        ? { ok: true, text: "The session report is ready: session-report-arkham.html", data: { format: "html", edition: "player", media: { hash, mime: "text/html", size: html.length, name: "session-report-arkham.html" } } }
+        : { ok: true, data: { format: "html", edition: "player", media: { hash: gone, mime: "text/html", size: 1, name: "gone.html" } } }
+    const dir = await mkdtemp(join(tmpdir(), "loreweaver-reports-"))
+    const { harness, screen } = await play(server, { reportDir: dir })
+    await harness.mockInput.typeText(".report html")
+    harness.mockInput.pressEnter()
+    await screen("the saved line", (text) => text.includes("Session report saved to"))
+    expect(await readdir(dir)).toEqual(["session-report-arkham.html"])
+    expect(await readFile(join(dir, "session-report-arkham.html"), "utf8")).toBe("<!DOCTYPE html><title>arkham</title>")
+
+    await harness.mockInput.typeText(".report html again")
+    harness.mockInput.pressEnter()
+    await screen("the failure line", (text) => text.includes("Could not save the session report"))
+    expect(await readdir(dir)).toEqual(["session-report-arkham.html"])
+  })
+
   test("F7 opens the command list; ? shows the keys", async () => {
     const server = new FakeServer()
     let opened = 0

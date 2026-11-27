@@ -149,6 +149,48 @@ describe("Connection", () => {
     expect(server.transports).toHaveLength(1)
   })
 
+  test("a link that is up but never welcomed is dropped when the wait runs out: the end before a first welcome, a redial after one", async () => {
+    const { server, clock, connection } = setup()
+    // A server that takes the hello and says nothing — neither welcome nor a refusal.
+    server.handle = () => undefined
+    await connection.start()
+    await pump()
+    clock.advance(14_999)
+    await pump()
+    expect(server.current.closed).toBe(false)
+    expect(connection.getState().phase).not.toBe("ended")
+    clock.advance(1)
+    await pump()
+    expect(server.current.closed).toBe(true)
+    expect(connection.getState().phase).toBe("ended")
+    clock.advance(60_000)
+    expect(server.transports).toHaveLength(1)
+
+    // Once welcomed, the same silence on a later link is a dropped link like any other.
+    const again = setup()
+    await again.connection.start()
+    await pump()
+    expect(again.connection.session.status).toBe("online")
+    // Long after the welcome nothing fires: the timer went with it.
+    again.clock.advance(14_000)
+    await pump()
+    expect(again.server.current.closed).toBe(false)
+    const answer = again.server.handle
+    again.server.handle = () => undefined
+    again.server.current.drop("reset")
+    again.clock.advance(500)
+    await pump()
+    expect(again.server.transports).toHaveLength(2)
+    again.clock.advance(15_000)
+    await pump()
+    expect(again.server.transports[1]?.closed).toBe(true)
+    expect(again.connection.getState().phase).toBe("waiting")
+    again.server.handle = answer
+    again.clock.advance(1_000)
+    await pump()
+    expect(again.connection.session.status).toBe("online")
+  })
+
   test("the client pings on a timer; no pong in time drops the link and redials", async () => {
     const { server, clock, connection } = setup({ pingEveryMs: 1_000 })
     await connection.start()

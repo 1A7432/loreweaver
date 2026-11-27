@@ -9,6 +9,7 @@
 // channel's client state: files fetched (and the on-disk cache behind them) and an upload's progress.
 import {
   decodeMediaOfferResult,
+  HELLO_TIMEOUT_MS,
   isContentHash,
   Session,
   SessionError,
@@ -120,6 +121,8 @@ export interface ConnectionOptions {
   readonly now?: () => number
   readonly pingEveryMs?: number
   readonly pingTimeoutMs?: number
+  /** How long a link may stay up without the server's welcome (default the protocol's `HELLO_TIMEOUT_MS`). */
+  readonly welcomeTimeoutMs?: number
   readonly redialBaseMs?: number
   readonly redialMaxMs?: number
   readonly views?: readonly string[]
@@ -155,6 +158,7 @@ export class Connection {
   #stopped = false
   #redialTimer: unknown = undefined
   #pingTimer: unknown = undefined
+  #welcomeTimer: unknown = undefined
   #lastStatus: SessionSnapshot["status"] = "idle"
   #lastResetSeq = 0
 
@@ -255,6 +259,18 @@ export class Connection {
     this.#transport = transport
     this.#set({ phase: "online" })
     const attachment = this.session.attach(transport)
+    // The link is up and hello is sent; a server that then says nothing — neither welcome nor
+    // a refusal — would otherwise hold this client "connecting" for ever (pings start at the
+    // welcome). Drop the link: after a first welcome that is a redial, before it the end.
+    this.#clearWelcome()
+    this.#welcomeTimer = this.#timers.setTimeout(() => {
+      this.#welcomeTimer = undefined
+      if (this.#transport !== transport || this.session.status === "online" || this.#stopped) return
+      this.#transport = null
+      transport.close()
+      this.session.closed("welcome timeout")
+      this.#dropped()
+    }, this.#options.welcomeTimeoutMs ?? HELLO_TIMEOUT_MS)
     transport.start(
       (value) => attachment.receive(value),
       (reason) => {
@@ -268,6 +284,7 @@ export class Connection {
   /** The link went away (the session already knows). */
   #dropped(): void {
     this.#clearPing()
+    this.#clearWelcome()
     if (this.#stopped) return
     if (!this.session.canRedial || !this.#established) {
       this.#stopped = true
@@ -315,6 +332,7 @@ export class Connection {
     if (snapshot.status !== this.#lastStatus) {
       this.#lastStatus = snapshot.status
       if (snapshot.status === "online") {
+        this.#clearWelcome()
         this.#established = true
         this.#set({ phase: "online", attempt: 0 })
         this.#schedulePing()
@@ -382,8 +400,14 @@ export class Connection {
     this.#pingTimer = undefined
   }
 
+  #clearWelcome(): void {
+    if (this.#welcomeTimer !== undefined) this.#timers.clearTimeout(this.#welcomeTimer)
+    this.#welcomeTimer = undefined
+  }
+
   #clearTimers(): void {
     this.#clearPing()
+    this.#clearWelcome()
     if (this.#redialTimer !== undefined) this.#timers.clearTimeout(this.#redialTimer)
     this.#redialTimer = undefined
   }
